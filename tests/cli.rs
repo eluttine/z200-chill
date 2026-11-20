@@ -64,6 +64,20 @@ fn run_spec_example_succeeds() {
 }
 
 #[test]
+fn run_control_example_succeeds() {
+    let output = z200c().arg("run").arg(example("control")).output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn build_writes_grant_file() {
     let output = z200c()
         .arg("build")

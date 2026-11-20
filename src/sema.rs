@@ -107,6 +107,7 @@ pub fn check_with_externals(
         results: Vec::new(),
         exports,
         current_module: 0,
+        labels: Vec::new(),
     };
     for (index, module) in program.modules.iter().enumerate() {
         checker.current_module = index;
@@ -373,6 +374,7 @@ struct Checker {
     results: Vec<Option<Type>>,
     exports: HashMap<String, Export>,
     current_module: usize,
+    labels: Vec<String>,
 }
 
 impl Checker {
@@ -414,7 +416,16 @@ impl Checker {
         self.apply_seizes(&module.declarations)?;
         self.check_initializers(&module.declarations)?;
         self.check_proc_bodies(&module.declarations)?;
-        self.check_actions(&module.actions)
+
+        let has_module_label = module.name.is_some();
+        if let Some(name) = &module.name {
+            self.labels.push(name.clone());
+        }
+        let result = self.check_actions(&module.actions);
+        if has_module_label {
+            self.labels.pop();
+        }
+        result
     }
 
     fn apply_seizes(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
@@ -661,20 +672,106 @@ impl Checker {
                             ));
                         }
                     }
-                    DoControl::For { .. } => {
-                        return Err(Error::new(
-                            *span,
-                            "DO FOR is not implemented yet; use DO WHILE",
-                        ));
+                    DoControl::For {
+                        counter,
+                        start,
+                        end,
+                        step,
+                        ..
+                    } => {
+                        let start_ty = self.check_expr(start)?;
+                        let end_ty = self.check_expr(end)?;
+                        if !start_ty.is_int() || !end_ty.is_int() {
+                            return Err(Error::new(*span, "DO FOR bounds must be integers"));
+                        }
+                        let mut counter_ty = self.combine_int(start_ty, end_ty, *span)?;
+
+                        if let Some(step_expr) = step {
+                            let step_ty = self.check_expr(step_expr)?;
+                            if !step_ty.is_int() {
+                                return Err(Error::new(
+                                    step_expr.span(),
+                                    "DO FOR step must be an integer",
+                                ));
+                            }
+                            counter_ty = self.combine_int(counter_ty, step_ty, step_expr.span())?;
+                            if let Some(value) = constant_int(step_expr) {
+                                if value <= 0 {
+                                    return Err(Error::new(
+                                        step_expr.span(),
+                                        "DO FOR step must be positive",
+                                    ));
+                                }
+                            }
+                        }
+
+                        self.scopes.push(Scope::default());
+                        let result = (|| {
+                            self.declare_var(counter, counter_ty, *span)?;
+                            self.check_actions(body)
+                        })();
+                        self.scopes.pop();
+                        return result;
                     }
                 }
                 self.check_actions(body)
             }
-            Action::Exit { label, span } => {
-                if label.is_some() {
-                    return Err(Error::new(*span, "EXIT labels are not implemented yet"));
+            Action::Exit {
+                label: Some(name),
+                span,
+            } => {
+                if !self.labels.iter().any(|label| label == name) {
+                    return Err(Error::new(*span, format!("unknown EXIT label `{name}`")));
                 }
                 Ok(())
+            }
+            Action::Exit { label: None, .. } => Ok(()),
+            Action::Case {
+                selector,
+                alternatives,
+                else_actions,
+                ..
+            } => {
+                let selector_ty = self.check_expr(selector)?;
+                if !selector_ty.is_int() {
+                    return Err(Error::new(
+                        selector.span(),
+                        "CASE selector must be an integer in v0",
+                    ));
+                }
+
+                for alternative in alternatives {
+                    for label in &alternative.labels {
+                        match label {
+                            CaseLabel::Value(value) => {
+                                self.check_case_label_value(*value, selector_ty, alternative.span)?;
+                            }
+                            CaseLabel::Range { low, high } => {
+                                self.check_case_label_value(*low, selector_ty, alternative.span)?;
+                                self.check_case_label_value(*high, selector_ty, alternative.span)?;
+                            }
+                            CaseLabel::Else | CaseLabel::Any => {}
+                        }
+                    }
+                    self.check_actions(&alternative.body)?;
+                }
+
+                if let Some(actions) = else_actions {
+                    self.check_actions(actions)?;
+                }
+                Ok(())
+            }
+            Action::Labelled { label, action, .. } => {
+                if self.labels.iter().any(|existing| existing == label) {
+                    return Err(Error::new(
+                        action.span(),
+                        format!("duplicate label `{label}`"),
+                    ));
+                }
+                self.labels.push(label.clone());
+                let result = self.check_action(action);
+                self.labels.pop();
+                result
             }
             Action::Begin {
                 declarations,
@@ -1034,6 +1131,28 @@ impl Checker {
                     value.describe(),
                     target.describe()
                 ),
+            ))
+        }
+    }
+
+    fn check_case_label_value(
+        &self,
+        value: i128,
+        selector_ty: Type,
+        span: Span,
+    ) -> Result<(), Error> {
+        let fits = match selector_ty {
+            Type::Int(kind) => types::contains(kind, value, self.profile),
+            Type::IntLiteral => types::contains(IntKind::Long, value, self.profile),
+            _ => false,
+        };
+
+        if fits {
+            Ok(())
+        } else {
+            Err(Error::new(
+                span,
+                format!("CASE label `{value}` is outside the range of the selector"),
             ))
         }
     }
@@ -1419,5 +1538,63 @@ END Lib;
         assert!(error
             .message
             .contains("initialization is not allowed in a spec module"));
+    }
+
+    #[test]
+    fn do_for_step_must_be_positive() {
+        let error = check_source(
+            r#"
+M: MODULE
+  DO FOR i := 1 BY 0 TO 3;
+  OD;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("DO FOR step must be positive"));
+    }
+
+    #[test]
+    fn rejects_unknown_exit_label() {
+        let error = check_source(
+            r#"
+M: MODULE
+  EXIT Nowhere;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("unknown EXIT label `Nowhere`"));
+    }
+
+    #[test]
+    fn case_selector_must_be_integer() {
+        let error = check_source(
+            r#"
+M: MODULE
+  CASE TRUE OF
+    (1): ;
+  ESAC;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("CASE selector must be an integer"));
+    }
+
+    #[test]
+    fn case_label_must_fit_selector() {
+        let error = check_source(
+            r#"
+M: MODULE
+  DCL x SHORT_INT;
+  CASE x OF
+    (100_000): ;
+  ESAC;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("outside the range of the selector"));
     }
 }

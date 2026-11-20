@@ -314,8 +314,19 @@ impl<'a> Interpreter<'a> {
             result_type: None,
             result: None,
         };
-        self.exec_actions(&module.actions, &mut frame)?;
-        Ok(())
+        match self.exec_actions(&module.actions, &mut frame)? {
+            Flow::Normal | Flow::Return | Flow::Exit(None) => Ok(()),
+            Flow::Exit(Some(name)) => {
+                if module.name.as_deref() == Some(name.as_str()) {
+                    Ok(())
+                } else {
+                    Err(Error::new(
+                        module.span,
+                        format!("unknown EXIT label `{name}`"),
+                    ))
+                }
+            }
+        }
     }
 
     fn exec_actions(&mut self, actions: &'a [Action], frame: &mut Frame) -> Result<Flow, Error> {
@@ -395,6 +406,43 @@ impl<'a> Interpreter<'a> {
                     span,
                 } => return self.exec_do(control, body, frame, *span),
                 Action::Exit { label, .. } => return Ok(Flow::Exit(label.clone())),
+                Action::Case {
+                    selector,
+                    alternatives,
+                    else_actions,
+                    ..
+                } => {
+                    let selector_value = self.eval_expr(selector)?;
+                    let (value, _) = self.expect_int(selector_value, selector.span())?;
+
+                    let explicitly_labelled = alternatives.iter().any(|alternative| {
+                        alternative
+                            .labels
+                            .iter()
+                            .any(|label| explicit_label_matches(*label, value))
+                    });
+
+                    for alternative in alternatives {
+                        let matches = alternative.labels.iter().any(|label| match label {
+                            CaseLabel::Else => !explicitly_labelled,
+                            CaseLabel::Any => true,
+                            other => explicit_label_matches(*other, value),
+                        });
+                        if matches {
+                            return self.exec_actions(&alternative.body, frame);
+                        }
+                    }
+
+                    if let Some(actions) = else_actions {
+                        return self.exec_actions(actions, frame);
+                    }
+                }
+                Action::Labelled { label, action, .. } => {
+                    match self.exec_actions(std::slice::from_ref(action.as_ref()), frame)? {
+                        Flow::Exit(Some(name)) if &name == label => return Ok(Flow::Normal),
+                        flow => return Ok(flow),
+                    }
+                }
                 Action::Begin {
                     declarations,
                     actions,
@@ -407,7 +455,10 @@ impl<'a> Interpreter<'a> {
                         self.exec_actions(actions, frame)
                     })();
                     self.locals.pop();
-                    return result;
+                    return match result {
+                        Ok(Flow::Exit(None)) => Ok(Flow::Normal),
+                        other => other,
+                    };
                 }
                 Action::Empty { .. } => {}
             }
@@ -451,10 +502,103 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(Flow::Normal)
             }
-            DoControl::For { .. } => Err(Error::new(
-                span,
-                "DO FOR is not implemented yet; use DO WHILE",
-            )),
+            DoControl::For {
+                counter,
+                start,
+                end,
+                step,
+                down,
+            } => {
+                let start_value = self.eval_expr(start)?;
+                let end_value = self.eval_expr(end)?;
+                let step_value = match step {
+                    Some(expr) => self.eval_expr(expr)?,
+                    None => Value::Int {
+                        value: 1,
+                        kind: None,
+                    },
+                };
+                let step_span = step.as_ref().map(|expr| expr.span()).unwrap_or(span);
+
+                let (start_value, start_kind) = self.expect_int(start_value, start.span())?;
+                let (end_value, end_kind) = self.expect_int(end_value, end.span())?;
+                let (step_value, step_kind) = self.expect_int(step_value, step_span)?;
+
+                let kind = combine_kinds(start_kind, end_kind, span)?;
+                let kind = combine_kinds(kind, step_kind, span)?;
+
+                if step_value <= 0 {
+                    return Err(Error::new(step_span, "DO FOR step must be positive"));
+                }
+
+                self.make_int(start_value, kind, start.span())?;
+                self.make_int(end_value, kind, end.span())?;
+                self.make_int(step_value, kind, step_span)?;
+
+                let counter_ty = match kind {
+                    Some(kind) => Type::Int(kind),
+                    None => Type::IntLiteral,
+                };
+
+                self.locals.push(Scope::default());
+                let result = (|| -> Result<Flow, Error> {
+                    {
+                        let scope = self.locals.last_mut().expect("local scope");
+                        scope.vars.insert(
+                            counter.clone(),
+                            Rc::new(RefCell::new(Var {
+                                ty: counter_ty,
+                                value: Value::Int {
+                                    value: start_value,
+                                    kind,
+                                },
+                            })),
+                        );
+                    }
+
+                    let mut current = start_value;
+                    loop {
+                        if !*down && current > end_value {
+                            break;
+                        }
+                        if *down && current < end_value {
+                            break;
+                        }
+
+                        let cell = self
+                            .locals
+                            .last()
+                            .and_then(|scope| scope.vars.get(counter))
+                            .cloned()
+                            .expect("loop counter exists");
+                        cell.borrow_mut().value = Value::Int {
+                            value: current,
+                            kind,
+                        };
+
+                        match self.exec_actions(body, frame)? {
+                            Flow::Normal => {}
+                            Flow::Exit(None) => break,
+                            flow => return Ok(flow),
+                        }
+
+                        let next = if *down {
+                            current.checked_sub(step_value)
+                        } else {
+                            current.checked_add(step_value)
+                        };
+                        match next {
+                            Some(value) => current = value,
+                            // An overflowing next value terminates the loop (§6.5.2).
+                            None => break,
+                        }
+                    }
+
+                    Ok(Flow::Normal)
+                })();
+                self.locals.pop();
+                result
+            }
         }
     }
 
@@ -928,6 +1072,14 @@ fn binary_for_assign(op: AssignOp) -> BinaryOp {
     }
 }
 
+fn explicit_label_matches(label: CaseLabel, value: i128) -> bool {
+    match label {
+        CaseLabel::Value(label_value) => label_value == value,
+        CaseLabel::Range { low, high } => low <= value && value <= high,
+        CaseLabel::Else | CaseLabel::Any => false,
+    }
+}
+
 fn combine_kinds(
     left: Option<IntKind>,
     right: Option<IntKind>,
@@ -1059,6 +1211,105 @@ Client: MODULE
   ASSERT x = 41;
   ASSERT F() = 42;
 END Client;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn runs_do_for_ascending_and_descending() {
+        run_source(
+            r#"
+M: MODULE
+  DCL sum INT INIT := 0;
+  DCL count INT INIT := 0;
+  DO FOR i := 1 TO 4;
+    sum := sum + i;
+  OD;
+  ASSERT sum = 10;
+
+  DO FOR i := 4 BY 1 DOWN TO 1;
+    count := count + 1;
+  OD;
+  ASSERT count = 4;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn runs_case_actions() {
+        run_source(
+            r#"
+M: MODULE
+  DCL grade INT INIT := 2;
+  DCL score INT INIT := 0;
+
+  CASE grade OF
+    (1): score := 10;
+    (2, 3): score := 20;
+    (4:6): score := 30;
+    (ELSE): score := 99;
+  ESAC;
+  ASSERT score = 20;
+
+  grade := 5;
+  CASE grade OF
+    (1): score := 10;
+    (4:6): score := 30;
+  ESAC;
+  ASSERT score = 30;
+
+  grade := 7;
+  CASE grade OF
+    (1): score := 10;
+    ELSE
+      score := 0;
+  ESAC;
+  ASSERT score = 0;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn labelled_exit_leaves_outer_loop() {
+        run_source(
+            r#"
+M: MODULE
+  DCL count INT INIT := 0;
+Outer: DO FOR i := 1 TO 3;
+    DO FOR j := 1 TO 3;
+      count := count + 1;
+      IF count = 4 THEN
+        EXIT Outer;
+      FI;
+    OD;
+  OD;
+  ASSERT count = 4;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn bare_exit_leaves_begin_not_loop() {
+        run_source(
+            r#"
+M: MODULE
+  DCL x INT INIT := 0;
+  DO FOR i := 1 TO 3;
+    BEGIN
+      x := x + 1;
+      EXIT;
+    END;
+    x := x + 10;
+  OD;
+  ASSERT x = 33;
+END M;
 "#,
         )
         .unwrap();

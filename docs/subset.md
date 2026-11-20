@@ -64,6 +64,7 @@ Implemented in `z200c`:
 - `z200c build`, which writes a TOML grant file describing the package interface;
 - loading dependency grant files from `[dependencies]` for static `SEIZE` resolution in
   `check` and `build`;
+- `DO FOR` (ascending, descending, with `BY`), `CASE`, and labelled `EXIT`;
 - a tree-walking interpreter, so `z200c run examples/hello` executes the example and
   verifies its `ASSERT`.
 
@@ -71,7 +72,7 @@ Not implemented yet (rejected or deferred with a diagnostic):
 
 - linking external dependencies for `run`;
 - contexts and remote pieces;
-- `DO FOR` counters, labelled `EXIT`, and `CASE`;
+- multiple `CASE` selectors and non-integer `CASE` labels;
 - `OUT` / `INOUT` / `LOC` parameter passing;
 - exceptions (`EXCEPTIONS`, `CAUSE`, handlers) and text I/O;
 - processes, regions, timers, powersets, references, and generics.
@@ -258,20 +259,57 @@ DO FOR i := 1 TO n;
   ...
 OD
 
+DO FOR i := 1 BY 2 TO n;
+  ...
+OD
+
+DO FOR i := 10 BY 1 DOWN TO 1;
+  ...
+OD
+
 DO FOR EVER;
   ...
 OD
 ```
 
+- `BY` is optional (default step 1) and must be positive; `DOWN` iterates downward.
+- The loop counter is implicitly declared in the loop's own reach (it shadows an outer
+  name of the same spelling). The loop terminates before an overflowing next value.
+- The counter's mode follows the resulting class of the start/step/end expressions; in
+  v0 a purely literal counter behaves as an `&INT`-derived value.
+
 ```chill
 CASE selector OF
   (1): ...
-  (2): ...
-  ELSE ...
+  (2, 3): ...
+  (4:6): ...
+  (ELSE): ...
+  ELSE
+    ...
 ESAC
 ```
 
-`EXIT label;` leaves a labelled `DO` or module in a structured way (§6.6).
+- v0 supports one integer selector, integer labels, literal ranges, `(ELSE)`, `(*)`,
+  and an optional unparenthesized `ELSE` branch.
+- `(ELSE)` matches selector values not explicitly listed by any alternative; the
+  unparenthesized `ELSE` branch runs when no alternative matches.
+- Multiple selectors and non-integer label values are not implemented yet.
+
+Actions can be labelled and left with `EXIT`:
+
+```chill
+Outer: DO FOR i := 1 TO 3;
+  DO FOR j := 1 TO 3;
+    IF done THEN
+      EXIT Outer;
+    FI;
+  OD;
+OD;
+```
+
+- `EXIT label;` leaves the matching labelled action or named module (§6.6).
+- `EXIT;` leaves the innermost `DO`, `BEGIN`, or module.
+- A label is visible only inside the labelled action; unknown labels are errors.
 
 `ASSERT boolean-expression;` raises the `ASSERTFAIL` exception if the expression is
 `FALSE` (§6.10). `CAUSE name;` raises a named exception (§6.12).

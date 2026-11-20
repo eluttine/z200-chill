@@ -417,12 +417,28 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_action(&mut self) -> Result<Action, Error> {
+        if self.at_identifier() && self.kind_at(1) == Some(&TokenKind::Colon) {
+            let start = self.current_span();
+            let (label, _) = self.expect_identifier()?;
+            self.expect_colon()?;
+            let action = self.parse_action()?;
+            return Ok(Action::Labelled {
+                label,
+                span: Span {
+                    start: start.start,
+                    end: action.span().end,
+                },
+                action: Box::new(action),
+            });
+        }
+
         match self.kind() {
             Some(TokenKind::Keyword(Keyword::Assert)) => self.parse_assert(),
             Some(TokenKind::Keyword(Keyword::Return)) => self.parse_return(),
             Some(TokenKind::Keyword(Keyword::Result)) => self.parse_result(),
             Some(TokenKind::Keyword(Keyword::Exit)) => self.parse_exit(),
             Some(TokenKind::Keyword(Keyword::If)) => self.parse_if(),
+            Some(TokenKind::Keyword(Keyword::Case)) => self.parse_case(),
             Some(TokenKind::Keyword(Keyword::Do)) => self.parse_do(),
             Some(TokenKind::Keyword(Keyword::Begin)) => self.parse_begin(),
             Some(TokenKind::Semicolon) => {
@@ -536,6 +552,136 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_case(&mut self) -> Result<Action, Error> {
+        let start = self.current_span();
+        self.expect_keyword(Keyword::Case)?;
+        let selector = self.parse_expr()?;
+
+        if self.at_comma() {
+            return Err(self.error_here("multiple CASE selectors are not implemented yet"));
+        }
+
+        self.expect_keyword(Keyword::Of)?;
+
+        let mut alternatives = Vec::new();
+        while self.at_lparen() {
+            let alternative_start = self.current_span();
+            let labels = self.parse_case_labels()?;
+            self.expect_colon()?;
+            let body = self.parse_case_body()?;
+            let end = body
+                .last()
+                .map(|action| action.span().end)
+                .unwrap_or(alternative_start.end);
+            alternatives.push(CaseAlternative {
+                labels,
+                body,
+                span: Span {
+                    start: alternative_start.start,
+                    end,
+                },
+            });
+        }
+
+        let else_actions = if self.at_keyword(Keyword::Else) {
+            self.advance();
+            Some(self.parse_actions_until(&[Keyword::Esac])?)
+        } else {
+            None
+        };
+
+        self.expect_keyword(Keyword::Esac)?;
+        let end = self.expect_semicolon()?;
+
+        if alternatives.is_empty() && else_actions.is_none() {
+            return Err(Error::new(start, "CASE requires at least one alternative"));
+        }
+
+        Ok(Action::Case {
+            selector,
+            alternatives,
+            else_actions,
+            span: Span {
+                start: start.start,
+                end: end.end,
+            },
+        })
+    }
+
+    fn parse_case_body(&mut self) -> Result<Vec<Action>, Error> {
+        let mut actions = Vec::new();
+        while !self.at_end()
+            && !self.at_keyword(Keyword::Esac)
+            && !self.at_keyword(Keyword::Else)
+            && !self.at_lparen()
+        {
+            actions.push(self.parse_action()?);
+        }
+        Ok(actions)
+    }
+
+    fn parse_case_labels(&mut self) -> Result<Vec<CaseLabel>, Error> {
+        self.expect_lparen()?;
+
+        let mut labels = Vec::new();
+        loop {
+            if self.at_keyword(Keyword::Else) {
+                self.advance();
+                labels.push(CaseLabel::Else);
+            } else if matches!(self.kind(), Some(TokenKind::Star)) {
+                self.advance();
+                labels.push(CaseLabel::Any);
+            } else {
+                let low = self.parse_case_integer()?;
+                if matches!(self.kind(), Some(TokenKind::Colon)) {
+                    self.advance();
+                    let high = self.parse_case_integer()?;
+                    if low > high {
+                        return Err(self.error_here("CASE range lower bound exceeds upper bound"));
+                    }
+                    labels.push(CaseLabel::Range { low, high });
+                } else {
+                    labels.push(CaseLabel::Value(low));
+                }
+            }
+
+            if self.at_comma() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        self.expect_rparen()?;
+        Ok(labels)
+    }
+
+    fn parse_case_integer(&mut self) -> Result<i128, Error> {
+        let negative = if matches!(self.kind(), Some(TokenKind::Minus)) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        let Some(token) = self.current() else {
+            return Err(self.expected("an integer literal"));
+        };
+        let value = match &token.kind {
+            TokenKind::Integer { value, .. } => *value,
+            _ => return Err(self.expected("an integer literal")),
+        };
+        self.advance();
+
+        if negative {
+            value
+                .checked_neg()
+                .ok_or_else(|| self.error_here("CASE label is out of range"))
+        } else {
+            Ok(value)
+        }
+    }
+
     fn parse_do(&mut self) -> Result<Action, Error> {
         let start = self.current_span();
         self.expect_keyword(Keyword::Do)?;
@@ -552,19 +698,26 @@ impl<'a> Parser<'a> {
                 let (counter, _) = self.expect_identifier()?;
                 self.expect_assign()?;
                 let start_value = self.parse_expr()?;
-                self.expect_keyword(Keyword::To)?;
-                let end_value = self.parse_expr()?;
                 let step = if self.at_keyword(Keyword::By) {
                     self.advance();
                     Some(self.parse_expr()?)
                 } else {
                     None
                 };
+                let down = if self.at_keyword(Keyword::Down) {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
+                self.expect_keyword(Keyword::To)?;
+                let end_value = self.parse_expr()?;
                 DoControl::For {
                     counter,
                     start: start_value,
                     end: end_value,
                     step,
+                    down,
                 }
             }
         } else {
@@ -1172,6 +1325,92 @@ END M;
         .unwrap();
         let error = parse(&tokens).unwrap_err();
         assert!(error.message.contains("spec module cannot contain actions"));
+    }
+
+    #[test]
+    fn parses_do_for_with_step_and_down() {
+        let program = parse_source(
+            r#"
+M: MODULE
+  DO FOR i := 10 BY 2 DOWN TO 1;
+  OD;
+END M;
+"#,
+        );
+
+        let Action::Do {
+            control:
+                DoControl::For {
+                    counter,
+                    step,
+                    down,
+                    ..
+                },
+            ..
+        } = &program.modules[0].actions[0]
+        else {
+            panic!("expected DO FOR");
+        };
+
+        assert_eq!(counter, "i");
+        assert!(step.is_some());
+        assert!(*down);
+    }
+
+    #[test]
+    fn parses_case_labels() {
+        let program = parse_source(
+            r#"
+M: MODULE
+  CASE x OF
+    (1, 2): ;
+    (3:5): ;
+    (ELSE): ;
+  ESAC;
+END M;
+"#,
+        );
+
+        let Action::Case { alternatives, .. } = &program.modules[0].actions[0] else {
+            panic!("expected CASE");
+        };
+
+        assert_eq!(alternatives.len(), 3);
+        assert_eq!(
+            alternatives[0].labels,
+            vec![CaseLabel::Value(1), CaseLabel::Value(2)]
+        );
+        assert_eq!(
+            alternatives[1].labels,
+            vec![CaseLabel::Range { low: 3, high: 5 }]
+        );
+        assert_eq!(alternatives[2].labels, vec![CaseLabel::Else]);
+    }
+
+    #[test]
+    fn parses_labelled_action_and_exit() {
+        let program = parse_source(
+            r#"
+M: MODULE
+L: DO
+    EXIT L;
+  OD;
+END M;
+"#,
+        );
+
+        let Action::Labelled { label, action, .. } = &program.modules[0].actions[0] else {
+            panic!("expected labelled action");
+        };
+        assert_eq!(label, "L");
+
+        let Action::Do { body, .. } = action.as_ref() else {
+            panic!("expected DO");
+        };
+        assert!(matches!(
+            &body[0],
+            Action::Exit { label: Some(name), .. } if name == "L"
+        ));
     }
 
     #[test]

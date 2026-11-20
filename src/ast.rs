@@ -147,6 +147,17 @@ pub enum Action {
         label: Option<String>,
         span: Span,
     },
+    Case {
+        selector: Expr,
+        alternatives: Vec<CaseAlternative>,
+        else_actions: Option<Vec<Action>>,
+        span: Span,
+    },
+    Labelled {
+        label: String,
+        action: Box<Action>,
+        span: Span,
+    },
     Begin {
         declarations: Vec<Declaration>,
         actions: Vec<Action>,
@@ -164,6 +175,21 @@ pub struct Branch {
 }
 
 #[derive(Debug, Clone)]
+pub struct CaseAlternative {
+    pub labels: Vec<CaseLabel>,
+    pub body: Vec<Action>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaseLabel {
+    Value(i128),
+    Range { low: i128, high: i128 },
+    Else,
+    Any,
+}
+
+#[derive(Debug, Clone)]
 pub enum DoControl {
     None,
     While(Expr),
@@ -173,6 +199,7 @@ pub enum DoControl {
         start: Expr,
         end: Expr,
         step: Option<Expr>,
+        down: bool,
     },
 }
 
@@ -239,6 +266,25 @@ impl Expr {
             | Self::Apply { span, .. }
             | Self::Unary { span, .. }
             | Self::Binary { span, .. } => *span,
+        }
+    }
+}
+
+impl Action {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Assign { span, .. }
+            | Self::Assert { span, .. }
+            | Self::Call { span, .. }
+            | Self::Return { span, .. }
+            | Self::Result { span, .. }
+            | Self::If { span, .. }
+            | Self::Do { span, .. }
+            | Self::Exit { span, .. }
+            | Self::Case { span, .. }
+            | Self::Labelled { span, .. }
+            | Self::Begin { span, .. }
+            | Self::Empty { span } => *span,
         }
     }
 }
