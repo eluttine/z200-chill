@@ -17,7 +17,7 @@ Prioritize clarity, deterministic behavior, and small, verifiable changes over c
 ## Core Architectural Principles
 1. **Separate frontend, IR/lowering, and backend:** Keep lexing, parsing, AST construction, and mode/type checking decoupled from target code generation or runtime details.
 2. **Respect CHILL's module & visibility model:** Model `MODULE`, `SPEC`, `GRANT`, and `SEIZE` explicitly in the AST/symbol table; mangle or namespace symbols internally so multi-module and multi-package builds do not collide.
-3. **Configurable integer widths (`SHORT INT` / `LONG INT`):** Default to `32` and `64` bits on Linux, with support for configurable profiles (such as `16-32` or `8-16`) while enforcing `width(SHORT INT) <= width(INT) <= width(LONG INT)` and including the active profile in build cache keys.
+3. **Configurable integer widths (`SHORT_INT` / `INT` / `LONG_INT`):** Default to `16`, `32`, and `64` bits on Linux, with support for configurable profiles (such as `8-16-32` or `16-32-64`) while enforcing `width(SHORT_INT) <= width(INT) <= width(LONG_INT)` and including the active profile in build cache keys. These mode names follow Z.200's implementation-defined integer mode convention; `INT` is the only integer mode predefined by the standard.
 4. **Incremental, explicit scope:** Support a well-defined CHILL subset first (modes, declarations, expressions, control flow, procedures, modules) before adding full concurrency, timers, or exotic Z.200 features.
 5. **Isolate runtime & target semantics:** Keep CHILL-specific semantics (processes, signals, timers, exceptions, range/overflow checks) in clean runtime helpers and explicit lowering rules rather than ad-hoc hacks.
 
@@ -28,11 +28,10 @@ Prioritize clarity, deterministic behavior, and small, verifiable changes over c
 - **Keep `AGENTS.md` concise:** Only add durable project rules, build commands, and gotchas that save future sessions mistakes.
 
 ## Build, Lint, and Test Commands
-Replace these placeholders with the project's actual commands once initialized:
-- Build compiler & CLI (`z200c`): `<add build command, e.g. cargo build>`
-- Run unit & integration tests: `<add test command, e.g. cargo test>`
-- Run a sample `.ch` program: `<add run command, e.g. z200c run examples/hello>`
-- Lint / typecheck: `<add lint/check command, e.g. cargo clippy>`
+- Build compiler & CLI (`z200c`): `cargo build`
+- Run unit & integration tests: `cargo test`
+- Run a sample `.ch` program: `cargo run -- check examples/hello` (use `cargo run -- run examples/hello` once `run` lands)
+- Lint / typecheck: `cargo fmt --all --check && cargo clippy --all-targets -- -D warnings`
 
 ## Working Style
 - Before editing large files or changing architecture, summarize the plan briefly.

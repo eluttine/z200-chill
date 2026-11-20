@@ -1,0 +1,13 @@
+[package]
+name = "z200c"
+version = "0.1.0"
+edition = "2021"
+description = "Compiler and build tool for the CHILL language (ITU-T Z.200)"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+[profile.release]
+lto = true
