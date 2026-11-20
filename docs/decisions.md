@@ -25,16 +25,16 @@ need I/O:
 - expected exit status: success;
 - unhandled `ASSERTFAIL`/exception: failure.
 
-## 10.4 Grant-file / multi-module model (source linking resolved; grant-file linking open)
+## 10.4 Grant-file / multi-module model (module identity resolved; prefix exports open)
 
 v0 implements `SPEC MODULE` pairing, writes a TOML grant file from `z200c grant`, and
 consumes dependency grant files for `SEIZE` resolution in `check` and `grant`.
-Package-directory dependencies are loaded recursively and linked for `run`; grant-file
-dependencies remain interface-only. Dependencies and the root must share edition and
-width profile. Module names must be unique across linked packages. Symbol mangling and
-grant-file-only run linking remain open. Z.200 permits several piecewise schemes
-(§10.10); the next step is a mangling/linking strategy that does not require globally
-unique module names.
+Package-directory dependencies are loaded recursively and linked for `run`; a grant file
+that records `package_dir` is also source-linked for `run`. Dependencies and the root
+must share edition and width profile. Modules are identified by package plus simple name,
+so different packages may contain a module with the same name. Exported names remain
+globally simple; symbol/export prefixing and namespacing are still open. Z.200 permits
+several piecewise schemes (§10.10).
 
 ## 10.7 Multi-file packages (resolved)
 
@@ -53,15 +53,16 @@ added with the native backend.
 Confirmed: `SHORT_INT` = 16, `INT` = 32, `LONG_INT` = 64 on Linux. The standard does
 not constrain them.
 
-## 10.8 Typed expression IR (resolved)
+## 10.8 Typed IR (resolved)
 
-The checker records expression modes and `Apply` resolutions; `ir::lower` produces a
-typed expression tree that the interpreter consumes. This removes expression-level
-re-inference from the interpreter. See [ir.md](ir.md).
+The checker records expression modes and `Apply` resolutions; `ir::lower` produces typed
+expression and statement nodes (`ir::Expr`, `ir::Stmt`) that the interpreter consumes.
+This removes expression-level re-inference and AST action traversal from the interpreter.
+See [ir.md](ir.md).
 
-## 10.9 Statement IR / code generation (open)
+## 10.9 Code generation (open)
 
-Actions are still interpreted from the AST. A statement-level IR and a native or C
-backend remain future work; the typed expression layer is the intended base.
+A native or C code-generation backend remains future work; the typed IR is the intended
+input. Declarations/procedure structure and `BEGIN` declaration lists remain AST-level.
 
 ---

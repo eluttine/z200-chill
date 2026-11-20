@@ -57,17 +57,19 @@ Implemented in `z200c`:
 - mode checking for `SHORT_INT` / `INT` / `LONG_INT` / `BOOL`, literals, arithmetic,
   relational and boolean expressions, procedures, calls, assignments, `ASSERT`,
   `IF`, `DO WHILE` / `DO FOR EVER`, and `BEGIN … END`;
-- `GRANT` / `SEIZE` visibility between modules in a single entry file, including
-  shared seized locations and procedures;
+- `GRANT` / `SEIZE` visibility between modules, including shared seized locations and
+  procedures;
 - `SPEC MODULE` interfaces paired with body modules, with variable and procedure
   signature matching;
-- `z200c grant`, which writes a TOML grant file describing the package interface;
+- `z200c grant`, which writes a TOML grant file describing the package interface and
+  (optionally) its source package directory;
 - loading dependency grant files from `[dependencies]` for static `SEIZE` resolution in
-  `check` and `grant`;
+  `check` and `grant`, and source-linking them for `run` when `package_dir` is present;
 - `DO FOR` (ascending, descending, with `BY`), `CASE`, and labelled `EXIT`;
-- a typed expression IR (checked modes and resolved `Apply` nodes) lowered from the
-  checked AST and consumed by the interpreter instead of re-inferring them;
-- multi-file `[build] sources` and package-directory dependency linking for `run`;
+- a typed expression and statement IR (checked modes, resolved `Apply` nodes, lowered
+  actions) consumed by the interpreter instead of re-inferring or walking the AST;
+- multi-file `[build] sources`, package-directory dependency linking, and
+  package-qualified module identity for `run`;
 - source-map diagnostics with stable codes, multi-error checker reporting, a parser
   nesting limit, and fixture-based parser/sema/run tests;
 - a tree-walking interpreter, so `z200c run examples/hello` executes the example and

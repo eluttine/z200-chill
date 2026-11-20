@@ -111,7 +111,7 @@ pub fn run_checked(
 ) -> Result<(), Error> {
     let info = program::analyze(program)
         .map_err(|error| Error::coded(error.code, error.span, error.message))?;
-    let exprs = ir::lower(program, check)
+    let lowered = ir::lower(program, check)
         .map_err(|error| Error::coded("E0400", error.span, error.message))?;
     let mut interpreter = Interpreter {
         profile,
@@ -121,7 +121,8 @@ pub fn run_checked(
         active_module: 0,
         depth: 0,
         exports: info.exports,
-        exprs,
+        exprs: lowered.exprs,
+        bodies: lowered.bodies,
     };
 
     interpreter.declare_modules(program)?;
@@ -191,6 +192,7 @@ struct Interpreter<'a> {
     depth: usize,
     exports: HashMap<String, Export>,
     exprs: ir::ExprTable,
+    bodies: ir::BodyTable,
 }
 
 impl<'a> Interpreter<'a> {
@@ -282,7 +284,7 @@ impl<'a> Interpreter<'a> {
         Ok(())
     }
 
-    fn initialize_declarations(&mut self, declarations: &'a [Declaration]) -> Result<(), Error> {
+    fn initialize_declarations(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
         for declaration in declarations {
             let Declaration::Var(vars) = declaration else {
                 continue;
@@ -303,12 +305,51 @@ impl<'a> Interpreter<'a> {
         declare_into_scope(scope, declarations, module)
     }
 
+    fn declare_local_vars(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
+        let scope = self.locals.last_mut().expect("local scope");
+        for declaration in declarations {
+            match declaration {
+                Declaration::Var(vars) => {
+                    for var in vars {
+                        let ty = mode_type(&var.mode)?;
+                        if scope.vars.contains_key(&var.name) || scope.procs.contains_key(&var.name)
+                        {
+                            return Err(Error::new(
+                                var.span,
+                                format!("duplicate declaration of `{}`", var.name),
+                            ));
+                        }
+                        scope.vars.insert(
+                            var.name.clone(),
+                            Rc::new(RefCell::new(Var {
+                                ty,
+                                value: Value::Undefined,
+                            })),
+                        );
+                    }
+                }
+                Declaration::Proc(proc_def) => {
+                    return Err(Error::new(
+                        proc_def.span,
+                        "procedure definitions inside BEGIN are not implemented",
+                    ));
+                }
+                Declaration::ProcSignature(_) | Declaration::Visibility(_) => {}
+            }
+        }
+        Ok(())
+    }
+
     fn run_module(&mut self, module: &'a Module) -> Result<(), Error> {
+        let body = self
+            .bodies
+            .get(module.span)
+            .ok_or_else(|| Error::new(module.span, "internal: missing module IR body"))?;
         let mut frame = Frame {
             result_type: None,
             result: None,
         };
-        match self.exec_actions(&module.actions, &mut frame)? {
+        match self.exec_stmts(&body, &mut frame)? {
             Flow::Normal | Flow::Return | Flow::Exit(None) => Ok(()),
             Flow::Exit(Some(name)) => {
                 if module.name.as_deref() == Some(name.as_str()) {
@@ -323,28 +364,20 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn exec_actions(&mut self, actions: &'a [Action], frame: &mut Frame) -> Result<Flow, Error> {
-        for action in actions {
-            match action {
-                Action::Assign {
-                    target,
+    fn exec_stmts(&mut self, stmts: &[ir::Stmt], frame: &mut Frame) -> Result<Flow, Error> {
+        for stmt in stmts {
+            match stmt {
+                ir::Stmt::Assign {
+                    name,
                     op,
                     value,
                     span,
                 } => {
-                    let Expr::Name {
-                        name,
-                        span: target_span,
-                    } = target
-                    else {
-                        return Err(Error::new(*span, "assignment target must be a name in v0"));
-                    };
-
                     let value = if *op == AssignOp::Assign {
-                        self.eval_expr(value)?
+                        self.eval_ir(value)?
                     } else {
-                        let current = self.read_var(name, *target_span)?;
-                        let right = self.eval_expr(value)?;
+                        let current = self.read_var(name, *span)?;
+                        let right = self.eval_ir(value)?;
                         let target_ty = self.var_type(name, *span)?;
                         self.apply_binary(
                             binary_for_assign(*op),
@@ -354,19 +387,18 @@ impl<'a> Interpreter<'a> {
                             *span,
                         )?
                     };
-
                     self.assign_var(name, value, *span)?;
                 }
-                Action::Assert { condition, span } => {
-                    let value = self.eval_expr(condition)?;
+                ir::Stmt::Assert { condition, span } => {
+                    let value = self.eval_ir(condition)?;
                     if !self.as_bool(value, *span)? {
                         return Err(Error::new(*span, "ASSERTFAIL"));
                     }
                 }
-                Action::Call { callee, .. } => {
-                    self.eval_expr(callee)?;
+                ir::Stmt::Call { call, .. } => {
+                    self.eval_ir(call)?;
                 }
-                Action::Return { value, span } => {
+                ir::Stmt::Return { value, span } => {
                     if let Some(value) = value {
                         let result_type = frame.result_type.ok_or_else(|| {
                             Error::new(
@@ -374,46 +406,46 @@ impl<'a> Interpreter<'a> {
                                 "RETURN with a value in a procedure that has no result",
                             )
                         })?;
-                        let value = self.eval_expr(value)?;
+                        let value = self.eval_ir(value)?;
                         frame.result = Some(self.convert(value, result_type, *span)?);
                     }
                     return Ok(Flow::Return);
                 }
-                Action::Result { value, span } => {
+                ir::Stmt::Result { value, span } => {
                     let result_type = frame
                         .result_type
                         .ok_or_else(|| Error::new(*span, "RESULT outside a value procedure"))?;
-                    let value = self.eval_expr(value)?;
+                    let value = self.eval_ir(value)?;
                     frame.result = Some(self.convert(value, result_type, *span)?);
                 }
-                Action::If {
+                ir::Stmt::If {
                     branches,
                     else_actions,
                     ..
                 } => {
                     for branch in branches {
-                        let condition = self.eval_expr(&branch.condition)?;
+                        let condition = self.eval_ir(&branch.condition)?;
                         if self.as_bool(condition, branch.condition.span())? {
-                            return self.exec_actions(&branch.body, frame);
+                            return self.exec_stmts(&branch.body, frame);
                         }
                     }
                     if let Some(actions) = else_actions {
-                        return self.exec_actions(actions, frame);
+                        return self.exec_stmts(actions, frame);
                     }
                 }
-                Action::Do {
+                ir::Stmt::Do {
                     control,
                     body,
                     span,
                 } => return self.exec_do(control, body, frame, *span),
-                Action::Exit { label, .. } => return Ok(Flow::Exit(label.clone())),
-                Action::Case {
+                ir::Stmt::Exit { label, .. } => return Ok(Flow::Exit(label.clone())),
+                ir::Stmt::Case {
                     selector,
                     alternatives,
                     else_actions,
                     ..
                 } => {
-                    let selector_value = self.eval_expr(selector)?;
+                    let selector_value = self.eval_ir(selector)?;
                     let (value, _) = self.expect_int(selector_value, selector.span())?;
 
                     let explicitly_labelled = alternatives.iter().any(|alternative| {
@@ -430,30 +462,30 @@ impl<'a> Interpreter<'a> {
                             other => explicit_label_matches(*other, value),
                         });
                         if matches {
-                            return self.exec_actions(&alternative.body, frame);
+                            return self.exec_stmts(&alternative.body, frame);
                         }
                     }
 
                     if let Some(actions) = else_actions {
-                        return self.exec_actions(actions, frame);
+                        return self.exec_stmts(actions, frame);
                     }
                 }
-                Action::Labelled { label, action, .. } => {
-                    match self.exec_actions(std::slice::from_ref(action.as_ref()), frame)? {
+                ir::Stmt::Labelled { label, action, .. } => {
+                    match self.exec_stmts(std::slice::from_ref(action.as_ref()), frame)? {
                         Flow::Exit(Some(name)) if &name == label => return Ok(Flow::Normal),
                         flow => return Ok(flow),
                     }
                 }
-                Action::Begin {
+                ir::Stmt::Begin {
                     declarations,
                     actions,
                     ..
                 } => {
                     self.locals.push(Scope::default());
                     let result = (|| {
-                        self.declare_local(declarations)?;
+                        self.declare_local_vars(declarations)?;
                         self.initialize_declarations(declarations)?;
-                        self.exec_actions(actions, frame)
+                        self.exec_stmts(actions, frame)
                     })();
                     self.locals.pop();
                     return match result {
@@ -461,7 +493,7 @@ impl<'a> Interpreter<'a> {
                         other => other,
                     };
                 }
-                Action::Empty { .. } => {}
+                ir::Stmt::Empty { .. } => {}
             }
         }
         Ok(Flow::Normal)
@@ -469,23 +501,23 @@ impl<'a> Interpreter<'a> {
 
     fn exec_do(
         &mut self,
-        control: &'a DoControl,
-        body: &'a [Action],
+        control: &ir::DoControlIr,
+        body: &[ir::Stmt],
         frame: &mut Frame,
         span: Span,
     ) -> Result<Flow, Error> {
         match control {
-            DoControl::None => match self.exec_actions(body, frame)? {
+            ir::DoControlIr::None => match self.exec_stmts(body, frame)? {
                 Flow::Exit(None) => Ok(Flow::Normal),
                 flow => Ok(flow),
             },
-            DoControl::While(condition) => {
+            ir::DoControlIr::While(condition) => {
                 loop {
-                    let value = self.eval_expr(condition)?;
+                    let value = self.eval_ir(condition)?;
                     if !self.as_bool(value, condition.span())? {
                         break;
                     }
-                    match self.exec_actions(body, frame)? {
+                    match self.exec_stmts(body, frame)? {
                         Flow::Normal => {}
                         Flow::Exit(None) => break,
                         flow => return Ok(flow),
@@ -493,9 +525,9 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(Flow::Normal)
             }
-            DoControl::ForEver => {
+            ir::DoControlIr::ForEver => {
                 loop {
-                    match self.exec_actions(body, frame)? {
+                    match self.exec_stmts(body, frame)? {
                         Flow::Normal => {}
                         Flow::Exit(None) => break,
                         flow => return Ok(flow),
@@ -503,17 +535,17 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(Flow::Normal)
             }
-            DoControl::For {
+            ir::DoControlIr::For {
                 counter,
                 start,
                 end,
                 step,
                 down,
             } => {
-                let start_value = self.eval_expr(start)?;
-                let end_value = self.eval_expr(end)?;
+                let start_value = self.eval_ir(start)?;
+                let end_value = self.eval_ir(end)?;
                 let step_value = match step {
-                    Some(expr) => self.eval_expr(expr)?,
+                    Some(expr) => self.eval_ir(expr)?,
                     None => Value::Int {
                         value: 1,
                         kind: None,
@@ -577,7 +609,7 @@ impl<'a> Interpreter<'a> {
                             kind,
                         };
 
-                        match self.exec_actions(body, frame)? {
+                        match self.exec_stmts(body, frame)? {
                             Flow::Normal => {}
                             Flow::Exit(None) => break,
                             flow => return Ok(flow),
@@ -603,7 +635,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn eval_expr(&mut self, expr: &'a Expr) -> Result<Value, Error> {
+    fn eval_expr(&mut self, expr: &Expr) -> Result<Value, Error> {
         let expression = self
             .exprs
             .get(expr.span())
@@ -761,7 +793,12 @@ impl<'a> Interpreter<'a> {
             result: None,
         };
 
-        match self.exec_actions(&proc_def.actions, &mut frame)? {
+        let body = self
+            .bodies
+            .get(proc_def.span)
+            .ok_or_else(|| Error::new(proc_def.span, "internal: missing procedure IR body"))?;
+
+        match self.exec_stmts(&body, &mut frame)? {
             Flow::Return | Flow::Normal => {}
             Flow::Exit(_) => {
                 return Err(Error::new(

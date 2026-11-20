@@ -1,4 +1,6 @@
-use crate::ast::{Action, Declaration, DoControl, Expr as AstExpr, Module, Program, UnaryOp};
+use crate::ast::{
+    Action, CaseLabel, Declaration, DoControl, Expr as AstExpr, Module, Program, UnaryOp,
+};
 use crate::lexer::Span;
 use crate::sema::{ApplyResolution, CheckResult};
 use crate::types::{IntKind, Type};
@@ -76,6 +78,127 @@ impl Expr {
             | Self::Binary { span, .. } => *span,
         }
     }
+
+    pub fn ty(&self) -> Option<Type> {
+        match self {
+            Self::Integer { ty, .. }
+            | Self::Bool { ty, .. }
+            | Self::Char { ty, .. }
+            | Self::String { ty, .. }
+            | Self::Name { ty, .. }
+            | Self::Conversion { ty, .. }
+            | Self::Unary { ty, .. }
+            | Self::Binary { ty, .. } => Some(*ty),
+            Self::Call { ty, .. } => *ty,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Stmt {
+    Assign {
+        name: String,
+        op: crate::ast::AssignOp,
+        value: Node,
+        span: Span,
+    },
+    Assert {
+        condition: Node,
+        span: Span,
+    },
+    Call {
+        call: Node,
+        span: Span,
+    },
+    Return {
+        value: Option<Node>,
+        span: Span,
+    },
+    Result {
+        value: Node,
+        span: Span,
+    },
+    If {
+        branches: Vec<BranchIr>,
+        else_actions: Option<Vec<Stmt>>,
+        span: Span,
+    },
+    Do {
+        control: DoControlIr,
+        body: Vec<Stmt>,
+        span: Span,
+    },
+    Exit {
+        label: Option<String>,
+        span: Span,
+    },
+    Case {
+        selector: Node,
+        alternatives: Vec<CaseAlternativeIr>,
+        else_actions: Option<Vec<Stmt>>,
+        span: Span,
+    },
+    Labelled {
+        label: String,
+        action: Box<Stmt>,
+        span: Span,
+    },
+    Begin {
+        declarations: Vec<Declaration>,
+        actions: Vec<Stmt>,
+        span: Span,
+    },
+    Empty {
+        span: Span,
+    },
+}
+
+#[derive(Debug)]
+pub struct BranchIr {
+    pub condition: Node,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug)]
+pub struct CaseAlternativeIr {
+    pub labels: Vec<CaseLabel>,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub enum DoControlIr {
+    None,
+    While(Node),
+    ForEver,
+    For {
+        counter: String,
+        start: Node,
+        end: Node,
+        step: Option<Node>,
+        down: bool,
+    },
+}
+
+#[derive(Debug, Default)]
+pub struct BodyTable {
+    bodies: HashMap<Span, Rc<Vec<Stmt>>>,
+}
+
+impl BodyTable {
+    pub fn get(&self, span: Span) -> Option<Rc<Vec<Stmt>>> {
+        self.bodies.get(&span).cloned()
+    }
+
+    fn insert(&mut self, span: Span, body: Vec<Stmt>) {
+        self.bodies.insert(span, Rc::new(body));
+    }
+}
+
+#[derive(Debug)]
+pub struct Lowered {
+    pub exprs: ExprTable,
+    pub bodies: BodyTable,
 }
 
 #[derive(Debug, Default)]
@@ -108,28 +231,35 @@ impl Error {
     }
 }
 
-pub fn lower(program: &Program, check: &CheckResult) -> Result<ExprTable, Error> {
+pub fn lower(program: &Program, check: &CheckResult) -> Result<Lowered, Error> {
     let mut lowerer = Lowerer {
         check,
-        table: ExprTable::default(),
+        exprs: ExprTable::default(),
+        bodies: BodyTable::default(),
     };
 
     for module in &program.modules {
         lowerer.lower_module(module)?;
     }
 
-    Ok(lowerer.table)
+    Ok(Lowered {
+        exprs: lowerer.exprs,
+        bodies: lowerer.bodies,
+    })
 }
 
 struct Lowerer<'a> {
     check: &'a CheckResult,
-    table: ExprTable,
+    exprs: ExprTable,
+    bodies: BodyTable,
 }
 
 impl Lowerer<'_> {
     fn lower_module(&mut self, module: &Module) -> Result<(), Error> {
         self.lower_declarations(&module.declarations)?;
-        self.lower_actions(&module.actions)
+        let actions = self.lower_actions(&module.actions)?;
+        self.bodies.insert(module.span, actions);
+        Ok(())
     }
 
     fn lower_declarations(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
@@ -144,7 +274,8 @@ impl Lowerer<'_> {
                 }
                 Declaration::Proc(proc_def) => {
                     self.lower_declarations(&proc_def.declarations)?;
-                    self.lower_actions(&proc_def.actions)?;
+                    let actions = self.lower_actions(&proc_def.actions)?;
+                    self.bodies.insert(proc_def.span, actions);
                 }
                 Declaration::ProcSignature(_) | Declaration::Visibility(_) => {}
             }
@@ -152,87 +283,158 @@ impl Lowerer<'_> {
         Ok(())
     }
 
-    fn lower_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
+    fn lower_actions(&mut self, actions: &[Action]) -> Result<Vec<Stmt>, Error> {
+        let mut lowered = Vec::with_capacity(actions.len());
         for action in actions {
-            match action {
-                Action::Assign { target, value, .. } => {
-                    self.lower_expr(target)?;
-                    self.lower_expr(value)?;
-                }
-                Action::Assert { condition, .. } => {
-                    self.lower_expr(condition)?;
-                }
-                Action::Call { callee, .. } => {
-                    self.lower_expr(callee)?;
-                }
-                Action::Return { value, .. } => {
-                    if let Some(value) = value {
-                        self.lower_expr(value)?;
-                    }
-                }
-                Action::Result { value, .. } => {
-                    self.lower_expr(value)?;
-                }
-                Action::If {
-                    branches,
-                    else_actions,
-                    ..
-                } => {
-                    for branch in branches {
-                        self.lower_expr(&branch.condition)?;
-                        self.lower_actions(&branch.body)?;
-                    }
-                    if let Some(actions) = else_actions {
-                        self.lower_actions(actions)?;
-                    }
-                }
-                Action::Do { control, body, .. } => {
-                    match control {
-                        DoControl::None | DoControl::ForEver => {}
-                        DoControl::While(condition) => {
-                            self.lower_expr(condition)?;
-                        }
-                        DoControl::For {
-                            start, end, step, ..
-                        } => {
-                            self.lower_expr(start)?;
-                            self.lower_expr(end)?;
-                            if let Some(step) = step {
-                                self.lower_expr(step)?;
-                            }
-                        }
-                    }
-                    self.lower_actions(body)?;
-                }
-                Action::Exit { .. } | Action::Empty { .. } => {}
-                Action::Case {
-                    selector,
-                    alternatives,
-                    else_actions,
-                    ..
-                } => {
-                    self.lower_expr(selector)?;
-                    for alternative in alternatives {
-                        self.lower_actions(&alternative.body)?;
-                    }
-                    if let Some(actions) = else_actions {
-                        self.lower_actions(actions)?;
-                    }
-                }
-                Action::Labelled { action, .. } => {
-                    self.lower_actions(std::slice::from_ref(action.as_ref()))?;
-                }
-                Action::Begin {
-                    declarations,
-                    actions,
-                    ..
-                } => {
-                    self.lower_declarations(declarations)?;
-                    self.lower_actions(actions)?;
-                }
-            }
+            lowered.push(self.lower_action(action)?);
         }
-        Ok(())
+        Ok(lowered)
+    }
+
+    fn lower_action(&mut self, action: &Action) -> Result<Stmt, Error> {
+        match action {
+            Action::Assign {
+                target,
+                op,
+                value,
+                span,
+            } => {
+                let AstExpr::Name { name, .. } = target else {
+                    return Err(Error::new(
+                        target.span(),
+                        "assignment target must be a name",
+                    ));
+                };
+                Ok(Stmt::Assign {
+                    name: name.clone(),
+                    op: *op,
+                    value: self.lower_expr(value)?,
+                    span: *span,
+                })
+            }
+            Action::Assert { condition, span } => Ok(Stmt::Assert {
+                condition: self.lower_expr(condition)?,
+                span: *span,
+            }),
+            Action::Call { callee, span } => Ok(Stmt::Call {
+                call: self.lower_expr(callee)?,
+                span: *span,
+            }),
+            Action::Return { value, span } => Ok(Stmt::Return {
+                value: match value {
+                    Some(value) => Some(self.lower_expr(value)?),
+                    None => None,
+                },
+                span: *span,
+            }),
+            Action::Result { value, span } => Ok(Stmt::Result {
+                value: self.lower_expr(value)?,
+                span: *span,
+            }),
+            Action::If {
+                branches,
+                else_actions,
+                span,
+            } => {
+                let mut lowered_branches = Vec::with_capacity(branches.len());
+                for branch in branches {
+                    lowered_branches.push(BranchIr {
+                        condition: self.lower_expr(&branch.condition)?,
+                        body: self.lower_actions(&branch.body)?,
+                    });
+                }
+                let else_actions = match else_actions {
+                    Some(actions) => Some(self.lower_actions(actions)?),
+                    None => None,
+                };
+                Ok(Stmt::If {
+                    branches: lowered_branches,
+                    else_actions,
+                    span: *span,
+                })
+            }
+            Action::Do {
+                control,
+                body,
+                span,
+            } => {
+                let control = match control {
+                    DoControl::None => DoControlIr::None,
+                    DoControl::ForEver => DoControlIr::ForEver,
+                    DoControl::While(condition) => DoControlIr::While(self.lower_expr(condition)?),
+                    DoControl::For {
+                        counter,
+                        start,
+                        end,
+                        step,
+                        down,
+                    } => DoControlIr::For {
+                        counter: counter.clone(),
+                        start: self.lower_expr(start)?,
+                        end: self.lower_expr(end)?,
+                        step: match step {
+                            Some(step) => Some(self.lower_expr(step)?),
+                            None => None,
+                        },
+                        down: *down,
+                    },
+                };
+                Ok(Stmt::Do {
+                    control,
+                    body: self.lower_actions(body)?,
+                    span: *span,
+                })
+            }
+            Action::Exit { label, span } => Ok(Stmt::Exit {
+                label: label.clone(),
+                span: *span,
+            }),
+            Action::Case {
+                selector,
+                alternatives,
+                else_actions,
+                span,
+            } => {
+                let selector = self.lower_expr(selector)?;
+                let mut lowered_alternatives = Vec::with_capacity(alternatives.len());
+                for alternative in alternatives {
+                    lowered_alternatives.push(CaseAlternativeIr {
+                        labels: alternative.labels.clone(),
+                        body: self.lower_actions(&alternative.body)?,
+                        span: alternative.span,
+                    });
+                }
+                let else_actions = match else_actions {
+                    Some(actions) => Some(self.lower_actions(actions)?),
+                    None => None,
+                };
+                Ok(Stmt::Case {
+                    selector,
+                    alternatives: lowered_alternatives,
+                    else_actions,
+                    span: *span,
+                })
+            }
+            Action::Labelled {
+                label,
+                action,
+                span,
+            } => Ok(Stmt::Labelled {
+                label: label.clone(),
+                action: Box::new(self.lower_action(action)?),
+                span: *span,
+            }),
+            Action::Begin {
+                declarations,
+                actions,
+                span,
+            } => Ok(Stmt::Begin {
+                declarations: declarations.clone(),
+                actions: self.lower_actions(actions)?,
+                span: *span,
+            }),
+            Action::Empty { span } => Ok(Stmt::Empty { span: *span }),
+        }
     }
 
     fn lower_expr(&mut self, expr: &AstExpr) -> Result<Node, Error> {
@@ -271,7 +473,7 @@ impl Lowerer<'_> {
                 }
             };
 
-            self.table.insert(&lowered);
+            self.exprs.insert(&lowered);
             return Ok(lowered);
         }
 
@@ -334,7 +536,7 @@ impl Lowerer<'_> {
             AstExpr::Apply { .. } => unreachable!("handled above"),
         };
 
-        self.table.insert(&lowered);
+        self.exprs.insert(&lowered);
         Ok(lowered)
     }
 }

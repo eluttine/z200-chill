@@ -1,21 +1,23 @@
-# Typed Expression IR
+# Typed IR
 
-`z200c` lowers checked expressions into a small typed IR before interpretation.
+`z200c` lowers checked programs into a typed expression and statement IR before
+interpretation.
 
 ## Pipeline
 
 ```text
-source -> tokens -> AST -> checker (types + resolutions) -> typed expression IR -> interpreter
+source -> tokens -> AST -> checker (types + resolutions) -> typed IR -> interpreter
 ```
 
 - The checker records the checked mode of every expression and resolves each `Apply`
   node as either a mode conversion or a procedure call.
-- `ir::lower` walks the checked AST and produces `ir::Expr` nodes. Every node carries its
-  checked `Type` (procedure-call actions may carry `None` when no value is used).
-- The interpreter evaluates `ir::Expr` nodes; it does not re-infer arithmetic result
-  modes or conversion targets.
+- `ir::lower` walks the checked AST and produces `ir::Expr` and `ir::Stmt` nodes.
+- `ExprTable` maps AST expression spans to `Rc<Expr>` roots.
+- `BodyTable` maps module and procedure spans to their lowered `Stmt` bodies.
+- The interpreter executes `ir::Stmt` and `ir::Expr`; it does not traverse or re-infer
+  the parsed action tree.
 
-## Node kinds
+## Expression nodes
 
 `ir::Expr` covers:
 
@@ -26,18 +28,24 @@ source -> tokens -> AST -> checker (types + resolutions) -> typed expression IR 
 - unary `-` / `NOT`;
 - binary operators with the checked result mode.
 
-`ExprTable` maps AST spans to `Rc<Expr>` roots, so an action can look up the lowered
-expression for each of its expression fields without duplicating the AST.
+## Statement nodes
+
+`ir::Stmt` covers:
+
+- assignment (the v0 target is always a name);
+- `ASSERT`, procedure-call actions, `RETURN`, `RESULT`, `EXIT`;
+- `IF`, `DO` (while/ever/for), `CASE`, labelled actions, `BEGIN`, empty actions.
+
+All embedded expressions are `ir::Expr`. `BEGIN` keeps its declaration list as AST
+declarations (`DCL` structure), but initializer expressions are lowered IR expressions.
 
 ## What remains AST-level
 
-Statements/actions are still executed from the parsed AST:
+- Module/procedure declaration structure, parameter lists, modes, and visibility.
+- `BEGIN` declaration lists (`DCL` statements).
 
-- `IF`, `DO`, `CASE`, `BEGIN`, assignments, `RETURN`/`RESULT`, `EXIT`, `ASSERT`.
-
-A statement-level IR and a code-generation backend are future work. The typed
-expression layer is the reusable base for that backend: it already has resolved modes,
-conversion targets, and call/expression kinds.
+A native or C code-generation backend is future work. The typed expression/statement
+IR is the intended input to that backend.
 
 ## Runtime checks
 
