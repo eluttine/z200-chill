@@ -236,6 +236,48 @@ END Client;
 }
 
 #[test]
+fn check_reports_multiple_semantic_errors() {
+    let dir = std::env::temp_dir().join(format!("z200c-multi-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "multi"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+int_widths = "16-32-64"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL a SHORT_INT;
+  DCL b LONG_INT;
+  a := b;
+  a := b;
+END M;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("check").arg(&dir).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr.matches("error[E0400]").count(), 2);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn version_prints_package_version() {
     let output = z200c().arg("--version").output().unwrap();
     assert!(output.status.success());
