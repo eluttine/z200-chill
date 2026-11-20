@@ -2,7 +2,8 @@ use crate::ast::{
     Declaration, ModeRef, Module, ModuleKind, NameRef, Param, Passing, Program, VisibilityKind,
 };
 use crate::lexer::Span;
-use crate::types::{self, ProcType, Type};
+use crate::modes::{FieldInfo, ModeTable, StructMode};
+use crate::types::{self, ModeId, ProcType, Type};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,12 +63,14 @@ impl std::error::Error for Error {}
 pub struct ModuleInterface {
     pub vars: HashMap<String, Type>,
     pub procs: HashMap<String, ProcType>,
+    pub modes: HashMap<String, Type>,
 }
 
 #[derive(Debug, Clone)]
 pub enum ExportKind {
     Var(Type),
     Proc(ProcType),
+    Mode(ModeId),
 }
 
 #[derive(Debug, Clone)]
@@ -213,15 +216,18 @@ pub enum ExportInfoKind {
 pub struct ProgramInfo {
     pub interfaces: Vec<ModuleInterface>,
     pub exports: Vec<ExportEntry>,
+    pub modes: ModeTable,
     pub body_for_spec: HashMap<usize, usize>,
     pub spec_for_body: HashMap<usize, usize>,
 }
 
 pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
+    let (mut modes, module_modes) = build_modes(program)?;
     let interfaces: Vec<ModuleInterface> = program
         .modules
         .iter()
-        .map(collect_interface)
+        .enumerate()
+        .map(|(index, module)| collect_interface(module, &module_modes[index]))
         .collect::<Result<_, _>>()?;
 
     let mut body_by_name: HashMap<(usize, String), usize> = HashMap::new();
@@ -274,18 +280,25 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
         }
 
         check_interface(&interfaces[*spec_index], &interfaces[body_index], spec.span)?;
-        add_grants(spec, &interfaces[*spec_index], body_index, &mut exports)?;
+        add_grants(
+            spec,
+            &interfaces[*spec_index],
+            body_index,
+            &mut exports,
+            &mut modes,
+        )?;
     }
 
     for (index, module) in program.modules.iter().enumerate() {
         if module.kind == ModuleKind::Body && !spec_for_body.contains_key(&index) {
-            add_grants(module, &interfaces[index], index, &mut exports)?;
+            add_grants(module, &interfaces[index], index, &mut exports, &mut modes)?;
         }
     }
 
     Ok(ProgramInfo {
         interfaces,
         exports,
+        modes,
         body_for_spec,
         spec_for_body,
     })
@@ -296,6 +309,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
     let mut exports: Vec<ExportInfo> = analyze(program)?
         .exports
         .into_iter()
+        .filter(|export| !matches!(export.kind, ExportKind::Mode(_)))
         .map(|export| {
             let kind = match export.kind {
                 ExportKind::Var(ty) => ExportInfoKind::Var(ty),
@@ -303,6 +317,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                     params: signature.params,
                     result: signature.result,
                 },
+                ExportKind::Mode(_) => unreachable!("mode exports are filtered out"),
             };
             ExportInfo {
                 name: export.name,
@@ -322,14 +337,113 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
     Ok(exports)
 }
 
-pub fn collect_interface(module: &Module) -> Result<ModuleInterface, Error> {
-    let mut interface = ModuleInterface::default();
+fn build_modes(program: &Program) -> Result<(ModeTable, Vec<HashMap<String, Type>>), Error> {
+    let mut table = ModeTable::default();
+    let mut module_modes: Vec<HashMap<String, Type>> = vec![HashMap::new(); program.modules.len()];
+
+    for (index, module) in program.modules.iter().enumerate() {
+        for declaration in &module.declarations {
+            let Declaration::Mode(mode_def) = declaration else {
+                continue;
+            };
+
+            let ty = match &mode_def.body {
+                crate::ast::ModeDefinitionBody::Struct(fields) => {
+                    let mut field_infos = Vec::with_capacity(fields.len());
+                    let mut names = std::collections::HashSet::new();
+                    for field in fields {
+                        if !names.insert(field.name.clone()) {
+                            return Err(Error::new(
+                                field.span,
+                                format!("duplicate field `{}`", field.name),
+                            ));
+                        }
+                        let ty = resolve_mode_with(&field.mode, &module_modes[index])?;
+                        field_infos.push(FieldInfo {
+                            name: field.name.clone(),
+                            ty,
+                        });
+                    }
+                    let id = ModeId(table.modes.len());
+                    table.modes.push(StructMode {
+                        name: mode_def.name.clone(),
+                        package: module.package,
+                        module: index,
+                        fields: field_infos,
+                        forbidden: std::collections::HashSet::new(),
+                    });
+                    Type::Struct(id)
+                }
+                crate::ast::ModeDefinitionBody::Alias(mode) => {
+                    resolve_mode_with(mode, &module_modes[index])?
+                }
+            };
+
+            if module_modes[index]
+                .insert(mode_def.name.clone(), ty)
+                .is_some()
+            {
+                return Err(Error::new(
+                    mode_def.span,
+                    format!("duplicate mode `{}`", mode_def.name),
+                ));
+            }
+        }
+    }
+
+    Ok((table, module_modes))
+}
+
+fn resolve_mode_with(mode: &ModeRef, mode_names: &HashMap<String, Type>) -> Result<Type, Error> {
+    mode_names
+        .get(&mode.name)
+        .copied()
+        .or_else(|| types::resolve_mode(&mode.name))
+        .ok_or_else(|| {
+            Error::new(
+                mode.span,
+                format!(
+                    "unknown mode `{}`; only scalar modes and previously defined modes are supported in structure fields",
+                    mode.name
+                ),
+            )
+        })
+}
+
+pub fn collect_interface(
+    module: &Module,
+    mode_names: &HashMap<String, Type>,
+) -> Result<ModuleInterface, Error> {
+    let mut interface = ModuleInterface {
+        modes: mode_names.clone(),
+        ..ModuleInterface::default()
+    };
+
+    // A mode brought in by `SEIZE` is not known while interfaces are collected;
+    // the mode checker resolves those names later. Only those specific names may be
+    // skipped here, so genuine typos still fail.
+    let seized: HashSet<&str> = module
+        .declarations
+        .iter()
+        .filter_map(|declaration| match declaration {
+            Declaration::Visibility(visibility) if visibility.kind == VisibilityKind::Seize => {
+                Some(visibility)
+            }
+            _ => None,
+        })
+        .flat_map(|visibility| visibility.names.iter())
+        .map(|name| name.name.as_str())
+        .collect();
 
     for declaration in &module.declarations {
         match declaration {
             Declaration::Var(list) => {
                 for var in list {
-                    let ty = resolve_mode(&var.mode)?;
+                    let ty = match resolve_mode_with(&var.mode, mode_names) {
+                        Ok(ty) => ty,
+                        Err(_) if seized.contains(var.mode.name.as_str()) => continue,
+                        Err(error) => return Err(error),
+                    };
                     if interface.vars.insert(var.name.clone(), ty).is_some()
                         || interface.procs.contains_key(&var.name)
                     {
@@ -341,7 +455,13 @@ pub fn collect_interface(module: &Module) -> Result<ModuleInterface, Error> {
                 }
             }
             Declaration::Proc(proc_def) => {
-                let signature = signature_from_params(&proc_def.params, &proc_def.result)?;
+                let signature = match signature_from_params(&proc_def.params, &proc_def.result) {
+                    Ok(signature) => signature,
+                    Err(_) if has_seized_mode(&proc_def.params, &proc_def.result, &seized) => {
+                        continue
+                    }
+                    Err(error) => return Err(error),
+                };
                 if interface
                     .procs
                     .insert(proc_def.name.clone(), signature)
@@ -355,7 +475,13 @@ pub fn collect_interface(module: &Module) -> Result<ModuleInterface, Error> {
                 }
             }
             Declaration::ProcSignature(signature) => {
-                let proc_sig = signature_from_params(&signature.params, &signature.result)?;
+                let proc_sig = match signature_from_params(&signature.params, &signature.result) {
+                    Ok(proc_sig) => proc_sig,
+                    Err(_) if has_seized_mode(&signature.params, &signature.result, &seized) => {
+                        continue
+                    }
+                    Err(error) => return Err(error),
+                };
                 if interface
                     .procs
                     .insert(signature.name.clone(), proc_sig)
@@ -368,11 +494,20 @@ pub fn collect_interface(module: &Module) -> Result<ModuleInterface, Error> {
                     ));
                 }
             }
-            Declaration::Visibility(_) => {}
+            Declaration::Mode(_) | Declaration::Visibility(_) => {}
         }
     }
 
     Ok(interface)
+}
+
+fn has_seized_mode(params: &[Param], result: &Option<ModeRef>, seized: &HashSet<&str>) -> bool {
+    params
+        .iter()
+        .any(|param| seized.contains(param.mode.name.as_str()))
+        || result
+            .as_ref()
+            .is_some_and(|mode| seized.contains(mode.name.as_str()))
 }
 
 pub fn signature_from_params(
@@ -435,6 +570,7 @@ fn add_grants(
     interface: &ModuleInterface,
     export_module: usize,
     exports: &mut Vec<ExportEntry>,
+    modes: &mut ModeTable,
 ) -> Result<(), Error> {
     let module_name = module.name.clone();
     let package = module.package;
@@ -475,6 +611,13 @@ fn add_grants(
                 .vars
                 .keys()
                 .chain(interface.procs.keys())
+                .chain(
+                    interface
+                        .modes
+                        .iter()
+                        .filter(|(_, ty)| matches!(ty, Type::Struct(_)))
+                        .map(|(name, _)| name),
+                )
                 .cloned()
                 .collect();
             names.sort();
@@ -506,9 +649,50 @@ fn add_grants(
                 ));
             }
 
-            let kind = if let Some(ty) = interface.vars.get(&name) {
+            let kind = if let Some(mode) = interface.modes.get(&name) {
+                let Type::Struct(id) = mode else {
+                    return Err(Error::new(
+                        span,
+                        format!("cannot GRANT `{name}`: only structure modes are supported as mode grants"),
+                    ));
+                };
+                if let Some(forbid) = &visibility.forbid {
+                    let mode_info = modes.get_mut(*id);
+                    let fields: Vec<String> = if forbid.all {
+                        mode_info
+                            .fields
+                            .iter()
+                            .map(|field| field.name.clone())
+                            .collect()
+                    } else {
+                        forbid.fields.clone()
+                    };
+                    for field in fields {
+                        if !mode_info.fields.iter().any(|info| info.name == field) {
+                            return Err(Error::new(
+                                span,
+                                format!("FORBID field `{field}` is not a field of `{name}`"),
+                            ));
+                        }
+                        mode_info.forbidden.insert(field);
+                    }
+                }
+                ExportKind::Mode(*id)
+            } else if let Some(ty) = interface.vars.get(&name) {
+                if visibility.forbid.is_some() {
+                    return Err(Error::new(
+                        span,
+                        format!("FORBID requires a structure mode, not `{name}`"),
+                    ));
+                }
                 ExportKind::Var(*ty)
             } else if let Some(signature) = interface.procs.get(&name) {
+                if visibility.forbid.is_some() {
+                    return Err(Error::new(
+                        span,
+                        format!("FORBID requires a structure mode, not `{name}`"),
+                    ));
+                }
                 ExportKind::Proc(signature.clone())
             } else {
                 return Err(Error::new(

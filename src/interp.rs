@@ -412,7 +412,9 @@ impl<'a> Interpreter<'a> {
                         "procedure definitions inside BEGIN are not implemented",
                     ));
                 }
-                Declaration::ProcSignature(_) | Declaration::Visibility(_) => {}
+                Declaration::ProcSignature(_)
+                | Declaration::Visibility(_)
+                | Declaration::Mode(_) => {}
             }
         }
         Ok(())
@@ -1076,6 +1078,10 @@ impl<'a> Interpreter<'a> {
                 Value::String(value) => Ok(Value::String(value)),
                 _ => Err(Error::new(span, "expected a character string value")),
             },
+            Type::Struct(_) => Err(Error::new(
+                span,
+                "structure values are not implemented in the interpreter yet",
+            )),
             Type::IntLiteral => Err(Error::new(span, "internal: cannot declare a literal type")),
         }
     }
@@ -1186,8 +1192,7 @@ fn declare_into_scope<'a>(
                     },
                 );
             }
-            Declaration::ProcSignature(_) => {}
-            Declaration::Visibility(_) => {}
+            Declaration::ProcSignature(_) | Declaration::Visibility(_) | Declaration::Mode(_) => {}
         }
     }
     Ok(())

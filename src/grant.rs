@@ -169,6 +169,7 @@ fn type_name(ty: Type) -> String {
         Type::Bool => "BOOL".to_owned(),
         Type::Char => "CHAR".to_owned(),
         Type::String => "CHARS".to_owned(),
+        Type::Struct(_) => "STRUCT".to_owned(),
         // Expression-only class; it cannot occur in a declared signature.
         Type::IntLiteral => "INT".to_owned(),
     }

@@ -30,6 +30,27 @@ pub enum Declaration {
     Proc(ProcDef),
     ProcSignature(ProcSignature),
     Visibility(Visibility),
+    Mode(ModeDefinition),
+}
+
+#[derive(Debug, Clone)]
+pub struct ModeDefinition {
+    pub name: String,
+    pub body: ModeDefinitionBody,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum ModeDefinitionBody {
+    Struct(Vec<FieldDef>),
+    Alias(ModeRef),
+}
+
+#[derive(Debug, Clone)]
+pub struct FieldDef {
+    pub name: String,
+    pub mode: ModeRef,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +72,15 @@ pub struct Visibility {
     /// New prefix for a GRANT (`PREFIXED` or prefix-rename clause).
     /// An empty vector means "use the module name".
     pub prefix: Option<Vec<String>>,
+    /// `FORBID` restriction on a granted structure mode.
+    pub forbid: Option<Forbid>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Forbid {
+    pub fields: Vec<String>,
+    pub all: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +304,11 @@ pub enum Expr {
         right: Box<Expr>,
         span: Span,
     },
+    Field {
+        base: Box<Expr>,
+        field: String,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -287,7 +321,8 @@ impl Expr {
             | Self::Name { span, .. }
             | Self::Apply { span, .. }
             | Self::Unary { span, .. }
-            | Self::Binary { span, .. } => *span,
+            | Self::Binary { span, .. }
+            | Self::Field { span, .. } => *span,
         }
     }
 }

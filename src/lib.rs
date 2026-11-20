@@ -6,6 +6,7 @@ pub mod interp;
 pub mod ir;
 pub mod lexer;
 pub mod manifest;
+pub mod modes;
 pub mod parser;
 pub mod program;
 pub mod sema;

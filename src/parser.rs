@@ -145,6 +145,8 @@ impl<'a> Parser<'a> {
         loop {
             if self.at_keyword(Keyword::Dcl) {
                 declarations.push(Declaration::Var(self.parse_dcl()?));
+            } else if self.at_keyword(Keyword::NewMode) || self.at_keyword(Keyword::SynMode) {
+                declarations.push(Declaration::Mode(self.parse_mode_definition()?));
             } else if self.at_proc_definition() {
                 if spec {
                     declarations.push(Declaration::ProcSignature(self.parse_proc_signature()?));
@@ -216,24 +218,49 @@ impl<'a> Parser<'a> {
         let mut names = Vec::new();
         let mut all = false;
         let mut friends = Vec::new();
+        let mut forbid = None;
 
         if self.at_keyword(Keyword::All) {
             self.advance();
             all = true;
         } else {
             loop {
-                if self.at_keyword(Keyword::Forbid) {
-                    return Err(self.error_here_code(
-                        "E0205",
-                        "FORBID is not supported yet (structure modes are not implemented)",
-                    ));
-                }
                 names.push(self.parse_name_ref()?);
                 if self.at_comma() {
                     self.advance();
                 } else {
                     break;
                 }
+            }
+        }
+
+        if self.at_keyword(Keyword::Forbid) {
+            if kind == VisibilityKind::Seize {
+                return Err(self.error_here_code("E0205", "SEIZE does not accept FORBID"));
+            }
+            self.advance();
+            if self.at_keyword(Keyword::All) {
+                self.advance();
+                forbid = Some(Forbid {
+                    fields: Vec::new(),
+                    all: true,
+                });
+            } else {
+                self.expect_lparen()?;
+                let mut fields = Vec::new();
+                if !self.at_rparen() {
+                    loop {
+                        let (field, _) = self.expect_identifier()?;
+                        fields.push(field);
+                        if self.at_comma() {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.expect_rparen()?;
+                forbid = Some(Forbid { fields, all: false });
             }
         }
 
@@ -265,13 +292,6 @@ impl<'a> Parser<'a> {
             }
         }
 
-        if self.at_keyword(Keyword::Forbid) {
-            return Err(self.error_here_code(
-                "E0205",
-                "FORBID is not supported yet (structure modes are not implemented)",
-            ));
-        }
-
         let end = self.expect_semicolon()?;
         Ok(Visibility {
             kind,
@@ -279,6 +299,7 @@ impl<'a> Parser<'a> {
             all,
             friends,
             prefix,
+            forbid,
             span: Span::new(self.source, start.start, end.end),
         })
     }
@@ -311,6 +332,47 @@ impl<'a> Parser<'a> {
             prefix,
             name,
             span: Span::new(self.source, start.start, end),
+        })
+    }
+
+    fn parse_mode_definition(&mut self) -> Result<ModeDefinition, Error> {
+        let start = self.current_span();
+        self.advance(); // NEWMODE or SYNMODE
+        let (name, _) = self.expect_identifier()?;
+        self.expect_equal()?;
+
+        let body = if self.at_keyword(Keyword::Struct) {
+            self.advance();
+            self.expect_lparen()?;
+            let mut fields = Vec::new();
+            if !self.at_rparen() {
+                loop {
+                    let (field_name, field_span) = self.expect_identifier()?;
+                    let mode = self.parse_mode_ref()?;
+                    let end = mode.span.end;
+                    fields.push(FieldDef {
+                        name: field_name,
+                        mode,
+                        span: Span::new(self.source, field_span.start, end),
+                    });
+                    if self.at_comma() {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.expect_rparen()?;
+            ModeDefinitionBody::Struct(fields)
+        } else {
+            ModeDefinitionBody::Alias(self.parse_mode_ref()?)
+        };
+
+        let end = self.expect_semicolon()?;
+        Ok(ModeDefinition {
+            name,
+            body,
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 
@@ -973,6 +1035,21 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary(&mut self) -> Result<Expr, Error> {
+        let mut expr = self.parse_primary_base()?;
+        while matches!(self.kind(), Some(TokenKind::Dot)) {
+            self.advance();
+            let (field, field_span) = self.expect_identifier()?;
+            let span = Span::new(self.source, expr.span().start, field_span.end);
+            expr = Expr::Field {
+                base: Box::new(expr),
+                field,
+                span,
+            };
+        }
+        Ok(expr)
+    }
+
+    fn parse_primary_base(&mut self) -> Result<Expr, Error> {
         let Some(token) = self.current() else {
             return Err(self.error_here("expected an expression"));
         };
@@ -1218,6 +1295,10 @@ impl<'a> Parser<'a> {
 
     fn expect_assign(&mut self) -> Result<Span, Error> {
         self.expect_simple(TokenKind::Assign, "`:=`")
+    }
+
+    fn expect_equal(&mut self) -> Result<Span, Error> {
+        self.expect_simple(TokenKind::Eq, "`=`")
     }
 
     fn expect_arrow(&mut self) -> Result<Span, Error> {
@@ -1622,6 +1703,36 @@ END M;
         };
         assert_eq!(rename.prefix, Some(vec!["Q".to_owned()]));
         assert_eq!(rename.names[0].name, "y");
+    }
+
+    #[test]
+    fn parses_structure_mode_and_forbid() {
+        let program = parse_source(
+            r#"
+M: MODULE
+  NEWMODE S = STRUCT(x INT, hidden BOOL);
+  GRANT S FORBID (hidden);
+END M;
+"#,
+        );
+
+        let Declaration::Mode(mode) = &program.modules[0].declarations[0] else {
+            panic!("expected NEWMODE");
+        };
+        assert_eq!(mode.name, "S");
+        let ModeDefinitionBody::Struct(fields) = &mode.body else {
+            panic!("expected STRUCT");
+        };
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name, "x");
+        assert_eq!(fields[1].name, "hidden");
+
+        let Declaration::Visibility(grant) = &program.modules[0].declarations[1] else {
+            panic!("expected GRANT");
+        };
+        let forbid = grant.forbid.as_ref().unwrap();
+        assert_eq!(forbid.fields, vec!["hidden".to_owned()]);
+        assert!(!forbid.all);
     }
 
     #[test]

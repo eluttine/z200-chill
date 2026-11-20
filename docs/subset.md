@@ -58,8 +58,9 @@ Implemented in `z200c`:
   relational and boolean expressions, procedures, calls, assignments, `ASSERT`,
   `IF`, `DO WHILE` / `DO FOR EVER`, and `BEGIN … END`;
 - `GRANT` / `SEIZE` visibility with module/package-qualified names (`Module!x`,
-  `pkg!Module!x`), `GRANT ALL` / `SEIZE ALL`, `PREFIXED`/prefix-rename output, and `TO`
-  friend restrictions, including shared seized locations and procedures;
+  `pkg!Module!x`), `GRANT ALL` / `SEIZE ALL`, `PREFIXED`/prefix-rename output, `TO`
+  friend restrictions, and static structure-mode `FORBID`, including shared seized
+  locations and procedures;
 - `SPEC MODULE` interfaces paired with body modules, with variable and procedure
   signature matching;
 - `z200c grant`, which writes a TOML grant file describing the package interface and
@@ -139,6 +140,14 @@ literals and conversions are typed.
 - `SYNMODE name = mode;` — a synonym; same mode, no new identity.
 - `NEWMODE name = mode;` — a new, distinct mode (novelty). This is how a project would
   introduce `SHORT_INT` / `LONG_INT` as distinct modes (§3.2).
+- `NEWMODE name = STRUCT(field mode, ...);` — a structure mode with scalar/nested fields.
+  Field selection uses `.` and can appear in expressions and assignment targets.
+  `GRANT S FORBID (field, ...)` / `FORBID ALL` prevents field selection outside the
+  defining module (see [grant-file.md](grant-file.md)).
+
+Structure modes are statically checked in v0. Runtime structure values and field access
+are not implemented in the interpreter yet; `z200c run` reports a clear error when field
+access is reached.
 
 For `v0`, assign the implementation-defined integer mode names directly rather than
 requiring the user to write `NEWMODE` declarations.

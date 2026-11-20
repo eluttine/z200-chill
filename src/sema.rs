@@ -176,6 +176,12 @@ pub fn analyze_with_externals(
         scopes: Vec::new(),
         results: Vec::new(),
         exports,
+        modes: info.modes,
+        module_modes: info
+            .interfaces
+            .iter()
+            .map(|interface| interface.modes.clone())
+            .collect(),
         current_module: 0,
         current_package: 0,
         current_package_name: None,
@@ -215,6 +221,7 @@ fn map_program_error(error: program::Error) -> Error {
 struct Scope {
     vars: HashMap<String, Type>,
     procs: HashMap<String, ProcType>,
+    modes: HashMap<String, Type>,
     readonly: HashSet<String>,
 }
 
@@ -223,6 +230,8 @@ struct Checker {
     scopes: Vec<Scope>,
     results: Vec<Option<Type>>,
     exports: Vec<program::ExportEntry>,
+    modes: crate::modes::ModeTable,
+    module_modes: Vec<HashMap<String, Type>>,
     current_module: usize,
     current_package: usize,
     current_package_name: Option<String>,
@@ -254,8 +263,9 @@ impl Checker {
     fn check_spec_module(&mut self, module: &Module) -> Result<(), Error> {
         self.scopes.push(Scope::default());
         let result = (|| {
-            self.collect_declarations(&module.declarations)?;
             self.apply_seizes(&module.declarations)?;
+            self.preload_module_modes(module)?;
+            self.collect_declarations(&module.declarations)?;
 
             for declaration in &module.declarations {
                 let Declaration::Var(vars) = declaration else {
@@ -278,8 +288,9 @@ impl Checker {
     }
 
     fn check_module_body(&mut self, module: &Module) -> Result<(), Error> {
-        self.collect_declarations(&module.declarations)?;
         self.apply_seizes(&module.declarations)?;
+        self.preload_module_modes(module)?;
+        self.collect_declarations(&module.declarations)?;
         self.check_initializers(&module.declarations)?;
         self.check_proc_bodies(&module.declarations)?;
 
@@ -376,6 +387,11 @@ impl Checker {
         match &export.kind {
             ExportKind::Var(ty) => self.declare_var(local_name, *ty, span),
             ExportKind::Proc(signature) => self.declare_proc(local_name, signature.clone(), span),
+            ExportKind::Mode(id) => {
+                let scope = self.scopes.last_mut().expect("scope stack is never empty");
+                scope.modes.insert(local_name.to_owned(), Type::Struct(*id));
+                Ok(())
+            }
         }
     }
 
@@ -384,7 +400,7 @@ impl Checker {
             match declaration {
                 Declaration::Var(vars) => {
                     for var in vars {
-                        let ty = resolve_mode(&var.mode)?;
+                        let ty = self.resolve_mode(&var.mode)?;
                         self.declare_var(&var.name, ty, var.span)?;
                     }
                 }
@@ -400,6 +416,7 @@ impl Checker {
                             .map_err(map_program_error)?;
                     self.declare_proc(&signature.name, proc_sig, signature.span)?;
                 }
+                Declaration::Mode(_) => {}
                 Declaration::Visibility(_) => {}
             }
         }
@@ -415,7 +432,7 @@ impl Checker {
             };
             for var in vars {
                 let result = (|| -> Result<(), Error> {
-                    let ty = resolve_mode(&var.mode)?;
+                    let ty = self.resolve_mode(&var.mode)?;
                     let Some(init) = &var.init else {
                         return Ok(());
                     };
@@ -469,7 +486,7 @@ impl Checker {
                     format!("duplicate parameter `{}`", param.name),
                 ));
             }
-            let ty = resolve_mode(&param.mode)?;
+            let ty = self.resolve_mode(&param.mode)?;
             self.declare_var(&param.name, ty, param.span)?;
         }
 
@@ -479,7 +496,7 @@ impl Checker {
         self.check_proc_bodies(&proc_def.declarations)?;
 
         let result_type = match &proc_def.result {
-            Some(mode) => Some(resolve_mode(mode)?),
+            Some(mode) => Some(self.resolve_mode(mode)?),
             None => None,
         };
 
@@ -511,6 +528,30 @@ impl Checker {
         }
         scope.procs.insert(name.to_owned(), signature);
         Ok(())
+    }
+
+    fn preload_module_modes(&mut self, module: &Module) -> Result<(), Error> {
+        let modes = self.module_modes[self.current_module].clone();
+        let scope = self.scopes.last_mut().expect("scope stack is never empty");
+        for (name, ty) in modes {
+            if scope.modes.contains_key(&name) {
+                return Err(Error::new(
+                    module.span,
+                    format!("mode `{name}` is already visible in this module"),
+                ));
+            }
+            scope.modes.insert(name, ty);
+        }
+        Ok(())
+    }
+
+    fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(ty) = scope.modes.get(&mode.name) {
+                return Ok(*ty);
+            }
+        }
+        program::resolve_mode(mode).map_err(map_program_error)
     }
 
     fn lookup_var(&self, name: &str) -> Option<Type> {
@@ -778,8 +819,9 @@ impl Checker {
         }
     }
 
-    fn location_type(&self, target: &Expr) -> Result<Type, Error> {
+    fn location_type(&mut self, target: &Expr) -> Result<Type, Error> {
         match target {
+            Expr::Field { base, field, span } => self.check_field(base, field, *span),
             Expr::Name { name, span } => {
                 if self.is_readonly(name) {
                     return Err(Error::new(
@@ -792,9 +834,52 @@ impl Checker {
             }
             _ => Err(Error::new(
                 target.span(),
-                "assignment target must be a name in v0",
+                "assignment target must be a name or field",
             )),
         }
+    }
+
+    fn check_field(&mut self, base: &Expr, field: &str, span: Span) -> Result<Type, Error> {
+        if let Expr::Name { name, .. } = base {
+            if self.is_readonly(name) {
+                return Err(Error::new(
+                    span,
+                    format!("`{name}` is a loop counter and is not a location"),
+                ));
+            }
+        }
+        let base_ty = self.check_expr(base)?;
+        let Type::Struct(id) = base_ty else {
+            return Err(Error::new(
+                span,
+                format!(
+                    "field selection requires a structure, found {}",
+                    base_ty.describe()
+                ),
+            ));
+        };
+
+        let mode = self.modes.get(id);
+        let Some((_, info)) = mode
+            .fields
+            .iter()
+            .enumerate()
+            .find(|(_, info)| info.name == field)
+        else {
+            return Err(Error::new(
+                span,
+                format!("unknown field `{field}` in structure mode `{}`", mode.name),
+            ));
+        };
+
+        if mode.module != self.current_module && mode.forbidden.contains(field) {
+            return Err(Error::new(
+                span,
+                format!("field `{field}` is FORBIDden outside its defining module"),
+            ));
+        }
+
+        Ok(info.ty)
     }
 
     fn is_readonly(&self, name: &str) -> bool {
@@ -887,6 +972,7 @@ impl Checker {
                 let right_ty = self.check_expr(right)?;
                 self.check_binary_types(*op, left_ty, right_ty, *span)
             }
+            Expr::Field { base, field, span } => self.check_field(base, field, *span),
         }
     }
 
@@ -1095,6 +1181,7 @@ impl Checker {
             Type::Bool => value == Type::Bool,
             Type::Char => value == Type::Char,
             Type::String => value == Type::String,
+            Type::Struct(id) => value == Type::Struct(id),
             Type::IntLiteral => false,
         };
 
@@ -1149,10 +1236,6 @@ impl Checker {
         }
         Ok(())
     }
-}
-
-fn resolve_mode(mode: &ModeRef) -> Result<Type, Error> {
-    program::resolve_mode(mode).map_err(map_program_error)
 }
 
 fn reject_nested_procs(declarations: &[Declaration]) -> Result<(), Error> {
@@ -1404,6 +1487,83 @@ END C;
 "#,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn forbid_blocks_field_selection_outside_owner() {
+        let error = check_source(
+            r#"
+A: MODULE
+  NEWMODE S = STRUCT(x INT, hidden INT);
+  GRANT S FORBID (hidden);
+  DCL local S;
+  local.hidden := 1;
+END A;
+
+B: MODULE
+  SEIZE S;
+  DCL remote S;
+  remote.x := 2;
+  remote.hidden := 3;
+END B;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("FORBIDden"));
+    }
+
+    #[test]
+    fn forbid_all_blocks_every_field_outside_owner() {
+        let error = check_source(
+            r#"
+A: MODULE
+  NEWMODE S = STRUCT(x INT);
+  GRANT S FORBID ALL;
+END A;
+
+B: MODULE
+  SEIZE S;
+  DCL remote S;
+  remote.x := 1;
+END B;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("FORBIDden"));
+    }
+
+    #[test]
+    fn structure_fields_are_selectable_without_forbid() {
+        check_source(
+            r#"
+A: MODULE
+  NEWMODE S = STRUCT(x INT, y BOOL);
+  GRANT S;
+END A;
+
+B: MODULE
+  SEIZE S;
+  DCL remote S;
+  remote.x := 1;
+  ASSERT remote.x = 1;
+END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn forbid_field_must_exist() {
+        let error = check_source(
+            r#"
+A: MODULE
+  NEWMODE S = STRUCT(x INT);
+  GRANT S FORBID (missing);
+END A;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("not a field"));
     }
 
     #[test]

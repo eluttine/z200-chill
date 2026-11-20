@@ -25,6 +25,9 @@ impl IntKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ModeId(pub usize);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Type {
     Int(IntKind),
@@ -33,6 +36,7 @@ pub enum Type {
     Bool,
     Char,
     String,
+    Struct(ModeId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +57,7 @@ impl Type {
             Self::Bool => "BOOL",
             Self::Char => "CHAR",
             Self::String => "character string",
+            Self::Struct(_) => "structure",
         }
     }
 }

@@ -27,6 +27,13 @@ Visibility is static and independent of textual order:
   name makes the whole `SEIZE ALL` an error.
 - `GRANT name TO Module1, package!Module2;` restricts who may seize the grant. Friend
   names are module names, optionally package-qualified.
+- Structure modes can be granted and seized:
+  ```chill
+  NEWMODE S = STRUCT(x INT, hidden INT);
+  GRANT S FORBID (hidden);
+  ```
+  `FORBID (a, b)` / `FORBID ALL` allows field selection only inside the defining
+  module. `SEIZE S;` makes the mode name usable in the seizing module.
 - Names are private unless granted and seized. A module cannot see another module's
   private names.
 - A seized variable aliases the granting module's location, so assignments are shared.
@@ -34,8 +41,7 @@ Visibility is static and independent of textual order:
   caller's module or local names.
 - A module cannot seize a name it grants itself.
 - Only prefix renames with an empty old prefix are supported; a non-empty old prefix is
-  rejected. `SEIZE ... PREFIXED ...` is not implemented. `FORBID`, contexts, and remote
-  pieces are not implemented.
+  rejected. `SEIZE ... PREFIXED ...`, contexts, and remote pieces are not implemented.
 
 `z200c grant` records each export's simple name, module/package names, and optional
 prefix, so duplicate simple names and prefixed outputs can be represented. Consumers can
@@ -122,8 +128,11 @@ lib = "../lib/target/z200c/lib.grt.toml"
 
 - Interface-only grant files are static: `check` and `grant` use their interfaces, but
   `run` cannot link them without a source package.
-- `SEIZE ... PREFIXED ...`, non-empty old prefixes in rename clauses, and `FORBID` are
-  not implemented.
+- `SEIZE ... PREFIXED ...` and non-empty old prefixes in rename clauses are not
+  implemented.
+- Structure modes are checked statically. Field access in the interpreter and mode
+  exports in grant files are not implemented yet; `z200c run` reports a clear error when
+  structure field access is reached, and `z200c grant` omits mode exports.
 - `TO` friend restrictions are enforced inside a linked program but are not recorded in
   emitted grant files, so an external grant-file interface is visible to all consumers.
 - Contexts, remote pieces, and symbol mangling for native code generation are not

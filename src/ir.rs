@@ -277,7 +277,9 @@ impl Lowerer<'_> {
                     let actions = self.lower_actions(&proc_def.actions)?;
                     self.bodies.insert(proc_def.span, actions);
                 }
-                Declaration::ProcSignature(_) | Declaration::Visibility(_) => {}
+                Declaration::ProcSignature(_)
+                | Declaration::Visibility(_)
+                | Declaration::Mode(_) => {}
             }
         }
         Ok(())
@@ -302,7 +304,7 @@ impl Lowerer<'_> {
                 let AstExpr::Name { name, .. } = target else {
                     return Err(Error::new(
                         target.span(),
-                        "assignment target must be a name",
+                        "structure field assignment is not implemented in the interpreter yet",
                     ));
                 };
                 Ok(Stmt::Assign {
@@ -534,6 +536,12 @@ impl Lowerer<'_> {
                 })
             }
             AstExpr::Apply { .. } => unreachable!("handled above"),
+            AstExpr::Field { span, .. } => {
+                return Err(Error::new(
+                    *span,
+                    "structure field access is not implemented in the interpreter yet",
+                ));
+            }
         };
 
         self.exprs.insert(&lowered);

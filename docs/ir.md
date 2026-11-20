@@ -47,6 +47,10 @@ declarations (`DCL` structure), but initializer expressions are lowered IR expre
 A native or C code-generation backend is future work. The typed expression/statement
 IR is the intended input to that backend.
 
+Structure modes and field selection are currently a static feature only: the checker
+validates modes and `FORBID`, but the interpreter has no structure values or field
+assignment yet and reports a clear error when field access is reached.
+
 ## Runtime checks
 
 The IR does not remove runtime checks. Range/overflow checks, undefined-value checks,
