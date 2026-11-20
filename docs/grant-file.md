@@ -59,6 +59,7 @@ schema = 1
 package = "spec"
 edition = "z200-11/99"
 int_widths = "16-32-64"
+package_dir = "/absolute/path/to/spec"
 
 [[exports]]
 name = "Bump"
@@ -70,6 +71,10 @@ kind = "variable"
 mode = "INT"
 ```
 
+`package_dir` is optional. `z200c grant` records the source package directory so `run`
+can link the dependency when the source is available; interface-only grant files omit it
+or are used only by `check`/`grant`.
+
 A package can consume another package's interface through `[dependencies]`:
 
 ```toml
@@ -78,25 +83,22 @@ lib = "../lib/target/z200c/lib.grt.toml"
 ```
 
 - Paths are resolved relative to the depending package's directory.
-- A grant-file dependency is interface-only. For a run-time-linked dependency, point at
-  the dependency package directory instead:
-  ```toml
-  [dependencies]
-  liblocal = "../liblocal"
-  ```
+- A grant-file dependency contributes its interface for `check`/`grant`. If the grant
+  file records `package_dir`, `run` links that source package; otherwise it is
+  interface-only.
 - Directory dependencies are loaded recursively, their modules run first, and their
   exports are available to `SEIZE` without grant files.
 - The dependency's `edition` and `int_widths` must match the consuming package.
-- Names exported by both the program and a dependency are an error.
+- Exported names must be unique across the program and its dependencies (prefix
+  qualification is not implemented yet).
 - `z200c check` and `z200c grant` resolve `SEIZE` against both forms.
-- `z200c run` links directory dependencies but not grant-file dependencies; it rejects
-  a run only when an external grant-file name is actually seized.
+- `z200c run` links directory dependencies and grant files with `package_dir`; it
+  rejects a run only when an interface-only external name is actually seized.
 
 ## Current limits
 
-- Grant-file dependencies are static: `check` and `grant` use their interfaces, but
-  `run` has no linker for external code. Use a directory dependency to link code.
-- Module names must be globally unique across linked packages; symbol mangling and
+- Interface-only grant files are static: `check` and `grant` use their interfaces, but
+  `run` cannot link them without a source package.
+- Exported names are globally simple names; prefixes (`module!name`) and export
   namespacing are not implemented.
-- Prefixes (`module!name`), `GRANT ALL`, `FORBID`, `TO`, contexts, and remote pieces are
-  not implemented.
+- `GRANT ALL`, `FORBID`, `TO`, contexts, and remote pieces are not implemented.

@@ -306,6 +306,152 @@ END M;
 }
 
 #[test]
+fn run_links_grant_file_with_source_metadata() {
+    let grant = z200c()
+        .arg("grant")
+        .arg(example("liblocal"))
+        .output()
+        .unwrap();
+    assert!(
+        grant.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&grant.stdout),
+        String::from_utf8_lossy(&grant.stderr)
+    );
+
+    let grant_path = format!(
+        "{}/examples/liblocal/target/z200c/liblocal.grt.toml",
+        env!("CARGO_MANIFEST_DIR")
+    );
+
+    let dir = std::env::temp_dir().join(format!("z200c-grant-run-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+
+    std::fs::write(
+        dir.join("Chill.toml"),
+        format!(
+            r#"
+[package]
+name = "client"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+int_widths = "16-32-64"
+
+[dependencies]
+liblocal = "{grant_path}"
+"#
+        ),
+    )
+    .unwrap();
+
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+Client: MODULE
+  SEIZE value;
+  ASSERT value = 10;
+END Client;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("run").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn duplicate_module_names_across_packages_are_allowed() {
+    let base = std::env::temp_dir().join(format!("z200c-packages-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+
+    for (name, variable, value) in [("one", "a", 1), ("two", "b", 2)] {
+        let dir = base.join(name);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Chill.toml"),
+            format!(
+                r#"
+[package]
+name = "{name}"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+int_widths = "16-32-64"
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/main.ch"),
+            format!(
+                r#"
+Library: MODULE
+  GRANT {variable};
+  DCL {variable} INT INIT := {value};
+END Library;
+"#
+            ),
+        )
+        .unwrap();
+    }
+
+    let client = base.join("client");
+    std::fs::create_dir_all(client.join("src")).unwrap();
+    std::fs::write(
+        client.join("Chill.toml"),
+        r#"
+[package]
+name = "client"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+int_widths = "16-32-64"
+
+[dependencies]
+one = "../one"
+two = "../two"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        client.join("src/main.ch"),
+        r#"
+Client: MODULE
+  SEIZE a, b;
+  ASSERT a = 1;
+  ASSERT b = 2;
+END Client;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("run").arg(&client).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&base).unwrap();
+}
+
+#[test]
 fn version_prints_package_version() {
     let output = z200c().arg("--version").output().unwrap();
     assert!(output.status.success());

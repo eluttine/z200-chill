@@ -110,8 +110,8 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
         .map(collect_interface)
         .collect::<Result<_, _>>()?;
 
-    let mut body_by_name: HashMap<String, usize> = HashMap::new();
-    let mut spec_by_name: HashMap<String, usize> = HashMap::new();
+    let mut body_by_name: HashMap<(usize, String), usize> = HashMap::new();
+    let mut spec_by_name: HashMap<(usize, String), usize> = HashMap::new();
 
     for (index, module) in program.modules.iter().enumerate() {
         let Some(name) = &module.name else {
@@ -124,7 +124,10 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
             ModuleKind::Body => &mut body_by_name,
             ModuleKind::Spec => &mut spec_by_name,
         };
-        if target.insert(name.clone(), index).is_some() {
+        if target
+            .insert((module.package, name.clone()), index)
+            .is_some()
+        {
             return Err(Error::new(
                 module.span,
                 format!("duplicate module name `{name}`"),
@@ -136,8 +139,8 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
     let mut body_for_spec = HashMap::new();
     let mut spec_for_body = HashMap::new();
 
-    for (name, spec_index) in &spec_by_name {
-        let Some(body_index) = body_by_name.get(name).copied() else {
+    for ((package, name), spec_index) in &spec_by_name {
+        let Some(body_index) = body_by_name.get(&(*package, name.clone())).copied() else {
             return Err(Error::new(
                 program.modules[*spec_index].span,
                 format!("spec module `{name}` has no body"),

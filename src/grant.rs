@@ -14,6 +14,10 @@ pub struct GrantFile {
     pub package: String,
     pub edition: String,
     pub int_widths: String,
+    /// Optional absolute path to the source package. `run` uses it to link
+    /// grant-file dependencies when the source is available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_dir: Option<String>,
     pub exports: Vec<GrantExport>,
 }
 
@@ -65,6 +69,7 @@ impl GrantFile {
             package: manifest.package.name.clone(),
             edition: manifest.package.edition.as_str().to_owned(),
             int_widths: manifest.build.int_widths.to_string(),
+            package_dir: None,
             exports: entries,
         })
     }

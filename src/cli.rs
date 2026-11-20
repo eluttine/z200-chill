@@ -87,7 +87,7 @@ fn grant_package(target: &Path) -> i32 {
 }
 
 fn grant_impl(target: &Path) -> Result<PathBuf, String> {
-    let package = load_package(target)?;
+    let package = load_package(target, false)?;
 
     let diagnostics = sema::check_all_with_externals(
         &package.program,
@@ -98,12 +98,18 @@ fn grant_impl(target: &Path) -> Result<PathBuf, String> {
         return Err(diagnostics::render(&package.source_map, &diagnostics));
     }
 
-    let grant_file =
-        grant::GrantFile::from_package(&package.manifest, &package.program).map_err(|error| {
+    let mut grant_file = grant::GrantFile::from_package(&package.manifest, &package.program)
+        .map_err(|error| {
             package
                 .source_map
                 .format_diagnostic(error.code, error.span, &error.message)
         })?;
+    grant_file.package_dir = Some(
+        std::fs::canonicalize(&package.package_dir)
+            .unwrap_or_else(|_| package.package_dir.clone())
+            .display()
+            .to_string(),
+    );
     let text = grant_file
         .to_toml()
         .map_err(|error| format!("error[E0600]: {error}"))?;
@@ -128,7 +134,7 @@ fn grant_impl(target: &Path) -> Result<PathBuf, String> {
 }
 
 fn check_impl(target: &Path) -> Result<String, String> {
-    let package = load_package(target)?;
+    let package = load_package(target, false)?;
 
     let diagnostics = sema::check_all_with_externals(
         &package.program,
@@ -151,7 +157,7 @@ fn check_impl(target: &Path) -> Result<String, String> {
 }
 
 fn run_impl(target: &Path) -> Result<(), String> {
-    let package = load_package(target)?;
+    let package = load_package(target, true)?;
 
     let check = sema::analyze_with_externals(
         &package.program,
@@ -216,11 +222,13 @@ struct Loader {
     external: Vec<program::ExportInfo>,
     visiting: HashSet<PathBuf>,
     loaded: HashSet<PathBuf>,
+    next_package: usize,
+    link_grant_sources: bool,
     root_edition: crate::manifest::Edition,
     root_widths: WidthProfile,
 }
 
-fn load_package(target: &Path) -> Result<LoadedPackage, String> {
+fn load_package(target: &Path, link_grant_sources: bool) -> Result<LoadedPackage, String> {
     let manifest_path = resolve_manifest(target)?;
     let manifest =
         Manifest::load(&manifest_path).map_err(|error| format!("error[E0300]: {error}"))?;
@@ -238,6 +246,8 @@ fn load_package(target: &Path) -> Result<LoadedPackage, String> {
         external: Vec::new(),
         visiting: HashSet::new(),
         loaded: HashSet::new(),
+        next_package: 0,
+        link_grant_sources,
         root_edition: manifest.package.edition,
         root_widths: manifest.build.int_widths,
     };
@@ -300,6 +310,8 @@ impl Loader {
             ));
         }
 
+        let package = self.next_package;
+        self.next_package += 1;
         let package_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
 
         for (name, path) in &manifest.dependencies {
@@ -331,12 +343,12 @@ impl Loader {
         }
 
         for source in &manifest.build.sources {
-            self.load_source(&package_dir.join(source))?;
+            self.load_source(&package_dir.join(source), package)?;
         }
-        self.load_source(&package_dir.join(&manifest.build.entry))
+        self.load_source(&package_dir.join(&manifest.build.entry), package)
     }
 
-    fn load_source(&mut self, path: &Path) -> Result<(), String> {
+    fn load_source(&mut self, path: &Path, package: usize) -> Result<(), String> {
         let text = std::fs::read_to_string(path)
             .map_err(|error| format!("error[E0300]: cannot read {}: {error}", path.display()))?;
         let source_id = self.source_map.add(path.to_path_buf(), text);
@@ -356,7 +368,10 @@ impl Loader {
             self.source_map
                 .format_diagnostic(error.code, error.span, &error.message)
         })?;
-        self.modules.extend(program.modules);
+        for mut module in program.modules {
+            module.package = package;
+            self.modules.push(module);
+        }
         Ok(())
     }
 
@@ -383,6 +398,27 @@ impl Loader {
                 "error[E0600]: dependency `{name}` uses int_widths {}, expected {}",
                 dependency_widths, self.root_widths
             ));
+        }
+
+        if self.link_grant_sources {
+            if let Some(package_dir) = &grant_file.package_dir {
+                let package_dir = PathBuf::from(package_dir);
+                let package_dir = if package_dir.is_absolute() {
+                    package_dir
+                } else {
+                    path.parent()
+                        .unwrap_or_else(|| Path::new("."))
+                        .join(package_dir)
+                };
+                if !package_dir.is_dir() {
+                    return Err(format!(
+                        "error[E0600]: dependency `{name}` source package does not exist: {}",
+                        package_dir.display()
+                    ));
+                }
+                self.load_package(&package_dir.join("Chill.toml"))?;
+                return Ok(());
+            }
         }
 
         self.external.extend(

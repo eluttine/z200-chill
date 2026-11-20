@@ -9,6 +9,8 @@ pub struct Program {
 pub struct Module {
     pub name: Option<String>,
     pub kind: ModuleKind,
+    /// Package that owns this program unit. Assigned by the loader.
+    pub package: usize,
     pub declarations: Vec<Declaration>,
     pub actions: Vec<Action>,
     pub span: Span,

@@ -89,19 +89,23 @@ lib = "../lib/target/z200c/lib.grt.toml"         # interface-only dependency
 - A **directory** dependency (or a path to its `Chill.toml`) is loaded recursively and
   its modules are linked into the program. Dependency modules run before the depending
   package's `sources` and `entry`.
-- A **grant-file** dependency contributes its exported interface for static checking
-  only; `run` rejects an attempt to seize an external name from it.
+- A **grant-file** dependency contributes its exported interface for static checking.
+  A grant file produced by `z200c grant` also records its source package directory; in
+  that case `run` links the source package. Interface-only grant files remain
+  check/build-only, and `run` rejects a seized external name from them.
 - Directory dependencies are loaded once; cycles and duplicate package loads are
   detected.
 - The dependency's `edition` must match, and its `int_widths` must parse to the same
   `WidthProfile` (equivalent spellings are accepted).
-- Names exported by both the program and a dependency are an error.
-- Module names must be unique across all linked packages. Symbol mangling/namespacing
-  is not implemented yet.
+- Exported names must be unique across the program and its dependencies (prefix
+  qualification is not implemented yet).
+- Modules are identified by package plus name, so different packages may contain a
+  module with the same simple name. An `EXIT ModuleName` still targets the enclosing
+  module.
 - `z200c check`, `z200c run`, and `z200c grant` all see source-linked dependencies.
   `check`/`grant` additionally resolve `SEIZE` against grant-file dependencies.
-- `z200c run` links directory dependencies but not grant-file dependencies; it rejects
-  a run only when an external grant-file name is actually seized.
+- `z200c run` links directory dependencies and grant files with source metadata; it
+  rejects a run only when an interface-only external name is actually seized.
 
 ## Commands
 

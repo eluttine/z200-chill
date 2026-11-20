@@ -128,6 +128,7 @@ impl<'a> Parser<'a> {
         Ok(Module {
             name,
             kind,
+            package: 0,
             declarations,
             actions,
             span: Span::new(self.source, start.start, end.end),
