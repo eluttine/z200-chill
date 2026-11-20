@@ -97,8 +97,11 @@ lib = "../lib/target/z200c/lib.grt.toml"         # interface-only dependency
   detected.
 - The dependency's `edition` must match, and its `int_widths` must parse to the same
   `WidthProfile` (equivalent spellings are accepted).
-- Exported names must be unique across the program and its dependencies (prefix
-  qualification is not implemented yet).
+- Exported simple names may repeat across modules/packages. An unqualified `SEIZE name`
+  is then ambiguous; use `Module!name` or `package!Module!name`. `GRANT ... TO ...`
+  restricts visibility to named friend modules.
+- Grant-file emission uses simple names, so a package that exports duplicate simple
+  names cannot produce a grant file until export renaming/prefix output is implemented.
 - Modules are identified by package plus name, so different packages may contain a
   module with the same simple name. An `EXIT ModuleName` still targets the enclosing
   module.

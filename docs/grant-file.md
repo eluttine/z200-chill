@@ -4,24 +4,35 @@ This document covers `GRANT` / `SEIZE`, `SPEC MODULE` pairing, and the compiled
 interface artifact. See [subset.md](subset.md) for the language rules and
 [manifest.md](manifest.md) for dependency configuration.
 
-## GRANT/SEIZE model (v0, single entry file)
+## GRANT/SEIZE model (v0)
 
-The program units in one entry file are treated as siblings in the imaginary outermost
-process. Visibility is static and independent of textual order:
+Visibility is static and independent of textual order:
 
 - `GRANT a, b;` may only name variables or procedures **declared in the same module**.
   Granted names become candidates for `SEIZE` by other modules.
-- `SEIZE a, b;` imports each name from the unique other module that granted it.
-  Seizing an ungranted name is an error; a name granted by more than one module is an
-  error (v0 has no prefixes to disambiguate).
+- Every granted name is addressable as:
+  - `name` (simple),
+  - `Module!name`,
+  - `package!Module!name`.
+- `SEIZE name;` imports the unique visible export with that simple name. If more than one
+  module exports it, the seize is ambiguous and must be qualified.
+- `SEIZE A!x;` / `SEIZE pkg!A!x;` select a module/package-qualified export.
+- `GRANT ALL;` grants every variable/procedure declared in the module.
+- `SEIZE ALL;` imports every visible export with a unique simple name; a duplicate simple
+  name makes the whole `SEIZE ALL` an error.
+- `GRANT name TO Module1, package!Module2;` restricts who may seize the grant. Friend
+  names are module names, optionally package-qualified.
 - Names are private unless granted and seized. A module cannot see another module's
   private names.
 - A seized variable aliases the granting module's location, so assignments are shared.
 - A seized procedure executes in its **defining** module's scope; it does not see the
   caller's module or local names.
 - A module cannot seize a name it grants itself.
-- `GRANT ALL`, `FORBID`, `TO`, prefixes, contexts, and remote pieces are not
+- `GRANT` prefix renaming, `PREFIXED`, `FORBID`, contexts, and remote pieces are not
   implemented yet.
+
+`z200c grant` emits simple names only, so a package whose modules export duplicate
+simple names cannot produce a grant file (the emitter reports the duplicate).
 
 ## SPEC modules
 

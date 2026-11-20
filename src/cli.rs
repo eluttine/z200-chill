@@ -343,12 +343,21 @@ impl Loader {
         }
 
         for source in &manifest.build.sources {
-            self.load_source(&package_dir.join(source), package)?;
+            self.load_source(&package_dir.join(source), package, &manifest.package.name)?;
         }
-        self.load_source(&package_dir.join(&manifest.build.entry), package)
+        self.load_source(
+            &package_dir.join(&manifest.build.entry),
+            package,
+            &manifest.package.name,
+        )
     }
 
-    fn load_source(&mut self, path: &Path, package: usize) -> Result<(), String> {
+    fn load_source(
+        &mut self,
+        path: &Path,
+        package: usize,
+        package_name: &str,
+    ) -> Result<(), String> {
         let text = std::fs::read_to_string(path)
             .map_err(|error| format!("error[E0300]: cannot read {}: {error}", path.display()))?;
         let source_id = self.source_map.add(path.to_path_buf(), text);
@@ -370,6 +379,7 @@ impl Loader {
         })?;
         for mut module in program.modules {
             module.package = package;
+            module.package_name = Some(package_name.to_owned());
             self.modules.push(module);
         }
         Ok(())

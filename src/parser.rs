@@ -129,6 +129,7 @@ impl<'a> Parser<'a> {
             name,
             kind,
             package: 0,
+            package_name: None,
             declarations,
             actions,
             span: Span::new(self.source, start.start, end.end),
@@ -180,24 +181,83 @@ impl<'a> Parser<'a> {
         self.advance(); // GRANT or SEIZE
 
         let mut names = Vec::new();
-        loop {
-            if matches!(self.kind(), Some(TokenKind::Keyword(Keyword::All))) {
-                return Err(self.error_here_code("E0205", "GRANT/SEIZE ALL is not implemented yet"));
+        let mut all = false;
+        let mut friends = Vec::new();
+
+        if self.at_keyword(Keyword::All) {
+            self.advance();
+            all = true;
+        } else {
+            loop {
+                if self.at_keyword(Keyword::Forbid) {
+                    return Err(self.error_here_code(
+                        "E0205",
+                        "FORBID is not supported yet (structure modes are not implemented)",
+                    ));
+                }
+                names.push(self.parse_name_ref()?);
+                if self.at_comma() {
+                    self.advance();
+                } else {
+                    break;
+                }
             }
-            let (name, span) = self.expect_identifier()?;
-            names.push(NameRef { name, span });
-            if self.at_comma() {
-                self.advance();
-            } else {
-                break;
+        }
+
+        if self.at_keyword(Keyword::To) {
+            if kind == VisibilityKind::Seize {
+                return Err(self.error_here_code("E0205", "SEIZE does not accept TO"));
             }
+            self.advance();
+            loop {
+                friends.push(self.parse_name_ref()?);
+                if self.at_comma() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if self.at_keyword(Keyword::Prefixed) {
+            return Err(self.error_here_code("E0205", "PREFIXED clauses are not implemented yet"));
+        }
+        if self.at_keyword(Keyword::Forbid) {
+            return Err(self.error_here_code(
+                "E0205",
+                "FORBID is not supported yet (structure modes are not implemented)",
+            ));
         }
 
         let end = self.expect_semicolon()?;
         Ok(Visibility {
             kind,
             names,
+            all,
+            friends,
             span: Span::new(self.source, start.start, end.end),
+        })
+    }
+
+    fn parse_name_ref(&mut self) -> Result<NameRef, Error> {
+        let start = self.current_span();
+        let (first, first_span) = self.expect_identifier()?;
+        let mut prefix = Vec::new();
+        let mut name = first;
+        let mut end = first_span.end;
+
+        while matches!(self.kind(), Some(TokenKind::Bang)) {
+            self.advance();
+            let (next, span) = self.expect_identifier()?;
+            prefix.push(name);
+            name = next;
+            end = span.end;
+        }
+
+        Ok(NameRef {
+            prefix,
+            name,
+            span: Span::new(self.source, start.start, end),
         })
     }
 
@@ -1440,6 +1500,33 @@ END M;
         let error = parse(&tokens).unwrap_err();
         assert_eq!(error.code, "E0203");
         assert!(error.message.contains("nesting too deep"));
+    }
+
+    #[test]
+    fn parses_qualified_visibility() {
+        let program = parse_source(
+            r#"
+M: MODULE
+  GRANT ALL TO pkg!Other;
+  SEIZE A!x;
+END M;
+"#,
+        );
+
+        let Declaration::Visibility(grant) = &program.modules[0].declarations[0] else {
+            panic!("expected GRANT");
+        };
+        assert!(grant.all);
+        assert!(grant.names.is_empty());
+        assert_eq!(grant.friends.len(), 1);
+        assert_eq!(grant.friends[0].qualified(), "pkg!Other");
+
+        let Declaration::Visibility(seize) = &program.modules[0].declarations[1] else {
+            panic!("expected SEIZE");
+        };
+        assert_eq!(seize.names[0].qualified(), "A!x");
+        assert_eq!(seize.names[0].prefix, vec!["A".to_owned()]);
+        assert_eq!(seize.names[0].name, "x");
     }
 
     #[test]

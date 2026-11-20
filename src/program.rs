@@ -1,5 +1,5 @@
 use crate::ast::{
-    Declaration, ModeRef, Module, ModuleKind, Param, Passing, Program, VisibilityKind,
+    Declaration, ModeRef, Module, ModuleKind, NameRef, Param, Passing, Program, VisibilityKind,
 };
 use crate::lexer::Span;
 use crate::types::{self, ProcType, Type};
@@ -71,11 +71,90 @@ pub enum ExportKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct Export {
+pub struct ExportEntry {
     /// Index of the module that owns the implementation. For a spec export this
     /// is the paired body module.
     pub module: usize,
+    pub package: usize,
+    pub package_name: Option<String>,
+    pub module_name: Option<String>,
+    pub name: String,
     pub kind: ExportKind,
+    /// `GRANT ... TO ...` friend modules, if restricted.
+    pub friends: Option<Vec<String>>,
+}
+
+impl ExportEntry {
+    pub fn qualified_names(&self) -> Vec<String> {
+        let mut names = vec![self.name.clone()];
+        if let Some(module) = &self.module_name {
+            names.push(format!("{module}!{}", self.name));
+            if let Some(package) = &self.package_name {
+                names.push(format!("{package}!{module}!{}", self.name));
+            }
+        }
+        names
+    }
+
+    /// Whether the export's `TO` restriction permits this module.
+    pub fn is_accessible_to(&self, package: Option<&str>, module: Option<&str>) -> bool {
+        let Some(friends) = &self.friends else {
+            return true;
+        };
+        let Some(module) = module else {
+            return false;
+        };
+        let qualified = match package {
+            Some(package) => format!("{package}!{module}"),
+            None => module.to_owned(),
+        };
+        friends
+            .iter()
+            .any(|friend| friend == module || friend == &qualified)
+    }
+}
+
+/// Resolve a `SEIZE` name against the program's exports.
+pub fn resolve_export<'a>(
+    exports: &'a [ExportEntry],
+    name: &NameRef,
+    package: Option<&str>,
+    module: Option<&str>,
+) -> Result<&'a ExportEntry, String> {
+    let candidates: Vec<&ExportEntry> = exports
+        .iter()
+        .filter(|export| {
+            let prefix_matches = match name.prefix.as_slice() {
+                [] => true,
+                [module] => export.module_name.as_deref() == Some(module.as_str()),
+                [package, module] => {
+                    export.package_name.as_deref() == Some(package.as_str())
+                        && export.module_name.as_deref() == Some(module.as_str())
+                }
+                _ => false,
+            };
+            export.name == name.name && prefix_matches && export.is_accessible_to(package, module)
+        })
+        .collect();
+
+    match candidates.as_slice() {
+        [] => Err(format!(
+            "cannot SEIZE `{}`: no visible module grants it",
+            name.qualified()
+        )),
+        [export] => Ok(export),
+        _ => {
+            let qualified = candidates
+                .iter()
+                .flat_map(|export| export.qualified_names())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(format!(
+                "cannot SEIZE `{}`: ambiguous; use a qualified name ({qualified})",
+                name.qualified()
+            ))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -98,7 +177,7 @@ pub enum ExportInfoKind {
 #[derive(Debug, Clone)]
 pub struct ProgramInfo {
     pub interfaces: Vec<ModuleInterface>,
-    pub exports: HashMap<String, Export>,
+    pub exports: Vec<ExportEntry>,
     pub body_for_spec: HashMap<usize, usize>,
     pub spec_for_body: HashMap<usize, usize>,
 }
@@ -135,7 +214,7 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
         }
     }
 
-    let mut exports: HashMap<String, Export> = HashMap::new();
+    let mut exports: Vec<ExportEntry> = Vec::new();
     let mut body_for_spec = HashMap::new();
     let mut spec_for_body = HashMap::new();
 
@@ -182,8 +261,8 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
     let mut exports: Vec<ExportInfo> = analyze(program)?
         .exports
         .into_iter()
-        .map(|(name, export)| ExportInfo {
-            name,
+        .map(|export| ExportInfo {
+            name: export.name,
             kind: match export.kind {
                 ExportKind::Var(ty) => ExportInfoKind::Var(ty),
                 ExportKind::Proc(signature) => ExportInfoKind::Proc {
@@ -309,8 +388,13 @@ fn add_grants(
     module: &Module,
     interface: &ModuleInterface,
     export_module: usize,
-    exports: &mut HashMap<String, Export>,
+    exports: &mut Vec<ExportEntry>,
 ) -> Result<(), Error> {
+    let module_name = module.name.clone();
+    let package = module.package;
+    let package_name = module.package_name.clone();
+    let mut granted = HashSet::new();
+
     for declaration in &module.declarations {
         let Declaration::Visibility(visibility) = declaration else {
             continue;
@@ -319,34 +403,73 @@ fn add_grants(
             continue;
         }
 
-        for name in &visibility.names {
-            let kind = if let Some(ty) = interface.vars.get(&name.name) {
+        let friends = if visibility.friends.is_empty() {
+            None
+        } else {
+            Some(
+                visibility
+                    .friends
+                    .iter()
+                    .map(|friend| friend.qualified())
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        let names: Vec<(String, Span)> = if visibility.all {
+            let mut names: Vec<String> = interface
+                .vars
+                .keys()
+                .chain(interface.procs.keys())
+                .cloned()
+                .collect();
+            names.sort();
+            names.dedup();
+            names
+                .into_iter()
+                .map(|name| (name, visibility.span))
+                .collect()
+        } else {
+            let mut names = Vec::with_capacity(visibility.names.len());
+            for name in &visibility.names {
+                if !name.prefix.is_empty() {
+                    return Err(Error::new(
+                        name.span,
+                        "GRANT prefixes are not implemented yet",
+                    ));
+                }
+                names.push((name.name.clone(), name.span));
+            }
+            names
+        };
+
+        for (name, span) in names {
+            if !granted.insert(name.clone()) {
+                return Err(Error::new(
+                    span,
+                    format!("`{name}` is granted more than once"),
+                ));
+            }
+
+            let kind = if let Some(ty) = interface.vars.get(&name) {
                 ExportKind::Var(*ty)
-            } else if let Some(signature) = interface.procs.get(&name.name) {
+            } else if let Some(signature) = interface.procs.get(&name) {
                 ExportKind::Proc(signature.clone())
             } else {
                 return Err(Error::new(
-                    name.span,
-                    format!("cannot GRANT `{}`: not declared in this module", name.name),
+                    span,
+                    format!("cannot GRANT `{name}`: not declared in this module"),
                 ));
             };
 
-            if let Some(previous) = exports.get(&name.name) {
-                let message = if previous.module == export_module {
-                    format!("`{}` is granted more than once", name.name)
-                } else {
-                    format!("`{}` is granted by more than one module", name.name)
-                };
-                return Err(Error::new(name.span, message));
-            }
-
-            exports.insert(
-                name.name.clone(),
-                Export {
-                    module: export_module,
-                    kind,
-                },
-            );
+            exports.push(ExportEntry {
+                module: export_module,
+                package,
+                package_name: package_name.clone(),
+                module_name: module_name.clone(),
+                name,
+                kind,
+                friends: friends.clone(),
+            });
         }
     }
 

@@ -11,6 +11,8 @@ pub struct Module {
     pub kind: ModuleKind,
     /// Package that owns this program unit. Assigned by the loader.
     pub package: usize,
+    /// Package name, assigned by the loader.
+    pub package_name: Option<String>,
     pub declarations: Vec<Declaration>,
     pub actions: Vec<Action>,
     pub span: Span,
@@ -43,6 +45,9 @@ pub struct ProcSignature {
 pub struct Visibility {
     pub kind: VisibilityKind,
     pub names: Vec<NameRef>,
+    pub all: bool,
+    /// `TO` friend modules for a GRANT.
+    pub friends: Vec<NameRef>,
     pub span: Span,
 }
 
@@ -54,8 +59,20 @@ pub enum VisibilityKind {
 
 #[derive(Debug, Clone)]
 pub struct NameRef {
+    /// Prefix parts before `!`, outermost first.
+    pub prefix: Vec<String>,
     pub name: String,
     pub span: Span,
+}
+
+impl NameRef {
+    pub fn qualified(&self) -> String {
+        if self.prefix.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{}!{}", self.prefix.join("!"), self.name)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -2,7 +2,7 @@ use crate::ast::*;
 use crate::diagnostics::Diagnostic;
 use crate::lexer::{SourceId, Span};
 use crate::manifest::WidthProfile;
-use crate::program::{self, Export, ExportKind};
+use crate::program::{self, ExportKind};
 use crate::types::ProcType;
 use crate::types::{self, IntKind, Type};
 use std::collections::{HashMap, HashSet};
@@ -150,25 +150,8 @@ pub fn analyze_with_externals(
         }
     };
     let mut exports = info.exports;
-    let fallback_span = program
-        .modules
-        .first()
-        .map(|module| module.span)
-        .unwrap_or(Span::new(SourceId(0), 0, 0));
 
     for info in external {
-        if exports.contains_key(&info.name) {
-            return CheckResult {
-                diagnostics: vec![Diagnostic::new(
-                    "E0406",
-                    Some(fallback_span),
-                    format!("name `{}` is already exported", info.name),
-                )],
-                types: HashMap::new(),
-                resolutions: HashMap::new(),
-            };
-        }
-
         let kind = match &info.kind {
             program::ExportInfoKind::Var(ty) => ExportKind::Var(*ty),
             program::ExportInfoKind::Proc { params, result } => ExportKind::Proc(ProcType {
@@ -176,13 +159,15 @@ pub fn analyze_with_externals(
                 result: *result,
             }),
         };
-        exports.insert(
-            info.name.clone(),
-            Export {
-                module: usize::MAX,
-                kind,
-            },
-        );
+        exports.push(program::ExportEntry {
+            module: usize::MAX,
+            package: usize::MAX,
+            package_name: None,
+            module_name: None,
+            name: info.name.clone(),
+            kind,
+            friends: None,
+        });
     }
 
     let mut checker = Checker {
@@ -191,6 +176,9 @@ pub fn analyze_with_externals(
         results: Vec::new(),
         exports,
         current_module: 0,
+        current_package: 0,
+        current_package_name: None,
+        current_module_name: None,
         labels: Vec::new(),
         diagnostics: Vec::new(),
         types: HashMap::new(),
@@ -198,6 +186,9 @@ pub fn analyze_with_externals(
     };
     for (index, module) in program.modules.iter().enumerate() {
         checker.current_module = index;
+        checker.current_package = module.package;
+        checker.current_package_name = module.package_name.clone();
+        checker.current_module_name = module.name.clone();
         let result = if module.kind == ModuleKind::Spec {
             checker.check_spec_module(module)
         } else {
@@ -230,8 +221,11 @@ struct Checker {
     profile: WidthProfile,
     scopes: Vec<Scope>,
     results: Vec<Option<Type>>,
-    exports: HashMap<String, Export>,
+    exports: Vec<program::ExportEntry>,
     current_module: usize,
+    current_package: usize,
+    current_package_name: Option<String>,
+    current_module_name: Option<String>,
     labels: Vec<String>,
     diagnostics: Vec<Diagnostic>,
     types: HashMap<Span, Type>,
@@ -308,32 +302,80 @@ impl Checker {
                 continue;
             }
 
+            if visibility.all {
+                self.seize_all(visibility.span)?;
+                continue;
+            }
+
             for name in &visibility.names {
-                let Some(export) = self.exports.get(&name.name) else {
-                    return Err(Error::new(
-                        name.span,
-                        format!("cannot SEIZE `{}`: no module grants it", name.name),
-                    ));
-                };
+                let export = program::resolve_export(
+                    &self.exports,
+                    name,
+                    self.current_package_name.as_deref(),
+                    self.current_module_name.as_deref(),
+                )
+                .map_err(|message| Error::new(name.span, message))?
+                .clone();
 
                 if export.module == self.current_module {
                     return Err(Error::new(
                         name.span,
-                        format!("cannot SEIZE `{}` from the same module", name.name),
+                        format!("cannot SEIZE `{}` from the same module", name.qualified()),
                     ));
                 }
 
-                match &export.kind {
-                    ExportKind::Var(ty) => {
-                        self.declare_var(&name.name, *ty, name.span)?;
-                    }
-                    ExportKind::Proc(signature) => {
-                        self.declare_proc(&name.name, signature.clone(), name.span)?;
-                    }
-                }
+                self.import_export(&name.name, &export, name.span)?;
             }
         }
         Ok(())
+    }
+
+    fn seize_all(&mut self, span: Span) -> Result<(), Error> {
+        let mut accessible: Vec<program::ExportEntry> = self
+            .exports
+            .iter()
+            .filter(|export| export.module != self.current_module)
+            .filter(|export| {
+                export.is_accessible_to(
+                    self.current_package_name.as_deref(),
+                    self.current_module_name.as_deref(),
+                )
+            })
+            .cloned()
+            .collect();
+        accessible.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.package.cmp(&right.package))
+                .then_with(|| left.module.cmp(&right.module))
+        });
+
+        let mut names = HashSet::new();
+        for export in &accessible {
+            if !names.insert(export.name.clone()) {
+                return Err(Error::new(
+                    span,
+                    format!(
+                        "SEIZE ALL is ambiguous for `{}`; use a qualified SEIZE",
+                        export.name
+                    ),
+                ));
+            }
+            self.import_export(&export.name, export, span)?;
+        }
+        Ok(())
+    }
+
+    fn import_export(
+        &mut self,
+        local_name: &str,
+        export: &program::ExportEntry,
+        span: Span,
+    ) -> Result<(), Error> {
+        match &export.kind {
+            ExportKind::Var(ty) => self.declare_var(local_name, *ty, span),
+            ExportKind::Proc(signature) => self.declare_proc(local_name, signature.clone(), span),
+        }
     }
 
     fn collect_declarations(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
@@ -1304,7 +1346,127 @@ END B;
 "#,
         )
         .unwrap_err();
-        assert!(error.message.contains("no module grants it"));
+        assert!(error.message.contains("no visible module grants it"));
+    }
+
+    #[test]
+    fn allows_duplicate_simple_exports_across_modules() {
+        check_source(
+            r#"
+A: MODULE
+  GRANT x;
+  DCL x INT;
+END A;
+
+B: MODULE
+  GRANT x;
+  DCL x INT;
+END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_duplicate_grant_within_a_module() {
+        let error = check_source(
+            r#"
+A: MODULE
+  GRANT x;
+  GRANT x;
+  DCL x INT;
+END A;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("granted more than once"));
+    }
+
+    #[test]
+    fn seizes_a_qualified_export() {
+        check_source(
+            r#"
+A: MODULE
+  GRANT x;
+  DCL x INT INIT := 1;
+END A;
+
+B: MODULE
+  GRANT x;
+  DCL x INT INIT := 2;
+END B;
+
+C: MODULE
+  SEIZE A!x;
+  ASSERT x = 1;
+END C;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_ambiguous_simple_seize() {
+        let error = check_source(
+            r#"
+A: MODULE
+  GRANT x;
+  DCL x INT;
+END A;
+
+B: MODULE
+  GRANT x;
+  DCL x INT;
+END B;
+
+C: MODULE
+  SEIZE x;
+END C;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("ambiguous"));
+    }
+
+    #[test]
+    fn grant_all_and_seize_all() {
+        check_source(
+            r#"
+A: MODULE
+  GRANT ALL;
+  DCL a INT INIT := 1;
+  DCL b INT INIT := 2;
+END A;
+
+B: MODULE
+  SEIZE ALL;
+  ASSERT a + b = 3;
+END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn grant_to_restricts_seize() {
+        let error = check_source(
+            r#"
+A: MODULE
+  GRANT x TO Client;
+  DCL x INT;
+END A;
+
+Client: MODULE
+  SEIZE x;
+END Client;
+
+Other: MODULE
+  SEIZE x;
+END Other;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("no visible module grants it"));
     }
 
     #[test]
@@ -1318,25 +1480,6 @@ END A;
         )
         .unwrap_err();
         assert!(error.message.contains("not declared in this module"));
-    }
-
-    #[test]
-    fn rejects_duplicate_grants() {
-        let error = check_source(
-            r#"
-A: MODULE
-  GRANT x;
-  DCL x INT;
-END A;
-
-B: MODULE
-  GRANT x;
-  DCL x INT;
-END B;
-"#,
-        )
-        .unwrap_err();
-        assert!(error.message.contains("granted by more than one module"));
     }
 
     #[test]

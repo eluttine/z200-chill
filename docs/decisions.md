@@ -25,15 +25,17 @@ need I/O:
 - expected exit status: success;
 - unhandled `ASSERTFAIL`/exception: failure.
 
-## 10.4 Grant-file / multi-module model (module identity resolved; prefix exports open)
+## 10.4 Grant-file / multi-module model (qualified seize resolved; grant renaming open)
 
 v0 implements `SPEC MODULE` pairing, writes a TOML grant file from `z200c grant`, and
 consumes dependency grant files for `SEIZE` resolution in `check` and `grant`.
 Package-directory dependencies are loaded recursively and linked for `run`; a grant file
 that records `package_dir` is also source-linked for `run`. Dependencies and the root
 must share edition and width profile. Modules are identified by package plus simple name,
-so different packages may contain a module with the same name. Exported names remain
-globally simple; symbol/export prefixing and namespacing are still open. Z.200 permits
+so different packages may contain a module with the same name. `SEIZE` supports
+`Module!name` and `package!Module!name`, plus `GRANT ALL`/`SEIZE ALL` and `TO` friend
+restrictions. Still open: `GRANT` prefix renaming, `PREFIXED`, `FORBID`, qualified names
+in emitted grant files, and symbol mangling for a code-generation backend. Z.200 permits
 several piecewise schemes (§10.10).
 
 ## 10.7 Multi-file packages (resolved)

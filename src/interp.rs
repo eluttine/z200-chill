@@ -2,12 +2,12 @@ use crate::ast::*;
 use crate::ir;
 use crate::lexer::{SourceId, Span};
 use crate::manifest::WidthProfile;
-use crate::program::{self, Export, ExportKind};
+use crate::program::{self, ExportKind};
 use crate::sema::{self, CheckResult};
 use crate::types::{self, IntKind, Type};
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,7 +190,7 @@ struct Interpreter<'a> {
     call_bases: Vec<usize>,
     active_module: usize,
     depth: usize,
-    exports: HashMap<String, Export>,
+    exports: Vec<program::ExportEntry>,
     exprs: ir::ExprTable,
     bodies: ir::BodyTable,
 }
@@ -214,6 +214,9 @@ impl<'a> Interpreter<'a> {
             if module.kind == ModuleKind::Spec {
                 continue;
             }
+            let package_name = module.package_name.as_deref();
+            let module_name = module.name.as_deref();
+
             for declaration in &module.declarations {
                 let Declaration::Visibility(visibility) = declaration else {
                     continue;
@@ -221,19 +224,73 @@ impl<'a> Interpreter<'a> {
                 if visibility.kind != VisibilityKind::Seize {
                     continue;
                 }
-                for name in &visibility.names {
-                    let Some(export) = self.exports.get(&name.name) else {
-                        return Err(Error::new(
-                            name.span,
-                            format!("cannot SEIZE `{}`: no module grants it", name.name),
+
+                if visibility.all {
+                    let mut accessible: Vec<&program::ExportEntry> = self
+                        .exports
+                        .iter()
+                        .filter(|export| export.module != current)
+                        .filter(|export| export.is_accessible_to(package_name, module_name))
+                        .collect();
+                    accessible.sort_by(|left, right| {
+                        left.name
+                            .cmp(&right.name)
+                            .then_with(|| left.package.cmp(&right.package))
+                            .then_with(|| left.module.cmp(&right.module))
+                    });
+
+                    let mut names = HashSet::new();
+                    for export in accessible {
+                        if !names.insert(export.name.clone()) {
+                            return Err(Error::new(
+                                visibility.span,
+                                format!(
+                                    "SEIZE ALL is ambiguous for `{}`; use a qualified SEIZE",
+                                    export.name
+                                ),
+                            ));
+                        }
+                        if export.module == usize::MAX {
+                            return Err(Error::new(
+                                visibility.span,
+                                format!(
+                                    "cannot SEIZE `{}`: external dependency is not linked",
+                                    export.name
+                                ),
+                            ));
+                        }
+                        imports.push((
+                            current,
+                            export.name.clone(),
+                            visibility.span,
+                            export.module,
+                            matches!(&export.kind, ExportKind::Proc(_)),
                         ));
-                    };
+                    }
+                    continue;
+                }
+
+                for name in &visibility.names {
+                    let export =
+                        program::resolve_export(&self.exports, name, package_name, module_name)
+                            .map_err(|message| Error::new(name.span, message))?;
+
                     if export.module == current {
                         return Err(Error::new(
                             name.span,
-                            format!("cannot SEIZE `{}` from the same module", name.name),
+                            format!("cannot SEIZE `{}` from the same module", name.qualified()),
                         ));
                     }
+                    if export.module == usize::MAX {
+                        return Err(Error::new(
+                            name.span,
+                            format!(
+                                "cannot SEIZE `{}`: external dependency is not linked",
+                                name.qualified()
+                            ),
+                        ));
+                    }
+
                     imports.push((
                         current,
                         name.name.clone(),
@@ -1252,6 +1309,35 @@ C: MODULE
   SEIZE x;
   ASSERT x = 42;
 END C;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn seizes_qualified_exports_and_all() {
+        run_source(
+            r#"
+A: MODULE
+  GRANT x;
+  DCL x INT INIT := 1;
+END A;
+
+B: MODULE
+  GRANT y;
+  DCL y INT INIT := 2;
+END B;
+
+C: MODULE
+  SEIZE A!x;
+  ASSERT x = 1;
+END C;
+
+D: MODULE
+  SEIZE ALL;
+  ASSERT x = 1;
+  ASSERT y = 2;
+END D;
 "#,
         )
         .unwrap();

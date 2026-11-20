@@ -1,4 +1,5 @@
 use crate::ast::Program;
+use crate::lexer::{SourceId, Span};
 use crate::manifest::Manifest;
 use crate::program::{self, ExportInfo, ExportInfoKind};
 use crate::types::{self, Type};
@@ -43,9 +44,25 @@ pub enum GrantKind {
 impl GrantFile {
     pub fn from_package(manifest: &Manifest, program: &Program) -> Result<Self, program::Error> {
         let exports = program::exports(program)?;
+        let mut seen = std::collections::HashSet::new();
         let mut entries = Vec::with_capacity(exports.len());
 
         for export in exports {
+            if !seen.insert(export.name.clone()) {
+                let span = program
+                    .modules
+                    .first()
+                    .map(|module| module.span)
+                    .unwrap_or(Span::new(SourceId(0), 0, 0));
+                return Err(program::Error::coded(
+                    "E0406",
+                    span,
+                    format!(
+                        "cannot emit grant file: duplicate export name `{}`",
+                        export.name
+                    ),
+                ));
+            }
             match export.kind {
                 ExportInfoKind::Var(ty) => entries.push(GrantExport {
                     name: export.name,
