@@ -48,6 +48,9 @@ pub struct Visibility {
     pub all: bool,
     /// `TO` friend modules for a GRANT.
     pub friends: Vec<NameRef>,
+    /// New prefix for a GRANT (`PREFIXED` or prefix-rename clause).
+    /// An empty vector means "use the module name".
+    pub prefix: Option<Vec<String>>,
     pub span: Span,
 }
 

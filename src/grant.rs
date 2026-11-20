@@ -28,6 +28,8 @@ pub struct GrantExport {
     pub module: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
     pub kind: GrantKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
@@ -54,13 +56,20 @@ impl GrantFile {
                 name,
                 module_name,
                 package_name,
+                prefix,
                 kind,
             } = export;
+            let prefix = if prefix.is_empty() {
+                None
+            } else {
+                Some(prefix.join("!"))
+            };
             match kind {
                 ExportInfoKind::Var(ty) => entries.push(GrantExport {
                     name,
                     module: module_name,
                     package: package_name,
+                    prefix,
                     kind: GrantKind::Variable,
                     mode: Some(type_name(ty)),
                     params: Vec::new(),
@@ -70,6 +79,7 @@ impl GrantFile {
                     name,
                     module: module_name,
                     package: package_name,
+                    prefix,
                     kind: GrantKind::Procedure,
                     mode: None,
                     params: params.into_iter().map(type_name).collect(),
@@ -136,6 +146,11 @@ impl GrantFile {
                 name: export.name.clone(),
                 module_name: export.module.clone(),
                 package_name: export.package.clone(),
+                prefix: export
+                    .prefix
+                    .as_deref()
+                    .map(|prefix| prefix.split('!').map(str::to_owned).collect())
+                    .unwrap_or_default(),
                 kind,
             });
         }
@@ -241,6 +256,43 @@ END B;
             .exports
             .iter()
             .all(|export| export.package.as_deref() == Some("dup")));
+    }
+
+    #[test]
+    fn emits_prefixed_export() {
+        let manifest = Manifest::parse(
+            r#"
+[package]
+name = "pref"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+int_widths = "16-32-64"
+"#,
+        )
+        .unwrap();
+        let tokens = lexer::tokenize(
+            r#"
+A: MODULE
+  GRANT x PREFIXED P;
+  DCL x INT;
+END A;
+"#,
+        )
+        .unwrap();
+        let mut program = parser::parse(&tokens).unwrap();
+        for module in &mut program.modules {
+            module.package_name = Some("pref".to_owned());
+        }
+        let grant = GrantFile::from_package(&manifest, &program).unwrap();
+
+        assert_eq!(grant.exports.len(), 1);
+        assert_eq!(grant.exports[0].prefix.as_deref(), Some("P"));
+
+        let infos = grant.to_export_infos().unwrap();
+        assert_eq!(infos[0].prefix, vec!["P".to_owned()]);
     }
 
     #[test]

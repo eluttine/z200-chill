@@ -127,6 +127,7 @@ pub fn run_checked(
             package_name: info.package_name.clone(),
             module_name: info.module_name.clone(),
             name: info.name.clone(),
+            prefix: info.prefix.clone(),
             kind,
             friends: None,
         });
@@ -1329,6 +1330,24 @@ C: MODULE
   SEIZE x;
   ASSERT x = 42;
 END C;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn seizes_prefixed_exports() {
+        run_source(
+            r#"
+A: MODULE
+  GRANT ALL PREFIXED P;
+  DCL a INT INIT := 1;
+END A;
+
+B: MODULE
+  SEIZE P!a;
+  ASSERT a = 1;
+END B;
 "#,
         )
         .unwrap();

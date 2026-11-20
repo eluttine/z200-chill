@@ -58,8 +58,8 @@ Implemented in `z200c`:
   relational and boolean expressions, procedures, calls, assignments, `ASSERT`,
   `IF`, `DO WHILE` / `DO FOR EVER`, and `BEGIN … END`;
 - `GRANT` / `SEIZE` visibility with module/package-qualified names (`Module!x`,
-  `pkg!Module!x`), `GRANT ALL` / `SEIZE ALL`, and `TO` friend restrictions, including
-  shared seized locations and procedures;
+  `pkg!Module!x`), `GRANT ALL` / `SEIZE ALL`, `PREFIXED`/prefix-rename output, and `TO`
+  friend restrictions, including shared seized locations and procedures;
 - `SPEC MODULE` interfaces paired with body modules, with variable and procedure
   signature matching;
 - `z200c grant`, which writes a TOML grant file describing the package interface and

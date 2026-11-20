@@ -79,6 +79,9 @@ pub struct ExportEntry {
     pub package_name: Option<String>,
     pub module_name: Option<String>,
     pub name: String,
+    /// Exported prefix (`GRANT ... PREFIXED ...`). Empty means the automatic
+    /// module/package qualifiers.
+    pub prefix: Vec<String>,
     pub kind: ExportKind,
     /// `GRANT ... TO ...` friend modules, if restricted.
     pub friends: Option<Vec<String>>,
@@ -86,14 +89,44 @@ pub struct ExportEntry {
 
 impl ExportEntry {
     pub fn qualified_names(&self) -> Vec<String> {
-        let mut names = vec![self.name.clone()];
-        if let Some(module) = &self.module_name {
-            names.push(format!("{module}!{}", self.name));
-            if let Some(package) = &self.package_name {
-                names.push(format!("{package}!{module}!{}", self.name));
+        if self.prefix.is_empty() {
+            let mut names = vec![self.name.clone()];
+            if let Some(module) = &self.module_name {
+                names.push(format!("{module}!{}", self.name));
+                if let Some(package) = &self.package_name {
+                    names.push(format!("{package}!{module}!{}", self.name));
+                }
             }
+            names
+        } else {
+            let prefix = self.prefix.join("!");
+            let mut names = vec![format!("{prefix}!{}", self.name)];
+            if let Some(package) = &self.package_name {
+                names.push(format!("{package}!{prefix}!{}", self.name));
+            }
+            names
         }
-        names
+    }
+
+    fn qualified_prefixes(&self) -> Vec<Vec<String>> {
+        if self.prefix.is_empty() {
+            let mut prefixes = Vec::new();
+            if let Some(module) = &self.module_name {
+                prefixes.push(vec![module.clone()]);
+                if let Some(package) = &self.package_name {
+                    prefixes.push(vec![package.clone(), module.clone()]);
+                }
+            }
+            prefixes
+        } else {
+            let mut prefixes = vec![self.prefix.clone()];
+            if let Some(package) = &self.package_name {
+                let mut package_prefix = vec![package.clone()];
+                package_prefix.extend(self.prefix.iter().cloned());
+                prefixes.push(package_prefix);
+            }
+            prefixes
+        }
     }
 
     /// Whether the export's `TO` restriction permits this module.
@@ -124,14 +157,13 @@ pub fn resolve_export<'a>(
     let candidates: Vec<&ExportEntry> = exports
         .iter()
         .filter(|export| {
-            let prefix_matches = match name.prefix.as_slice() {
-                [] => true,
-                [module] => export.module_name.as_deref() == Some(module.as_str()),
-                [package, module] => {
-                    export.package_name.as_deref() == Some(package.as_str())
-                        && export.module_name.as_deref() == Some(module.as_str())
-                }
-                _ => false,
+            let prefix_matches = if name.prefix.is_empty() {
+                export.prefix.is_empty()
+            } else {
+                export
+                    .qualified_prefixes()
+                    .iter()
+                    .any(|prefix| prefix == &name.prefix)
             };
             export.name == name.name && prefix_matches && export.is_accessible_to(package, module)
         })
@@ -162,6 +194,7 @@ pub struct ExportInfo {
     pub name: String,
     pub module_name: Option<String>,
     pub package_name: Option<String>,
+    pub prefix: Vec<String>,
     pub kind: ExportInfoKind,
 }
 
@@ -275,6 +308,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                 name: export.name,
                 module_name: export.module_name,
                 package_name: export.package_name,
+                prefix: export.prefix,
                 kind,
             }
         })
@@ -426,6 +460,15 @@ fn add_grants(
                     .collect::<Vec<_>>(),
             )
         };
+        let export_prefix = match &visibility.prefix {
+            None => Vec::new(),
+            Some(parts) if parts.is_empty() => module
+                .name
+                .clone()
+                .map(|name| vec![name])
+                .unwrap_or_default(),
+            Some(parts) => parts.clone(),
+        };
 
         let names: Vec<(String, Span)> = if visibility.all {
             let mut names: Vec<String> = interface
@@ -455,7 +498,8 @@ fn add_grants(
         };
 
         for (name, span) in names {
-            if !granted.insert(name.clone()) {
+            let grant_key = format!("{}!{name}", export_prefix.join("!"));
+            if !granted.insert(grant_key) {
                 return Err(Error::new(
                     span,
                     format!("`{name}` is granted more than once"),
@@ -479,6 +523,7 @@ fn add_grants(
                 package_name: package_name.clone(),
                 module_name: module_name.clone(),
                 name,
+                prefix: export_prefix.clone(),
                 kind,
                 friends: friends.clone(),
             });

@@ -35,9 +35,11 @@ must share edition and width profile. Modules are identified by package plus sim
 so different packages may contain a module with the same name. `SEIZE` supports
 `Module!name` and `package!Module!name`, plus `GRANT ALL`/`SEIZE ALL` and `TO` friend
 restrictions. Emitted grant files record each export's module/package names, so
-qualified external seizes work. Still open: `GRANT` prefix renaming, `PREFIXED`,
-`FORBID`, persisting `TO` restrictions in grant files, and symbol mangling for a
-code-generation backend. Z.200 permits several piecewise schemes (§10.10).
+qualified external seizes work. `GRANT ... PREFIXED ...` and prefix-rename clauses with
+an empty old prefix are implemented, including in emitted grant files. Still open:
+non-empty old prefixes, `SEIZE ... PREFIXED ...`, `FORBID`, persisting `TO` restrictions
+in grant files, and symbol mangling for a code-generation backend. Z.200 permits several
+piecewise schemes (§10.10).
 
 ## 10.7 Multi-file packages (resolved)
 

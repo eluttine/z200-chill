@@ -14,6 +14,11 @@ Visibility is static and independent of textual order:
   - `name` (simple),
   - `Module!name`,
   - `package!Module!name`.
+- Prefix output is supported:
+  - `GRANT x PREFIXED P;` exports `P!x`;
+  - `GRANT ALL PREFIXED;` uses the granting module name as the prefix;
+  - `GRANT ( -> P ) ! x;` is the prefix-rename form.
+  Prefixed exports are not addressable by their bare simple name.
 - `SEIZE name;` imports the unique visible export with that simple name. If more than one
   module exports it, the seize is ambiguous and must be qualified.
 - `SEIZE A!x;` / `SEIZE pkg!A!x;` select a module/package-qualified export.
@@ -28,12 +33,13 @@ Visibility is static and independent of textual order:
 - A seized procedure executes in its **defining** module's scope; it does not see the
   caller's module or local names.
 - A module cannot seize a name it grants itself.
-- `GRANT` prefix renaming, `PREFIXED`, `FORBID`, contexts, and remote pieces are not
-  implemented yet.
+- Only prefix renames with an empty old prefix are supported; a non-empty old prefix is
+  rejected. `SEIZE ... PREFIXED ...` is not implemented. `FORBID`, contexts, and remote
+  pieces are not implemented.
 
-`z200c grant` records each export's simple name together with its module and package
-names, so duplicate simple names can be represented. Consumers can use `Module!name` or
-`package!Module!name` when seizing from the grant file.
+`z200c grant` records each export's simple name, module/package names, and optional
+prefix, so duplicate simple names and prefixed outputs can be represented. Consumers can
+use the corresponding qualified name when seizing from the grant file.
 
 ## SPEC modules
 
@@ -77,6 +83,7 @@ package_dir = "/absolute/path/to/spec"
 name = "Bump"
 module = "Counter"
 package = "spec"
+prefix = "P"
 kind = "procedure"
 
 [[exports]]
@@ -105,8 +112,8 @@ lib = "../lib/target/z200c/lib.grt.toml"
 - Directory dependencies are loaded recursively, their modules run first, and their
   exports are available to `SEIZE` without grant files.
 - The dependency's `edition` and `int_widths` must match the consuming package.
-- Exported names must be unique across the program and its dependencies (prefix
-  qualification is not implemented yet).
+- Exported simple names may repeat; use `Module!name`, `package!Module!name`, or a
+  granted prefix to disambiguate.
 - `z200c check` and `z200c grant` resolve `SEIZE` against both forms.
 - `z200c run` links directory dependencies and grant files with `package_dir`; it
   rejects a run only when an interface-only external name is actually seized.
@@ -115,7 +122,8 @@ lib = "../lib/target/z200c/lib.grt.toml"
 
 - Interface-only grant files are static: `check` and `grant` use their interfaces, but
   `run` cannot link them without a source package.
-- `GRANT` prefix renaming/`PREFIXED` and `FORBID` are not implemented.
+- `SEIZE ... PREFIXED ...`, non-empty old prefixes in rename clauses, and `FORBID` are
+  not implemented.
 - `TO` friend restrictions are enforced inside a linked program but are not recorded in
   emitted grant files, so an external grant-file interface is visible to all consumers.
 - Contexts, remote pieces, and symbol mangling for native code generation are not

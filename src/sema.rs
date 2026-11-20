@@ -165,6 +165,7 @@ pub fn analyze_with_externals(
             package_name: info.package_name.clone(),
             module_name: info.module_name.clone(),
             name: info.name.clone(),
+            prefix: info.prefix.clone(),
             kind,
             friends: None,
         });
@@ -1400,6 +1401,60 @@ C: MODULE
   SEIZE A!x;
   ASSERT x = 1;
 END C;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn seizes_prefixed_export() {
+        check_source(
+            r#"
+A: MODULE
+  GRANT a PREFIXED P;
+  DCL a INT INIT := 1;
+END A;
+
+B: MODULE
+  SEIZE P!a;
+  ASSERT a = 1;
+END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn prefixed_export_is_not_visible_by_simple_name() {
+        let error = check_source(
+            r#"
+A: MODULE
+  GRANT a PREFIXED P;
+  DCL a INT INIT := 1;
+END A;
+
+B: MODULE
+  SEIZE a;
+END B;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("no visible module grants it"));
+    }
+
+    #[test]
+    fn grant_all_with_prefix() {
+        check_source(
+            r#"
+A: MODULE
+  GRANT ALL PREFIXED P;
+  DCL a INT INIT := 1;
+END A;
+
+B: MODULE
+  SEIZE P!a;
+  ASSERT a = 1;
+END B;
 "#,
         )
         .unwrap();

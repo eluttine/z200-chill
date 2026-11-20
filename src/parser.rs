@@ -180,6 +180,39 @@ impl<'a> Parser<'a> {
         let start = self.current_span();
         self.advance(); // GRANT or SEIZE
 
+        let mut prefix = None;
+
+        if self.at_lparen() {
+            if kind == VisibilityKind::Seize {
+                return Err(self.error_here_code(
+                    "E0205",
+                    "SEIZE prefix-rename clauses are not implemented yet",
+                ));
+            }
+            self.advance(); // (
+            let old = if self.at_arrow() {
+                Vec::new()
+            } else {
+                self.parse_prefix_parts()?
+            };
+            self.expect_arrow()?;
+            let new = if self.at_rparen() {
+                Vec::new()
+            } else {
+                self.parse_prefix_parts()?
+            };
+            self.expect_rparen()?;
+            self.expect_bang()?;
+
+            if !old.is_empty() {
+                return Err(self.error_here_code(
+                    "E0205",
+                    "prefix rename with a non-empty old prefix is not implemented yet",
+                ));
+            }
+            prefix = Some(new);
+        }
+
         let mut names = Vec::new();
         let mut all = false;
         let mut friends = Vec::new();
@@ -204,6 +237,19 @@ impl<'a> Parser<'a> {
             }
         }
 
+        if self.at_keyword(Keyword::Prefixed) {
+            if kind == VisibilityKind::Seize {
+                return Err(self.error_here_code("E0205", "SEIZE PREFIXED is not implemented yet"));
+            }
+            self.advance();
+            let parts = if self.at_identifier() {
+                self.parse_prefix_parts()?
+            } else {
+                Vec::new()
+            };
+            prefix = Some(parts);
+        }
+
         if self.at_keyword(Keyword::To) {
             if kind == VisibilityKind::Seize {
                 return Err(self.error_here_code("E0205", "SEIZE does not accept TO"));
@@ -219,9 +265,6 @@ impl<'a> Parser<'a> {
             }
         }
 
-        if self.at_keyword(Keyword::Prefixed) {
-            return Err(self.error_here_code("E0205", "PREFIXED clauses are not implemented yet"));
-        }
         if self.at_keyword(Keyword::Forbid) {
             return Err(self.error_here_code(
                 "E0205",
@@ -235,8 +278,18 @@ impl<'a> Parser<'a> {
             names,
             all,
             friends,
+            prefix,
             span: Span::new(self.source, start.start, end.end),
         })
+    }
+
+    fn parse_prefix_parts(&mut self) -> Result<Vec<String>, Error> {
+        let mut parts = vec![self.expect_identifier()?.0];
+        while matches!(self.kind(), Some(TokenKind::Bang)) {
+            self.advance();
+            parts.push(self.expect_identifier()?.0);
+        }
+        Ok(parts)
     }
 
     fn parse_name_ref(&mut self) -> Result<NameRef, Error> {
@@ -1123,6 +1176,10 @@ impl<'a> Parser<'a> {
         matches!(self.kind(), Some(TokenKind::Assign))
     }
 
+    fn at_arrow(&self) -> bool {
+        matches!(self.kind(), Some(TokenKind::Arrow))
+    }
+
     fn expect_identifier(&mut self) -> Result<(String, Span), Error> {
         let Some(token) = self.current() else {
             return Err(self.expected("an identifier"));
@@ -1161,6 +1218,14 @@ impl<'a> Parser<'a> {
 
     fn expect_assign(&mut self) -> Result<Span, Error> {
         self.expect_simple(TokenKind::Assign, "`:=`")
+    }
+
+    fn expect_arrow(&mut self) -> Result<Span, Error> {
+        self.expect_simple(TokenKind::Arrow, "`->`")
+    }
+
+    fn expect_bang(&mut self) -> Result<Span, Error> {
+        self.expect_simple(TokenKind::Bang, "`!`")
     }
 
     fn expect_lparen(&mut self) -> Result<Span, Error> {
@@ -1527,6 +1592,36 @@ END M;
         assert_eq!(seize.names[0].qualified(), "A!x");
         assert_eq!(seize.names[0].prefix, vec!["A".to_owned()]);
         assert_eq!(seize.names[0].name, "x");
+    }
+
+    #[test]
+    fn parses_grant_prefixes() {
+        let program = parse_source(
+            r#"
+M: MODULE
+  GRANT x PREFIXED P;
+  GRANT ALL PREFIXED;
+  GRANT ( -> Q ) ! y;
+END M;
+"#,
+        );
+
+        let Declaration::Visibility(prefix) = &program.modules[0].declarations[0] else {
+            panic!("expected GRANT");
+        };
+        assert_eq!(prefix.prefix, Some(vec!["P".to_owned()]));
+
+        let Declaration::Visibility(module_prefix) = &program.modules[0].declarations[1] else {
+            panic!("expected GRANT ALL");
+        };
+        assert!(module_prefix.all);
+        assert_eq!(module_prefix.prefix, Some(Vec::new()));
+
+        let Declaration::Visibility(rename) = &program.modules[0].declarations[2] else {
+            panic!("expected prefix rename");
+        };
+        assert_eq!(rename.prefix, Some(vec!["Q".to_owned()]));
+        assert_eq!(rename.names[0].name, "y");
     }
 
     #[test]
