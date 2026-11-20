@@ -13,8 +13,16 @@ pub struct Module {
     pub package: usize,
     /// Package name, assigned by the loader.
     pub package_name: Option<String>,
+    /// `CONTEXT ... FOR` quasi reaches in front of the module.
+    pub contexts: Vec<Context>,
     pub declarations: Vec<Declaration>,
     pub actions: Vec<Action>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Context {
+    pub declarations: Vec<Declaration>,
     pub span: Span,
 }
 

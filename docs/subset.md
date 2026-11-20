@@ -63,6 +63,8 @@ Implemented in `z200c`:
   locations and procedures;
 - `SPEC MODULE` interfaces paired with body modules, with variable and procedure
   signature matching;
+- top-level `CONTEXT ... FOR` lists with quasi variable/procedure declarations checked
+  against grants in the enclosing reach (see [contexts.md](contexts.md));
 - `z200c grant`, which writes a TOML grant file describing the package interface and
   (optionally) its source package directory;
 - loading dependency grant files from `[dependencies]` for static `SEIZE` resolution in
@@ -383,13 +385,15 @@ action, but it is non-idiomatic and has been removed from the example.)
   - you may only `GRANT` names that are visible and grantable by the current module;
   - you may not `SEIZE` a name that is not visible/granted in the enclosing reach;
   - referring to a granted name without seizing it is an error.
-- Full Z.200 also supports prefixes (`module!name`), grant windows (`ALL`, `FORBID`),
-  friend clauses (`TO`), contexts, spec modules, and remote pieces.
+- z200c also supports prefixes (`module!name`), grant windows (`ALL`, `FORBID`),
+  friend clauses (`TO`), spec modules, and top-level contexts. Remote pieces and nested
+  modulions are not implemented.
 
 ### 7.2.1 Implemented model (v0)
 
 The `GRANT`/`SEIZE` model, `SPEC MODULE` pairing, grant-file schema, and dependency
-rules are documented in [grant-file.md](grant-file.md).
+rules are documented in [grant-file.md](grant-file.md). Context lists and their current
+subset are documented in [contexts.md](contexts.md).
 
 ### 7.4 Complete programs (§10.8)
 

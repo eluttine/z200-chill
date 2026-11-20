@@ -1,7 +1,8 @@
 # Contexts (design)
 
-Status: **design only, not implemented.** Contexts depend on nested modulions, which
-`z200c` does not support yet.
+Status: **partially implemented.** Top-level context lists are parsed and checked against
+grants in the enclosing reach. Nested modulions, context visibility statements, mode
+definitions in contexts, and remote pieces remain future work.
 
 ## Normative model
 
@@ -40,24 +41,51 @@ A context list may precede a module, region, spec module or spec region (§10.6,
 - Contexts are redundant in a complete program; their purpose is separate compilation.
   `REMOTE` pieces are the mechanism that supplies the missing text.
 
-## Why this is blocked today
+## Implemented subset
 
-The current compiler has a flat module list (`Program.modules: Vec<Module>`). Every
-module's enclosing reach is the imaginary outermost process, which contains only
-predefined names. In that world a context can only describe predefined names, so there
-is nothing meaningful to check or implement.
+`z200c` now supports a context list before a **top-level** module or spec module:
 
-Contexts become useful only when one of these exists:
+```chill
+CONTEXT
+  DCL x INT;
+  F: PROC (a INT) RETURNS (INT) END;
+FOR
+Client: MODULE
+  SEIZE x, F;
+  ASSERT F(2) = 3;
+END Client;
+```
+
+- Quasi declarations are `DCL` (without initializers) and procedure signatures.
+- Each quasi variable/procedure is checked against the grants that enter the
+  imaginary outermost reach from modules in the same program:
+  - the name must be granted exactly once and be accessible to the module (including
+    `TO` restrictions),
+  - the declared mode or procedure signature must match the grant,
+  - unprefixed grants only (a context simple name denotes an unprefixed name string).
+- Contexts have no runtime effect; they are static assertions about the enclosing reach.
+- Multiple context lists are parsed in order, but visibility statements (`GRANT`/`SEIZE`)
+  in a context are rejected for now. The standard forbids them in a context with no
+  directly enclosing group; the rest needs nested context reaches.
+- Mode definitions in contexts are rejected for now; declarations may use the built-in
+  scalar modes.
+- Contexts on nested modulions/regions and names supplied by external grant files are
+  not covered yet.
+- `REMOTE` pieces are not implemented.
+
+## Why the full feature needs more
+
+The compiler still has a flat top-level module list (`Program.modules: Vec<Module>`).
+Every top-level module's enclosing reach is the imaginary outermost process, which is
+exactly where top-level `GRANT`s go; that is enough for the subset above. Full contexts
+need:
 
 1. **Nested modulions.** Modules are actions in Z.200 (§10.6), so a module can sit
    inside another module's reach. A context list then describes the parent reach.
 2. **Piecewise/remote compilation.** A context supplies the enclosing reach from a
    separate compilation unit, with `REMOTE` replacing text.
 
-`z200c` currently supports neither. Implementing contexts first would mean inventing
-reach semantics or accepting syntax with no effect, which this project avoids.
-
-## Staged plan
+## Remaining staged plan
 
 ### Stage 1 — nested modulions and reaches
 
@@ -71,15 +99,12 @@ reach semantics or accepting syntax with no effect, which this project avoids.
 
 This stage is the prerequisite for everything below.
 
-### Stage 2 — context syntax and quasi declarations
+### Stage 2 — finish quasi declarations
 
-- Parse `<context list>` before modules/regions/specs and represent it in the AST.
-- Context bodies reuse declarations/visibility with a `quasi` flag:
-  - no initializers,
-  - no actions,
-  - no runtime allocation,
-  - procedure entries are signatures only.
-- Keep contexts in syntax trees even before full checking so diagnostics are precise.
+- Allow mode definitions (and structure modes) in contexts, with a context-local mode
+  table.
+- Allow context visibility statements once nested context reaches exist.
+- Support contexts before nested modules/regions and spec regions.
 
 ### Stage 3 — checking contexts
 

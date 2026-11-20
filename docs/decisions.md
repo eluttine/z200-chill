@@ -76,13 +76,12 @@ See [ir.md](ir.md).
 A native or C code-generation backend remains future work; the typed IR is the intended
 input. Declarations/procedure structure and `BEGIN` declaration lists remain AST-level.
 
-## 10.10 Contexts (open, blocked on nested modulions)
+## 10.10 Contexts (partially resolved)
 
-Z.200 contexts (§10.10.2) are quasi reaches that describe the surrounding reaches of a
-piece during separate compilation. They are only meaningful when the compiler models
-reaches other than the imaginary outermost process, i.e. nested modulions or remote
-pieces. `z200c` currently has a flat top-level module list, so `CONTEXT` is deliberately
-not accepted yet. The staged plan (nested modulions, then contexts, then remote pieces)
-is in [contexts.md](contexts.md).
+Top-level `CONTEXT ... FOR` lists are parsed and checked. Quasi `DCL`/procedure
+signatures are validated against the grants that enter the imaginary outermost reach
+(existence, uniqueness, mode/signature match, `TO` restrictions), and contexts have no
+runtime effect. Mode definitions and visibility statements in contexts, contexts before
+nested modulions/regions, and remote pieces remain open. See [contexts.md](contexts.md).
 
 ---

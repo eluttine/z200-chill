@@ -1573,6 +1573,27 @@ END B;
     }
 
     #[test]
+    fn contexts_have_no_runtime_effect() {
+        run_source(
+            r#"
+A: MODULE
+  GRANT x;
+  DCL x INT INIT := 4;
+END A;
+
+CONTEXT
+  DCL x INT;
+FOR
+B: MODULE
+  SEIZE x;
+  ASSERT x = 4;
+END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn compares_structure_values_recursively() {
         run_source(
             r#"

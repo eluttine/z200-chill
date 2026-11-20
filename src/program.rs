@@ -326,6 +326,12 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
         }
     }
 
+    for (index, module) in program.modules.iter().enumerate() {
+        if !module.contexts.is_empty() {
+            check_contexts(module, index, &exports)?;
+        }
+    }
+
     Ok(ProgramInfo {
         interfaces,
         exports,
@@ -839,6 +845,153 @@ fn has_grant(module: &Module) -> bool {
     module.declarations.iter().any(|declaration| {
         matches!(declaration, Declaration::Visibility(v) if v.kind == VisibilityKind::Grant)
     })
+}
+
+/// Check context-list quasi declarations against the grants visible in the
+/// module's enclosing reach. Contexts have no runtime effect; in this complete
+/// program model they act as static assertions about the surrounding reach.
+fn check_contexts(module: &Module, index: usize, exports: &[ExportEntry]) -> Result<(), Error> {
+    let empty_modes = HashMap::new();
+    let mut names = HashSet::new();
+    let mut vars: Vec<(String, Type, Span)> = Vec::new();
+    let mut procs: Vec<(String, ProcType, Span)> = Vec::new();
+
+    for context in &module.contexts {
+        for declaration in &context.declarations {
+            match declaration {
+                Declaration::Var(list) => {
+                    for var in list {
+                        let ty = resolve_mode_with(&var.mode, &empty_modes)?;
+                        if !names.insert(var.name.clone()) {
+                            return Err(Error::new(
+                                var.span,
+                                format!("duplicate context declaration `{}`", var.name),
+                            ));
+                        }
+                        vars.push((var.name.clone(), ty, var.span));
+                    }
+                }
+                Declaration::ProcSignature(signature) => {
+                    let ty = signature_from_params_with(
+                        &signature.params,
+                        &signature.result,
+                        &empty_modes,
+                    )?;
+                    if !names.insert(signature.name.clone()) {
+                        return Err(Error::new(
+                            signature.span,
+                            format!("duplicate context declaration `{}`", signature.name),
+                        ));
+                    }
+                    procs.push((signature.name.clone(), ty, signature.span));
+                }
+                Declaration::Proc(proc_def) => {
+                    let ty = signature_from_params_with(
+                        &proc_def.params,
+                        &proc_def.result,
+                        &empty_modes,
+                    )?;
+                    if !names.insert(proc_def.name.clone()) {
+                        return Err(Error::new(
+                            proc_def.span,
+                            format!("duplicate context declaration `{}`", proc_def.name),
+                        ));
+                    }
+                    procs.push((proc_def.name.clone(), ty, proc_def.span));
+                }
+                Declaration::Mode(_) => {
+                    return Err(Error::new(
+                        context.span,
+                        "mode definitions in contexts are not implemented yet",
+                    ));
+                }
+                Declaration::Visibility(visibility) => {
+                    return Err(Error::new(
+                        visibility.span,
+                        "GRANT/SEIZE in a context is not implemented yet",
+                    ));
+                }
+            }
+        }
+    }
+
+    for (name, declared, span) in vars {
+        let export = context_export(exports, module, index, &name, span)?;
+        match &export.kind {
+            ExportKind::Var(actual) if *actual == declared => {}
+            ExportKind::Var(actual) => {
+                return Err(Error::new(
+                    span,
+                    format!(
+                        "context declaration `{name}` has mode {} but the enclosing grant has mode {}",
+                        declared.describe(),
+                        actual.describe()
+                    ),
+                ));
+            }
+            _ => {
+                return Err(Error::new(
+                    span,
+                    format!(
+                        "context declaration `{name}` is a variable but the enclosing reach grants a different kind of name"
+                    ),
+                ));
+            }
+        }
+    }
+
+    for (name, declared, span) in procs {
+        let export = context_export(exports, module, index, &name, span)?;
+        match &export.kind {
+            ExportKind::Proc(actual) if *actual == declared => {}
+            ExportKind::Proc(_) => {
+                return Err(Error::new(
+                    span,
+                    format!(
+                        "context declaration `{name}` has a procedure signature that does not match the enclosing grant"
+                    ),
+                ));
+            }
+            _ => {
+                return Err(Error::new(
+                    span,
+                    format!(
+                        "context declaration `{name}` is a procedure but the enclosing reach grants a different kind of name"
+                    ),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn context_export<'a>(
+    exports: &'a [ExportEntry],
+    module: &Module,
+    index: usize,
+    name: &str,
+    span: Span,
+) -> Result<&'a ExportEntry, Error> {
+    let candidates: Vec<&ExportEntry> = exports
+        .iter()
+        .filter(|export| export.module != index)
+        .filter(|export| export.name == name && export.prefix.is_empty())
+        .filter(|export| {
+            export.is_accessible_to(module.package_name.as_deref(), module.name.as_deref())
+        })
+        .collect();
+    match candidates.as_slice() {
+        [] => Err(Error::new(
+            span,
+            format!("context declaration `{name}` has no matching grant in the enclosing reach"),
+        )),
+        [export] => Ok(export),
+        _ => Err(Error::new(
+            span,
+            format!("context declaration `{name}` is ambiguous; several modules grant it"),
+        )),
+    }
 }
 
 /// Old and new prefixes of a visibility statement, following §12.2.3.3.

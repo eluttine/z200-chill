@@ -61,7 +61,8 @@ impl<'a> Parser<'a> {
     fn parse_program(&mut self) -> Result<Program, Error> {
         let mut modules = Vec::new();
         while !self.at_end() {
-            modules.push(self.parse_module()?);
+            let contexts = self.parse_context_list()?;
+            modules.push(self.parse_module(contexts)?);
         }
         if modules.is_empty() {
             return Err(self.error_here("expected a module"));
@@ -69,7 +70,50 @@ impl<'a> Parser<'a> {
         Ok(Program { modules })
     }
 
-    fn parse_module(&mut self) -> Result<Module, Error> {
+    fn parse_context_list(&mut self) -> Result<Vec<Context>, Error> {
+        let mut contexts = Vec::new();
+        while self.at_keyword(Keyword::Context) {
+            let start = self.current_span();
+            self.advance();
+            let declarations = self.parse_declarations(true, true)?;
+            for declaration in &declarations {
+                match declaration {
+                    Declaration::Visibility(visibility) => {
+                        return Err(Error::coded(
+                            "E0205",
+                            visibility.span,
+                            "GRANT/SEIZE in a context is not implemented yet",
+                        ));
+                    }
+                    Declaration::Var(vars) => {
+                        if let Some(var) = vars.iter().find(|var| var.init.is_some()) {
+                            return Err(Error::coded(
+                                "E0205",
+                                var.span,
+                                "initialization is not allowed in a context",
+                            ));
+                        }
+                    }
+                    Declaration::Mode(mode) => {
+                        return Err(Error::coded(
+                            "E0205",
+                            mode.span,
+                            "mode definitions in contexts are not implemented yet",
+                        ));
+                    }
+                    Declaration::Proc(_) | Declaration::ProcSignature(_) => {}
+                }
+            }
+            let end = self.expect_keyword(Keyword::For)?;
+            contexts.push(Context {
+                declarations,
+                span: Span::new(self.source, start.start, end.end),
+            });
+        }
+        Ok(contexts)
+    }
+
+    fn parse_module(&mut self, contexts: Vec<Context>) -> Result<Module, Error> {
         let start = self.current_span();
 
         let name = if self.at_identifier() && self.kind_at(1) == Some(&TokenKind::Colon) {
@@ -130,6 +174,7 @@ impl<'a> Parser<'a> {
             kind,
             package: 0,
             package_name: None,
+            contexts,
             declarations,
             actions,
             span: Span::new(self.source, start.start, end.end),
@@ -1739,6 +1784,55 @@ END M;
                 new: Vec::new(),
             })
         );
+    }
+
+    #[test]
+    fn parses_context_list() {
+        let program = parse_source(
+            r#"
+CONTEXT
+  DCL x INT;
+  F: PROC (a INT) RETURNS (INT) END;
+FOR
+M: MODULE
+  SEIZE x, F;
+END M;
+"#,
+        );
+
+        assert_eq!(program.modules.len(), 1);
+        let module = &program.modules[0];
+        assert_eq!(module.contexts.len(), 1);
+        assert_eq!(module.contexts[0].declarations.len(), 2);
+    }
+
+    #[test]
+    fn context_rejects_initializers_and_visibility() {
+        let tokens = lexer::tokenize(
+            r#"
+CONTEXT
+  DCL x INT INIT := 1;
+FOR
+M: MODULE
+END M;
+"#,
+        )
+        .unwrap();
+        let error = parse(&tokens).unwrap_err();
+        assert!(error.message.contains("initialization"));
+
+        let tokens = lexer::tokenize(
+            r#"
+CONTEXT
+  GRANT x;
+FOR
+M: MODULE
+END M;
+"#,
+        )
+        .unwrap();
+        let error = parse(&tokens).unwrap_err();
+        assert!(error.message.contains("context"));
     }
 
     #[test]

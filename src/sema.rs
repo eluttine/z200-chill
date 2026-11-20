@@ -1614,6 +1614,96 @@ END A;
     }
 
     #[test]
+    fn context_declarations_match_the_enclosing_reach() {
+        check_source(
+            r#"
+A: MODULE
+  GRANT x, F;
+  DCL x INT INIT := 1;
+  F: PROC (a INT) RETURNS (INT);
+    RETURN a + x;
+  END F;
+END A;
+
+CONTEXT
+  DCL x INT;
+  F: PROC (a INT) RETURNS (INT) END;
+FOR
+B: MODULE
+  SEIZE x, F;
+  ASSERT F(2) = 3;
+END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn context_declaration_requires_a_grant() {
+        let error = check_source(
+            r#"
+CONTEXT
+  DCL missing INT;
+FOR
+B: MODULE
+END B;
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("no matching grant"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn context_declaration_mode_must_match() {
+        let error = check_source(
+            r#"
+A: MODULE
+  GRANT x;
+  DCL x INT;
+END A;
+
+CONTEXT
+  DCL x BOOL;
+FOR
+B: MODULE
+  SEIZE x;
+END B;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("has mode BOOL"), "{}", error.message);
+    }
+
+    #[test]
+    fn context_declaration_is_subject_to_to_restrictions() {
+        let error = check_source(
+            r#"
+A: MODULE
+  GRANT x TO SomeoneElse;
+  DCL x INT;
+END A;
+
+CONTEXT
+  DCL x INT;
+FOR
+B: MODULE
+  SEIZE x;
+END B;
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("no matching grant"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
     fn structure_equality_requires_the_same_mode() {
         check_source(
             r#"
