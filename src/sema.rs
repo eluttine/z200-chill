@@ -366,6 +366,7 @@ fn check_interface(
 struct Scope {
     vars: HashMap<String, Type>,
     procs: HashMap<String, ProcSig>,
+    readonly: HashSet<String>,
 }
 
 struct Checker {
@@ -708,6 +709,11 @@ impl Checker {
                         self.scopes.push(Scope::default());
                         let result = (|| {
                             self.declare_var(counter, counter_ty, *span)?;
+                            self.scopes
+                                .last_mut()
+                                .expect("scope stack is never empty")
+                                .readonly
+                                .insert(counter.clone());
                             self.check_actions(body)
                         })();
                         self.scopes.pop();
@@ -828,14 +834,30 @@ impl Checker {
 
     fn location_type(&self, target: &Expr) -> Result<Type, Error> {
         match target {
-            Expr::Name { name, span } => self
-                .lookup_var(name)
-                .ok_or_else(|| Error::new(*span, format!("unknown variable `{name}`"))),
+            Expr::Name { name, span } => {
+                if self.is_readonly(name) {
+                    return Err(Error::new(
+                        *span,
+                        format!("`{name}` is a loop counter and is not a location"),
+                    ));
+                }
+                self.lookup_var(name)
+                    .ok_or_else(|| Error::new(*span, format!("unknown variable `{name}`")))
+            }
             _ => Err(Error::new(
                 target.span(),
                 "assignment target must be a name in v0",
             )),
         }
+    }
+
+    fn is_readonly(&self, name: &str) -> bool {
+        for scope in self.scopes.iter().rev() {
+            if scope.vars.contains_key(name) {
+                return scope.readonly.contains(name);
+            }
+        }
+        false
     }
 
     fn check_expr(&mut self, expr: &Expr) -> Result<Type, Error> {
@@ -1596,5 +1618,20 @@ END M;
         )
         .unwrap_err();
         assert!(error.message.contains("outside the range of the selector"));
+    }
+
+    #[test]
+    fn loop_counter_is_not_assignable() {
+        let error = check_source(
+            r#"
+M: MODULE
+  DO FOR i := 1 TO 3;
+    i := 99;
+  OD;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("loop counter and is not a location"));
     }
 }
