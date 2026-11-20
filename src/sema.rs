@@ -171,6 +171,7 @@ pub fn analyze_with_externals(
         exports,
         modes,
         module_modes,
+        module_floor: 0,
         current_module: 0,
         current_package: 0,
         current_package_name: None,
@@ -214,7 +215,7 @@ fn map_program_error(error: program::Error) -> Error {
     Error::coded(error.code, error.span, error.message)
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Scope {
     vars: HashMap<String, Type>,
     procs: HashMap<String, ProcType>,
@@ -229,6 +230,9 @@ struct Checker {
     exports: Vec<program::ExportEntry>,
     modes: crate::modes::ModeTable,
     module_modes: Vec<HashMap<String, Type>>,
+    /// Index of the current module's scope in `scopes`. Outer module scopes
+    /// below this index are hidden except through `SEIZE`.
+    module_floor: usize,
     current_module: usize,
     current_package: usize,
     current_package_name: Option<String>,
@@ -251,14 +255,19 @@ impl Checker {
     }
 
     fn check_module(&mut self, module: &Module) -> Result<(), Error> {
+        let previous_floor = self.module_floor;
         self.scopes.push(Scope::default());
+        self.module_floor = self.scopes.len() - 1;
         let result = self.check_module_body(module);
         self.scopes.pop();
+        self.module_floor = previous_floor;
         result
     }
 
     fn check_spec_module(&mut self, module: &Module) -> Result<(), Error> {
+        let previous_floor = self.module_floor;
         self.scopes.push(Scope::default());
+        self.module_floor = self.scopes.len() - 1;
         let result = (|| {
             self.apply_seizes(&module.declarations)?;
             self.preload_module_modes(module)?;
@@ -281,6 +290,7 @@ impl Checker {
             Ok(())
         })();
         self.scopes.pop();
+        self.module_floor = previous_floor;
         result
     }
 
@@ -300,6 +310,221 @@ impl Checker {
             self.labels.pop();
         }
         result
+    }
+
+    fn check_nested_module(&mut self, module: &Module) -> Result<(), Error> {
+        for declaration in &module.declarations {
+            match declaration {
+                Declaration::Visibility(visibility) if visibility.kind == VisibilityKind::Grant => {
+                    return Err(Error::new(
+                        visibility.span,
+                        "GRANT in a nested module is not supported yet",
+                    ));
+                }
+                Declaration::Proc(proc_def) => {
+                    return Err(Error::new(
+                        proc_def.span,
+                        "procedure definitions in nested modules are not supported yet",
+                    ));
+                }
+                Declaration::ProcSignature(signature) => {
+                    return Err(Error::new(
+                        signature.span,
+                        "procedure signatures in nested modules are not supported yet",
+                    ));
+                }
+                Declaration::Mode(mode) => {
+                    return Err(Error::new(
+                        mode.span,
+                        "mode definitions in nested modules are not supported yet",
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        let parent = self.scopes.last().cloned().unwrap_or_default();
+        self.check_nested_contexts(module, &parent)?;
+
+        let previous_floor = self.module_floor;
+        self.scopes.push(Scope::default());
+        self.module_floor = self.scopes.len() - 1;
+
+        let result = (|| {
+            self.apply_nested_seizes(&module.declarations, &parent)?;
+            self.collect_declarations(&module.declarations)?;
+            self.check_initializers(&module.declarations)?;
+
+            let has_label = module.name.is_some();
+            if let Some(name) = &module.name {
+                self.labels.push(name.clone());
+            }
+            let result = self.check_actions(&module.actions);
+            if has_label {
+                self.labels.pop();
+            }
+            result
+        })();
+
+        self.scopes.pop();
+        self.module_floor = previous_floor;
+        result
+    }
+
+    fn check_nested_contexts(&self, module: &Module, parent: &Scope) -> Result<(), Error> {
+        let mut names = HashSet::new();
+        for context in &module.contexts {
+            for declaration in &context.declarations {
+                match declaration {
+                    Declaration::Var(list) => {
+                        for var in list {
+                            if !names.insert(var.name.clone()) {
+                                return Err(Error::new(
+                                    var.span,
+                                    format!("duplicate context declaration `{}`", var.name),
+                                ));
+                            }
+                            let declared = self.resolve_mode(&var.mode)?;
+                            match parent.vars.get(&var.name) {
+                                Some(actual) if *actual == declared => {}
+                                Some(actual) => {
+                                    return Err(Error::new(
+                                        var.span,
+                                        format!(
+                                            "context declaration `{}` has mode {} but the enclosing reach has mode {}",
+                                            var.name,
+                                            declared.describe(),
+                                            actual.describe()
+                                        ),
+                                    ));
+                                }
+                                None => {
+                                    return Err(Error::new(
+                                        var.span,
+                                        format!(
+                                            "context declaration `{}` has no matching name in the enclosing reach",
+                                            var.name
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Declaration::ProcSignature(signature) => {
+                        if !names.insert(signature.name.clone()) {
+                            return Err(Error::new(
+                                signature.span,
+                                format!("duplicate context declaration `{}`", signature.name),
+                            ));
+                        }
+                        let declared =
+                            self.signature_from_params(&signature.params, &signature.result)?;
+                        match parent.procs.get(&signature.name) {
+                            Some(actual) if *actual == declared => {}
+                            Some(_) => {
+                                return Err(Error::new(
+                                    signature.span,
+                                    format!(
+                                        "context procedure `{}` does not match the enclosing reach",
+                                        signature.name
+                                    ),
+                                ));
+                            }
+                            None => {
+                                return Err(Error::new(
+                                    signature.span,
+                                    format!(
+                                        "context procedure `{}` has no matching name in the enclosing reach",
+                                        signature.name
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    Declaration::Mode(_) | Declaration::Visibility(_) | Declaration::Proc(_) => {
+                        return Err(Error::new(
+                            context.span,
+                            "unsupported declaration in a nested context",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_nested_seizes(
+        &mut self,
+        declarations: &[Declaration],
+        parent: &Scope,
+    ) -> Result<(), Error> {
+        for declaration in declarations {
+            let Declaration::Visibility(visibility) = declaration else {
+                continue;
+            };
+            if visibility.kind != VisibilityKind::Seize {
+                continue;
+            }
+            if visibility.prefix.is_some() {
+                return Err(Error::new(
+                    visibility.span,
+                    "prefix clauses in a nested SEIZE are not supported yet",
+                ));
+            }
+
+            if visibility.all {
+                for (name, ty) in &parent.vars {
+                    self.declare_var(name, *ty, visibility.span)?;
+                }
+                for (name, signature) in &parent.procs {
+                    self.declare_proc(name, signature.clone(), visibility.span)?;
+                }
+                for (name, ty) in &parent.modes {
+                    self.declare_mode(name, *ty, visibility.span)?;
+                }
+                continue;
+            }
+
+            for name in &visibility.names {
+                if !name.prefix.is_empty() {
+                    return Err(Error::new(
+                        name.span,
+                        "qualified names in a nested SEIZE are not supported yet",
+                    ));
+                }
+                if let Some(ty) = parent.vars.get(&name.name) {
+                    self.declare_var(&name.name, *ty, name.span)?;
+                } else if let Some(signature) = parent.procs.get(&name.name) {
+                    self.declare_proc(&name.name, signature.clone(), name.span)?;
+                } else if let Some(ty) = parent.modes.get(&name.name) {
+                    self.declare_mode(&name.name, *ty, name.span)?;
+                } else {
+                    return Err(Error::new(
+                        name.span,
+                        format!(
+                            "cannot SEIZE `{}`: no such name in the enclosing reach",
+                            name.qualified()
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn declare_mode(&mut self, name: &str, ty: Type, span: Span) -> Result<(), Error> {
+        let scope = self.scopes.last_mut().expect("scope stack is never empty");
+        if scope.vars.contains_key(name)
+            || scope.procs.contains_key(name)
+            || scope.modes.contains_key(name)
+        {
+            return Err(Error::new(
+                span,
+                format!("duplicate declaration of `{name}`"),
+            ));
+        }
+        scope.modes.insert(name.to_owned(), ty);
+        Ok(())
     }
 
     fn apply_seizes(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
@@ -573,7 +798,7 @@ impl Checker {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
-        for scope in self.scopes.iter().rev() {
+        for scope in self.scopes[self.module_floor..].iter().rev() {
             if let Some(ty) = scope.modes.get(&mode.name) {
                 return Ok(*ty);
             }
@@ -582,14 +807,14 @@ impl Checker {
     }
 
     fn lookup_var(&self, name: &str) -> Option<Type> {
-        self.scopes
+        self.scopes[self.module_floor..]
             .iter()
             .rev()
             .find_map(|scope| scope.vars.get(name).copied())
     }
 
     fn lookup_proc(&self, name: &str) -> Option<ProcType> {
-        self.scopes
+        self.scopes[self.module_floor..]
             .iter()
             .rev()
             .find_map(|scope| scope.procs.get(name).cloned())
@@ -810,6 +1035,7 @@ impl Checker {
                 result
             }
             Action::Empty { .. } => Ok(()),
+            Action::Module(module) => self.check_nested_module(module),
         }
     }
 
@@ -917,7 +1143,7 @@ impl Checker {
     }
 
     fn is_readonly(&self, name: &str) -> bool {
-        for scope in self.scopes.iter().rev() {
+        for scope in self.scopes[self.module_floor..].iter().rev() {
             if scope.vars.contains_key(name) {
                 return scope.readonly.contains(name);
             }
@@ -1611,6 +1837,146 @@ END A;
         )
         .unwrap_err();
         assert!(error.message.contains("not a field"));
+    }
+
+    #[test]
+    fn nested_module_seizes_parent_names() {
+        check_source(
+            r#"
+M: MODULE
+  DCL x INT INIT := 1;
+  Helper: MODULE
+    SEIZE x;
+    ASSERT x = 1;
+  END Helper;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_module_cannot_see_parent_names_without_seize() {
+        let error = check_source(
+            r#"
+M: MODULE
+  DCL x INT INIT := 1;
+  Helper: MODULE
+    ASSERT x = 1;
+  END Helper;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("unknown name `x`"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn nested_module_locals_do_not_escape() {
+        let error = check_source(
+            r#"
+M: MODULE
+  Helper: MODULE
+    DCL y INT;
+  END Helper;
+  y := 1;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("unknown"), "{}", error.message);
+    }
+
+    #[test]
+    fn nested_module_seize_all_imports_parent_reach() {
+        check_source(
+            r#"
+M: MODULE
+  DCL x INT INIT := 1;
+  DCL y INT INIT := 2;
+  Helper: MODULE
+    SEIZE ALL;
+    ASSERT x + y = 3;
+  END Helper;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_context_checks_the_parent_reach() {
+        check_source(
+            r#"
+M: MODULE
+  DCL x INT INIT := 1;
+  CONTEXT
+    DCL x INT;
+  FOR
+  Helper: MODULE
+    SEIZE x;
+  END Helper;
+END M;
+"#,
+        )
+        .unwrap();
+
+        let error = check_source(
+            r#"
+M: MODULE
+  DCL x INT INIT := 1;
+  CONTEXT
+    DCL x BOOL;
+  FOR
+  Helper: MODULE
+    SEIZE x;
+  END Helper;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("has mode BOOL"), "{}", error.message);
+    }
+
+    #[test]
+    fn nested_module_rejects_grant_and_local_definitions() {
+        let error = check_source(
+            r#"
+M: MODULE
+  Helper: MODULE
+    GRANT x;
+    DCL x INT;
+  END Helper;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("GRANT in a nested module"),
+            "{}",
+            error.message
+        );
+
+        let error = check_source(
+            r#"
+M: MODULE
+  Helper: MODULE
+    P: PROC ();
+    END P;
+  END Helper;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("nested modules"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

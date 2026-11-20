@@ -232,6 +232,8 @@ pub enum Action {
     Empty {
         span: Span,
     },
+    /// A module used as an action (a nested modulion).
+    Module(Box<Module>),
 }
 
 #[derive(Debug, Clone)]
@@ -357,6 +359,7 @@ impl Action {
             | Self::Labelled { span, .. }
             | Self::Begin { span, .. }
             | Self::Empty { span } => *span,
+            Self::Module(module) => module.span,
         }
     }
 }

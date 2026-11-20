@@ -76,12 +76,17 @@ See [ir.md](ir.md).
 A native or C code-generation backend remains future work; the typed IR is the intended
 input. Declarations/procedure structure and `BEGIN` declaration lists remain AST-level.
 
-## 10.10 Contexts (partially resolved)
+## 10.10 Contexts and nested modulions (partially resolved)
 
 Top-level `CONTEXT ... FOR` lists are parsed and checked. Quasi `DCL`/procedure
 signatures are validated against the grants that enter the imaginary outermost reach
 (existence, uniqueness, mode/signature match, `TO` restrictions), and contexts have no
-runtime effect. Mode definitions and visibility statements in contexts, contexts before
-nested modulions/regions, and remote pieces remain open. See [contexts.md](contexts.md).
+runtime effect. Nested body modules are supported as actions: they execute in order,
+`SEIZE` from the immediate parent reach (variables, procedures, modes), and accept
+contexts checked against that reach. `module_floor` hides parent names unless seized.
+Still open: `GRANT` in nested modules, sibling grants entering the parent reach,
+procedure/mode definitions inside nested modules, Z.200 location lifetime for nested
+modules, context visibility statements, remote pieces, and nested spec modules/regions.
+See [contexts.md](contexts.md).
 
 ---

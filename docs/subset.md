@@ -63,8 +63,11 @@ Implemented in `z200c`:
   locations and procedures;
 - `SPEC MODULE` interfaces paired with body modules, with variable and procedure
   signature matching;
-- top-level `CONTEXT ... FOR` lists with quasi variable/procedure declarations checked
-  against grants in the enclosing reach (see [contexts.md](contexts.md));
+- `CONTEXT ... FOR` lists on top-level and nested body modules, with quasi
+  variable/procedure declarations checked against the enclosing reach;
+- nested body modules executed as actions, with `SEIZE` from the immediate parent
+  reach; local `GRANT`, procedures, and mode definitions inside nested modules are not
+  implemented yet (see [contexts.md](contexts.md));
 - `z200c grant`, which writes a TOML grant file describing the package interface and
   (optionally) its source package directory;
 - loading dependency grant files from `[dependencies]` for static `SEIZE` resolution in

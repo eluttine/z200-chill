@@ -178,6 +178,7 @@ pub fn run_checked(
         locals: Vec::new(),
         call_bases: Vec::new(),
         active_module: 0,
+        module_floor: 0,
         depth: 0,
         exports,
         modes,
@@ -241,7 +242,7 @@ struct ProcRef<'a> {
     module: usize,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Scope<'a> {
     vars: HashMap<String, VarCell>,
     procs: HashMap<String, ProcRef<'a>>,
@@ -269,6 +270,8 @@ struct Interpreter<'a> {
     /// Index into `locals` at each procedure-call entry.
     call_bases: Vec<usize>,
     active_module: usize,
+    /// Lowest local scope visible in the current module.
+    module_floor: usize,
     depth: usize,
     exports: Vec<program::ExportEntry>,
     modes: Rc<crate::modes::ModeTable>,
@@ -456,7 +459,13 @@ impl<'a> Interpreter<'a> {
     }
 
     fn declare_local_vars(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
-        let mode_names = self.modules[self.active_module].modes.clone();
+        let mut mode_names = self.modules[self.active_module].modes.clone();
+        let floor = self.local_floor();
+        for scope in &self.locals[floor..] {
+            for (name, ty) in &scope.modes {
+                mode_names.insert(name.clone(), *ty);
+            }
+        }
         let modes = Rc::clone(&self.modes);
         let scope = self.locals.last_mut().expect("local scope");
         for declaration in declarations {
@@ -648,9 +657,167 @@ impl<'a> Interpreter<'a> {
                     };
                 }
                 ir::Stmt::Empty { .. } => {}
+                ir::Stmt::Module {
+                    label,
+                    declarations,
+                    actions,
+                    span,
+                } => {
+                    return self.exec_nested_module(label.as_deref(), declarations, actions, *span);
+                }
             }
         }
         Ok(Flow::Normal)
+    }
+
+    fn exec_nested_module(
+        &mut self,
+        label: Option<&str>,
+        declarations: &[Declaration],
+        actions: &[ir::Stmt],
+        _span: Span,
+    ) -> Result<Flow, Error> {
+        let parent = self.current_reach();
+        self.locals.push(Scope::default());
+        let previous_floor = self.module_floor;
+        self.module_floor = self.locals.len() - 1;
+
+        let result = (|| {
+            self.apply_nested_seizes(declarations, &parent)?;
+            self.declare_local_vars(declarations)?;
+            self.initialize_declarations(declarations)?;
+
+            let mut frame = Frame {
+                result_type: None,
+                result: None,
+            };
+            match self.exec_stmts(actions, &mut frame)? {
+                Flow::Normal | Flow::Exit(None) => Ok(Flow::Normal),
+                Flow::Exit(Some(name)) if label == Some(name.as_str()) => Ok(Flow::Normal),
+                flow => Ok(flow),
+            }
+        })();
+
+        self.module_floor = previous_floor;
+        self.locals.pop();
+        result
+    }
+
+    fn current_reach(&self) -> Scope<'a> {
+        if let Some(scope) = self.locals.last() {
+            scope.clone()
+        } else {
+            self.modules[self.active_module].clone()
+        }
+    }
+
+    fn apply_nested_seizes(
+        &mut self,
+        declarations: &[Declaration],
+        parent: &Scope<'a>,
+    ) -> Result<(), Error> {
+        for declaration in declarations {
+            let Declaration::Visibility(visibility) = declaration else {
+                continue;
+            };
+            if visibility.kind != VisibilityKind::Seize {
+                continue;
+            }
+            if visibility.prefix.is_some() {
+                return Err(Error::new(
+                    visibility.span,
+                    "prefix clauses in a nested SEIZE are not supported yet",
+                ));
+            }
+
+            if visibility.all {
+                for (name, cell) in &parent.vars {
+                    self.insert_nested_var(name, cell.clone(), visibility.span)?;
+                }
+                for (name, proc_ref) in &parent.procs {
+                    self.insert_nested_proc(name, *proc_ref, visibility.span)?;
+                }
+                for (name, ty) in &parent.modes {
+                    self.insert_nested_mode(name, *ty, visibility.span)?;
+                }
+                continue;
+            }
+
+            for name in &visibility.names {
+                if !name.prefix.is_empty() {
+                    return Err(Error::new(
+                        name.span,
+                        "qualified names in a nested SEIZE are not supported yet",
+                    ));
+                }
+                if let Some(cell) = parent.vars.get(&name.name) {
+                    self.insert_nested_var(&name.name, cell.clone(), name.span)?;
+                } else if let Some(proc_ref) = parent.procs.get(&name.name) {
+                    self.insert_nested_proc(&name.name, *proc_ref, name.span)?;
+                } else if let Some(ty) = parent.modes.get(&name.name) {
+                    self.insert_nested_mode(&name.name, *ty, name.span)?;
+                } else {
+                    return Err(Error::new(
+                        name.span,
+                        format!(
+                            "cannot SEIZE `{}`: no such name in the enclosing reach",
+                            name.qualified()
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn insert_nested_var(&mut self, name: &str, cell: VarCell, span: Span) -> Result<(), Error> {
+        let scope = self.locals.last_mut().expect("nested module scope");
+        if scope.vars.contains_key(name)
+            || scope.procs.contains_key(name)
+            || scope.modes.contains_key(name)
+        {
+            return Err(Error::new(
+                span,
+                format!("duplicate declaration of `{name}`"),
+            ));
+        }
+        scope.vars.insert(name.to_owned(), cell);
+        Ok(())
+    }
+
+    fn insert_nested_proc(
+        &mut self,
+        name: &str,
+        proc_ref: ProcRef<'a>,
+        span: Span,
+    ) -> Result<(), Error> {
+        let scope = self.locals.last_mut().expect("nested module scope");
+        if scope.vars.contains_key(name)
+            || scope.procs.contains_key(name)
+            || scope.modes.contains_key(name)
+        {
+            return Err(Error::new(
+                span,
+                format!("duplicate declaration of `{name}`"),
+            ));
+        }
+        scope.procs.insert(name.to_owned(), proc_ref);
+        Ok(())
+    }
+
+    fn insert_nested_mode(&mut self, name: &str, ty: Type, span: Span) -> Result<(), Error> {
+        let scope = self.locals.last_mut().expect("nested module scope");
+        if scope.vars.contains_key(name)
+            || scope.procs.contains_key(name)
+            || scope.modes.contains_key(name)
+        {
+            return Err(Error::new(
+                span,
+                format!("duplicate declaration of `{name}`"),
+            ));
+        }
+        scope.modes.insert(name.to_owned(), ty);
+        Ok(())
     }
 
     fn exec_do(
@@ -1190,6 +1357,12 @@ impl<'a> Interpreter<'a> {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        let floor = self.local_floor();
+        for scope in self.locals[floor..].iter().rev() {
+            if let Some(ty) = scope.modes.get(&mode.name) {
+                return Ok(*ty);
+            }
+        }
         resolve_mode_with(mode, &self.modules[self.active_module].modes)
     }
 
@@ -1297,7 +1470,8 @@ impl<'a> Interpreter<'a> {
     /// Scopes below this index belong to the caller and must not be visible
     /// to a module-level procedure body.
     fn local_floor(&self) -> usize {
-        self.call_bases.last().copied().unwrap_or(0)
+        let call_floor = self.call_bases.last().copied().unwrap_or(0);
+        call_floor.max(self.module_floor)
     }
 }
 
@@ -1567,6 +1741,59 @@ B: MODULE
   SEIZE P!a;
   ASSERT a = 1;
 END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn runs_nested_modules_and_shares_seized_locations() {
+        run_source(
+            r#"
+M: MODULE
+  DCL x INT INIT := 1;
+  Helper: MODULE
+    SEIZE x;
+    x := x + 1;
+  END Helper;
+  ASSERT x = 2;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn runs_nested_modules_with_contexts() {
+        run_source(
+            r#"
+M: MODULE
+  DCL x INT INIT := 3;
+  CONTEXT
+    DCL x INT;
+  FOR
+  Helper: MODULE
+    SEIZE x;
+    ASSERT x = 3;
+  END Helper;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_module_locals_are_scoped() {
+        run_source(
+            r#"
+M: MODULE
+  DCL x INT INIT := 5;
+  Helper: MODULE
+    DCL y INT INIT := 2;
+    ASSERT y = 2;
+  END Helper;
+  ASSERT x = 5;
+END M;
 "#,
         )
         .unwrap();

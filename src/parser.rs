@@ -114,9 +114,19 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_module(&mut self, contexts: Vec<Context>) -> Result<Module, Error> {
+        self.parse_module_named(contexts, None)
+    }
+
+    fn parse_module_named(
+        &mut self,
+        contexts: Vec<Context>,
+        preset_name: Option<String>,
+    ) -> Result<Module, Error> {
         let start = self.current_span();
 
-        let name = if self.at_identifier() && self.kind_at(1) == Some(&TokenKind::Colon) {
+        let name = if let Some(name) = preset_name {
+            Some(name)
+        } else if self.at_identifier() && self.kind_at(1) == Some(&TokenKind::Colon) {
             let (name, _) = self.expect_identifier()?;
             self.expect_colon()?;
             Some(name)
@@ -646,6 +656,18 @@ impl<'a> Parser<'a> {
             let start = self.current_span();
             let (label, _) = self.expect_identifier()?;
             self.expect_colon()?;
+            if self.at_keyword(Keyword::Module) || self.at_keyword(Keyword::Context) {
+                let contexts = self.parse_context_list()?;
+                let module = self.parse_module_named(contexts, Some(label))?;
+                if module.kind == ModuleKind::Spec {
+                    return Err(Error::coded(
+                        "E0204",
+                        module.span,
+                        "nested spec modules are not supported",
+                    ));
+                }
+                return Ok(Action::Module(Box::new(module)));
+            }
             let action = self.parse_action()?;
             return Ok(Action::Labelled {
                 label,
@@ -655,6 +677,19 @@ impl<'a> Parser<'a> {
         }
 
         match self.kind() {
+            Some(TokenKind::Keyword(Keyword::Context))
+            | Some(TokenKind::Keyword(Keyword::Module)) => {
+                let contexts = self.parse_context_list()?;
+                let module = self.parse_module_named(contexts, None)?;
+                if module.kind == ModuleKind::Spec {
+                    return Err(Error::coded(
+                        "E0204",
+                        module.span,
+                        "nested spec modules are not supported",
+                    ));
+                }
+                Ok(Action::Module(Box::new(module)))
+            }
             Some(TokenKind::Keyword(Keyword::Assert)) => self.parse_assert(),
             Some(TokenKind::Keyword(Keyword::Return)) => self.parse_return(),
             Some(TokenKind::Keyword(Keyword::Result)) => self.parse_result(),
@@ -1833,6 +1868,37 @@ END M;
         .unwrap();
         let error = parse(&tokens).unwrap_err();
         assert!(error.message.contains("context"));
+    }
+
+    #[test]
+    fn parses_nested_modules_with_contexts() {
+        let program = parse_source(
+            r#"
+M: MODULE
+  DCL x INT;
+  CONTEXT
+    DCL x INT;
+  FOR
+  Helper: MODULE
+    SEIZE x;
+  END Helper;
+  MODULE
+  END;
+END M;
+"#,
+        );
+
+        let Action::Module(helper) = &program.modules[0].actions[0] else {
+            panic!("expected nested module");
+        };
+        assert_eq!(helper.name.as_deref(), Some("Helper"));
+        assert_eq!(helper.contexts.len(), 1);
+        assert_eq!(helper.declarations.len(), 1);
+
+        assert!(matches!(
+            &program.modules[0].actions[1],
+            Action::Module(module) if module.name.is_none()
+        ));
     }
 
     #[test]

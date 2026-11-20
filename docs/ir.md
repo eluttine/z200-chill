@@ -42,7 +42,8 @@ declarations (`DCL` structure), but initializer expressions are lowered IR expre
 ## What remains AST-level
 
 - Module/procedure declaration structure, parameter lists, modes, and visibility.
-- `BEGIN` declaration lists (`DCL` statements).
+- `BEGIN` declaration lists (`DCL` statements);
+- nested module bodies (`Stmt::Module`).
 
 A native or C code-generation backend is future work. The typed expression/statement
 IR is the intended input to that backend.

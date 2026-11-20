@@ -170,6 +170,12 @@ pub enum Stmt {
     Empty {
         span: Span,
     },
+    Module {
+        label: Option<String>,
+        declarations: Vec<Declaration>,
+        actions: Vec<Stmt>,
+        span: Span,
+    },
 }
 
 #[derive(Debug)]
@@ -447,6 +453,15 @@ impl Lowerer<'_> {
                 span: *span,
             }),
             Action::Empty { span } => Ok(Stmt::Empty { span: *span }),
+            Action::Module(module) => {
+                self.lower_declarations(&module.declarations)?;
+                Ok(Stmt::Module {
+                    label: module.name.clone(),
+                    declarations: module.declarations.clone(),
+                    actions: self.lower_actions(&module.actions)?,
+                    span: module.span,
+                })
+            }
         }
     }
 

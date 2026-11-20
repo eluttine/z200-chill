@@ -1,8 +1,9 @@
 # Contexts (design)
 
-Status: **partially implemented.** Top-level context lists are parsed and checked against
-grants in the enclosing reach. Nested modulions, context visibility statements, mode
-definitions in contexts, and remote pieces remain future work.
+Status: **partially implemented.** Context lists work on top-level modules and on nested
+body modules; nested `SEIZE` resolves from the parent reach. Context visibility
+statements, mode definitions in contexts, remote pieces, and the full reach/export model
+remain future work.
 
 ## Normative model
 
@@ -69,35 +70,74 @@ END Client;
   directly enclosing group; the rest needs nested context reaches.
 - Mode definitions in contexts are rejected for now; declarations may use the built-in
   scalar modes.
-- Contexts on nested modulions/regions and names supplied by external grant files are
-  not covered yet.
+- Contexts work on top-level modules and on **nested body modules**.
+- A nested module can `SEIZE` names declared in its enclosing reach (the parent module,
+  a `BEGIN` block, or a procedure body). `SEIZE ALL` imports the whole visible reach.
+- Contexts on a nested module are checked against the parent reach.
+- Names supplied by external grant files are not covered yet.
 - `REMOTE` pieces are not implemented.
+
+## Nested-module subset
+
+Z.200 modules are actions, so a module may appear in another module's action list:
+
+```chill
+Outer: MODULE
+  DCL x INT INIT := 1;
+
+  Helper: MODULE
+    SEIZE x;
+    x := x + 1;
+  END Helper;
+
+  ASSERT x = 2;
+END Outer;
+```
+
+Implemented:
+
+- nested body modules, named or unnamed, executed in action order;
+- `SEIZE`/`SEIZE ALL` from the immediate enclosing reach, including variables,
+  procedures, and modes;
+- seized variables alias the parent location; parent procedures remain callable;
+- `module_floor` scoping: parent names are hidden unless seized, and nested locals do
+  not escape;
+- contexts on nested modules, checked against the parent reach;
+- `EXIT <module name>` from inside the module.
+
+Not implemented yet:
+
+- `GRANT` inside a nested module;
+- procedure or mode definitions inside a nested module (modes may be seized from the
+  parent);
+- prefix clauses or qualified names in a nested `SEIZE`;
+- sibling grants into the parent reach (the full reach/export model);
+- Z.200 lifetime: nested module locations are recreated each time the module action is
+  executed instead of living to the end of the closest surrounding block;
+- nested spec modules and regions.
 
 ## Why the full feature needs more
 
-The compiler still has a flat top-level module list (`Program.modules: Vec<Module>`).
-Every top-level module's enclosing reach is the imaginary outermost process, which is
-exactly where top-level `GRANT`s go; that is enough for the subset above. Full contexts
-need:
+Top-level modules now have a meaningful enclosing reach (the imaginary outermost
+process), and nested body modules have their parent reach. The remaining gap is the
+full reach/export model:
 
-1. **Nested modulions.** Modules are actions in Z.200 (§10.6), so a module can sit
-   inside another module's reach. A context list then describes the parent reach.
+1. **Nested `GRANT` and sibling visibility.** A child's grants should enter the parent
+   reach and be seizable by siblings; top-level grants should propagate outward only.
+   The current export table is still flat for top-level modules.
 2. **Piecewise/remote compilation.** A context supplies the enclosing reach from a
    separate compilation unit, with `REMOTE` replacing text.
 
 ## Remaining staged plan
 
-### Stage 1 — nested modulions and reaches
+### Stage 1 — nested modulions and reaches (partially done)
 
-- AST: allow modules/regions in action position (`Action::Module`).
-- Analysis: replace the flat module list with a module tree or parent links.
-- Visibility: `GRANT` exports into the directly enclosing reach; `SEIZE` searches that
-  reach. Module identity remains package + module name for separate compilation, but a
-  nested module's reach must be tracked separately from its name.
-- Interpreter: executing a nested module enters/leaves its reach; declarations and
-  actions behave like a top-level module.
+Done: `Action::Module`, parser/AST support, nested execution, parent-reach `SEIZE`,
+`module_floor` hiding, nested contexts.
 
-This stage is the prerequisite for everything below.
+Still to do: nested `GRANT`, sibling grants entering the parent reach, nested
+procedures/modes, nested spec modules/regions, and Z.200 location lifetime for nested
+modules.
 
 ### Stage 2 — finish quasi declarations
 
