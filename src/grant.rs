@@ -1,5 +1,4 @@
 use crate::ast::Program;
-use crate::lexer::{SourceId, Span};
 use crate::manifest::Manifest;
 use crate::program::{self, ExportInfo, ExportInfoKind};
 use crate::types::{self, Type};
@@ -25,6 +24,10 @@ pub struct GrantFile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantExport {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
     pub kind: GrantKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
@@ -44,35 +47,29 @@ pub enum GrantKind {
 impl GrantFile {
     pub fn from_package(manifest: &Manifest, program: &Program) -> Result<Self, program::Error> {
         let exports = program::exports(program)?;
-        let mut seen = std::collections::HashSet::new();
         let mut entries = Vec::with_capacity(exports.len());
 
         for export in exports {
-            if !seen.insert(export.name.clone()) {
-                let span = program
-                    .modules
-                    .first()
-                    .map(|module| module.span)
-                    .unwrap_or(Span::new(SourceId(0), 0, 0));
-                return Err(program::Error::coded(
-                    "E0406",
-                    span,
-                    format!(
-                        "cannot emit grant file: duplicate export name `{}`",
-                        export.name
-                    ),
-                ));
-            }
-            match export.kind {
+            let ExportInfo {
+                name,
+                module_name,
+                package_name,
+                kind,
+            } = export;
+            match kind {
                 ExportInfoKind::Var(ty) => entries.push(GrantExport {
-                    name: export.name,
+                    name,
+                    module: module_name,
+                    package: package_name,
                     kind: GrantKind::Variable,
                     mode: Some(type_name(ty)),
                     params: Vec::new(),
                     result: None,
                 }),
                 ExportInfoKind::Proc { params, result } => entries.push(GrantExport {
-                    name: export.name,
+                    name,
+                    module: module_name,
+                    package: package_name,
                     kind: GrantKind::Procedure,
                     mode: None,
                     params: params.into_iter().map(type_name).collect(),
@@ -137,6 +134,8 @@ impl GrantFile {
 
             infos.push(ExportInfo {
                 name: export.name.clone(),
+                module_name: export.module.clone(),
+                package_name: export.package.clone(),
                 kind,
             });
         }
@@ -169,7 +168,10 @@ mod tests {
     fn modules_package() -> (Manifest, Program) {
         let manifest = Manifest::parse(include_str!("../examples/modules/Chill.toml")).unwrap();
         let tokens = lexer::tokenize(include_str!("../examples/modules/src/main.ch")).unwrap();
-        let program = parser::parse(&tokens).unwrap();
+        let mut program = parser::parse(&tokens).unwrap();
+        for module in &mut program.modules {
+            module.package_name = Some(manifest.package.name.clone());
+        }
         (manifest, program)
     }
 
@@ -186,12 +188,59 @@ mod tests {
 
         let bump = grant.exports.iter().find(|e| e.name == "Bump").unwrap();
         assert_eq!(bump.kind, GrantKind::Procedure);
+        assert_eq!(bump.module.as_deref(), Some("Counter"));
+        assert_eq!(bump.package.as_deref(), Some("modules"));
         assert!(bump.params.is_empty());
         assert_eq!(bump.result, None);
 
         let value = grant.exports.iter().find(|e| e.name == "value").unwrap();
         assert_eq!(value.kind, GrantKind::Variable);
         assert_eq!(value.mode.as_deref(), Some("INT"));
+    }
+
+    #[test]
+    fn emits_qualified_exports_for_duplicate_simple_names() {
+        let manifest = Manifest::parse(
+            r#"
+[package]
+name = "dup"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+int_widths = "16-32-64"
+"#,
+        )
+        .unwrap();
+        let tokens = lexer::tokenize(
+            r#"
+A: MODULE
+  GRANT x;
+  DCL x INT;
+END A;
+
+B: MODULE
+  GRANT x;
+  DCL x INT;
+END B;
+"#,
+        )
+        .unwrap();
+        let mut program = parser::parse(&tokens).unwrap();
+        for module in &mut program.modules {
+            module.package_name = Some("dup".to_owned());
+        }
+        let grant = GrantFile::from_package(&manifest, &program).unwrap();
+
+        assert_eq!(grant.exports.len(), 2);
+        assert!(grant.exports.iter().all(|export| export.name == "x"));
+        assert_eq!(grant.exports[0].module.as_deref(), Some("A"));
+        assert_eq!(grant.exports[1].module.as_deref(), Some("B"));
+        assert!(grant
+            .exports
+            .iter()
+            .all(|export| export.package.as_deref() == Some("dup")));
     }
 
     #[test]

@@ -371,6 +371,71 @@ END Client;
 }
 
 #[test]
+fn check_resolves_qualified_grant_exports() {
+    let grant = z200c()
+        .arg("grant")
+        .arg(example("modules"))
+        .output()
+        .unwrap();
+    assert!(
+        grant.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&grant.stdout),
+        String::from_utf8_lossy(&grant.stderr)
+    );
+
+    let grant_path = format!(
+        "{}/examples/modules/target/z200c/modules.grt.toml",
+        env!("CARGO_MANIFEST_DIR")
+    );
+
+    let dir = std::env::temp_dir().join(format!("z200c-grant-qualified-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+
+    std::fs::write(
+        dir.join("Chill.toml"),
+        format!(
+            r#"
+[package]
+name = "client"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+int_widths = "16-32-64"
+
+[dependencies]
+modules = "{grant_path}"
+"#
+        ),
+    )
+    .unwrap();
+
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+Client: MODULE
+  SEIZE Counter!value;
+  ASSERT value = 40;
+END Client;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("check").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn duplicate_module_names_across_packages_are_allowed() {
     let base = std::env::temp_dir().join(format!("z200c-packages-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);

@@ -100,8 +100,8 @@ lib = "../lib/target/z200c/lib.grt.toml"         # interface-only dependency
 - Exported simple names may repeat across modules/packages. An unqualified `SEIZE name`
   is then ambiguous; use `Module!name` or `package!Module!name`. `GRANT ... TO ...`
   restricts visibility to named friend modules.
-- Grant-file emission uses simple names, so a package that exports duplicate simple
-  names cannot produce a grant file until export renaming/prefix output is implemented.
+- Grant files record each export's module/package names as well as its simple name, so
+  duplicate simple names can be emitted and consumed with qualified `SEIZE`.
 - Modules are identified by package plus name, so different packages may contain a
   module with the same simple name. An `EXIT ModuleName` still targets the enclosing
   module.

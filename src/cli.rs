@@ -1,4 +1,4 @@
-use crate::ast::{Declaration, Program, VisibilityKind};
+use crate::ast::Program;
 use crate::diagnostics;
 use crate::grant;
 use crate::interp;
@@ -168,41 +168,17 @@ fn run_impl(target: &Path) -> Result<(), String> {
         return Err(diagnostics::render(&package.source_map, &check.diagnostics));
     }
 
-    if let Some(name) = external_seize(&package.program, &package.external) {
-        return Err(format!(
-            "error[E0500]: cannot run `{name}`: external dependencies are not linked yet"
-        ));
-    }
-
-    interp::run_checked(&package.program, package.manifest.build.int_widths, &check).map_err(
-        |error| {
-            package
-                .source_map
-                .format_diagnostic(error.code, error.span, &error.message)
-        },
+    interp::run_checked(
+        &package.program,
+        package.manifest.build.int_widths,
+        &check,
+        &package.external,
     )
-}
-
-fn external_seize(program: &Program, external: &[program::ExportInfo]) -> Option<String> {
-    let names: HashSet<&str> = external.iter().map(|info| info.name.as_str()).collect();
-
-    for module in &program.modules {
-        for declaration in &module.declarations {
-            let Declaration::Visibility(visibility) = declaration else {
-                continue;
-            };
-            if visibility.kind != VisibilityKind::Seize {
-                continue;
-            }
-            for name in &visibility.names {
-                if names.contains(name.name.as_str()) {
-                    return Some(name.name.clone());
-                }
-            }
-        }
-    }
-
-    None
+    .map_err(|error| {
+        package
+            .source_map
+            .format_diagnostic(error.code, error.span, &error.message)
+    })
 }
 
 struct LoadedPackage {

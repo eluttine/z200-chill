@@ -101,16 +101,36 @@ pub fn run(program: &Program, profile: WidthProfile) -> Result<(), Error> {
             diagnostic.message.clone(),
         ));
     }
-    run_checked(program, profile, &check)
+    run_checked(program, profile, &check, &[])
 }
 
 pub fn run_checked(
     program: &Program,
     profile: WidthProfile,
     check: &CheckResult,
+    external: &[program::ExportInfo],
 ) -> Result<(), Error> {
     let info = program::analyze(program)
         .map_err(|error| Error::coded(error.code, error.span, error.message))?;
+    let mut exports = info.exports;
+    for info in external {
+        let kind = match &info.kind {
+            program::ExportInfoKind::Var(ty) => ExportKind::Var(*ty),
+            program::ExportInfoKind::Proc { params, result } => ExportKind::Proc(types::ProcType {
+                params: params.clone(),
+                result: *result,
+            }),
+        };
+        exports.push(program::ExportEntry {
+            module: usize::MAX,
+            package: usize::MAX,
+            package_name: info.package_name.clone(),
+            module_name: info.module_name.clone(),
+            name: info.name.clone(),
+            kind,
+            friends: None,
+        });
+    }
     let lowered = ir::lower(program, check)
         .map_err(|error| Error::coded("E0400", error.span, error.message))?;
     let mut interpreter = Interpreter {
@@ -120,7 +140,7 @@ pub fn run_checked(
         call_bases: Vec::new(),
         active_module: 0,
         depth: 0,
-        exports: info.exports,
+        exports,
         exprs: lowered.exprs,
         bodies: lowered.bodies,
     };

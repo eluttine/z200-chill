@@ -162,8 +162,8 @@ pub fn analyze_with_externals(
         exports.push(program::ExportEntry {
             module: usize::MAX,
             package: usize::MAX,
-            package_name: None,
-            module_name: None,
+            package_name: info.package_name.clone(),
+            module_name: info.module_name.clone(),
             name: info.name.clone(),
             kind,
             friends: None,

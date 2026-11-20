@@ -31,8 +31,9 @@ Visibility is static and independent of textual order:
 - `GRANT` prefix renaming, `PREFIXED`, `FORBID`, contexts, and remote pieces are not
   implemented yet.
 
-`z200c grant` emits simple names only, so a package whose modules export duplicate
-simple names cannot produce a grant file (the emitter reports the duplicate).
+`z200c grant` records each export's simple name together with its module and package
+names, so duplicate simple names can be represented. Consumers can use `Module!name` or
+`package!Module!name` when seizing from the grant file.
 
 ## SPEC modules
 
@@ -74,10 +75,14 @@ package_dir = "/absolute/path/to/spec"
 
 [[exports]]
 name = "Bump"
+module = "Counter"
+package = "spec"
 kind = "procedure"
 
 [[exports]]
 name = "value"
+module = "Counter"
+package = "spec"
 kind = "variable"
 mode = "INT"
 ```
@@ -110,6 +115,8 @@ lib = "../lib/target/z200c/lib.grt.toml"
 
 - Interface-only grant files are static: `check` and `grant` use their interfaces, but
   `run` cannot link them without a source package.
-- Exported names are globally simple names; prefixes (`module!name`) and export
-  namespacing are not implemented.
-- `GRANT ALL`, `FORBID`, `TO`, contexts, and remote pieces are not implemented.
+- `GRANT` prefix renaming/`PREFIXED` and `FORBID` are not implemented.
+- `TO` friend restrictions are enforced inside a linked program but are not recorded in
+  emitted grant files, so an external grant-file interface is visible to all consumers.
+- Contexts, remote pieces, and symbol mangling for native code generation are not
+  implemented.

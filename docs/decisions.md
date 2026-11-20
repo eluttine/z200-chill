@@ -34,9 +34,10 @@ that records `package_dir` is also source-linked for `run`. Dependencies and the
 must share edition and width profile. Modules are identified by package plus simple name,
 so different packages may contain a module with the same name. `SEIZE` supports
 `Module!name` and `package!Module!name`, plus `GRANT ALL`/`SEIZE ALL` and `TO` friend
-restrictions. Still open: `GRANT` prefix renaming, `PREFIXED`, `FORBID`, qualified names
-in emitted grant files, and symbol mangling for a code-generation backend. Z.200 permits
-several piecewise schemes (§10.10).
+restrictions. Emitted grant files record each export's module/package names, so
+qualified external seizes work. Still open: `GRANT` prefix renaming, `PREFIXED`,
+`FORBID`, persisting `TO` restrictions in grant files, and symbol mangling for a
+code-generation backend. Z.200 permits several piecewise schemes (§10.10).
 
 ## 10.7 Multi-file packages (resolved)
 

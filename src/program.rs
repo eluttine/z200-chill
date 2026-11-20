@@ -160,6 +160,8 @@ pub fn resolve_export<'a>(
 #[derive(Debug, Clone)]
 pub struct ExportInfo {
     pub name: String,
+    pub module_name: Option<String>,
+    pub package_name: Option<String>,
     pub kind: ExportInfoKind,
 }
 
@@ -261,18 +263,28 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
     let mut exports: Vec<ExportInfo> = analyze(program)?
         .exports
         .into_iter()
-        .map(|export| ExportInfo {
-            name: export.name,
-            kind: match export.kind {
+        .map(|export| {
+            let kind = match export.kind {
                 ExportKind::Var(ty) => ExportInfoKind::Var(ty),
                 ExportKind::Proc(signature) => ExportInfoKind::Proc {
                     params: signature.params,
                     result: signature.result,
                 },
-            },
+            };
+            ExportInfo {
+                name: export.name,
+                module_name: export.module_name,
+                package_name: export.package_name,
+                kind,
+            }
         })
         .collect();
-    exports.sort_by(|left, right| left.name.cmp(&right.name));
+    exports.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.package_name.cmp(&right.package_name))
+            .then_with(|| left.module_name.cmp(&right.module_name))
+    });
     Ok(exports)
 }
 
