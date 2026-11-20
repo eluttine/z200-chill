@@ -33,4 +33,5 @@ z200-chill/
 │   ├── multifile/      # Manifest `sources` example
 │   ├── liblocal/       # Dependency package used by `app`
 │   └── app/            # Directory-dependency linking example
-└── docs/               # subset.md, manifest.md, grant-file.md, diagnostics.md, ir.md, decisions.md
+└── docs/               # subset.md, manifest.md, grant-file.md, diagnostics.md, ir.md,
+                        # contexts.md, decisions.md
