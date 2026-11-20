@@ -38,9 +38,10 @@ restrictions. Emitted grant files record each export's module/package names, so
 qualified external seizes work. `GRANT ... PREFIXED ...` and prefix-rename clauses with
 an empty old prefix are implemented, including in emitted grant files. Structure modes
 and static `FORBID (fields)` / `FORBID ALL` are implemented for internal `GRANT`/`SEIZE`.
-Still open: non-empty old prefixes, `SEIZE ... PREFIXED ...`, structure values at run
-time, mode exports in grant files, persisting `TO` restrictions in grant files, and
-symbol mangling for a code-generation backend. Z.200 permits several piecewise schemes
+Structure values are interpreted with field assignment, nested fields, and copy
+semantics. Still open: non-empty old prefixes, `SEIZE ... PREFIXED ...`, mode exports in
+grant files, persisting `TO` restrictions in grant files, and symbol mangling for a
+code-generation backend. Z.200 permits several piecewise schemes
 (§10.10).
 
 ## 10.7 Multi-file packages (resolved)

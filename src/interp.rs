@@ -112,6 +112,12 @@ pub fn run_checked(
 ) -> Result<(), Error> {
     let info = program::analyze(program)
         .map_err(|error| Error::coded(error.code, error.span, error.message))?;
+    let module_modes: Vec<HashMap<String, Type>> = info
+        .interfaces
+        .iter()
+        .map(|interface| interface.modes.clone())
+        .collect();
+    let modes = Rc::new(info.modes);
     let mut exports = info.exports;
     for info in external {
         let kind = match &info.kind {
@@ -132,6 +138,47 @@ pub fn run_checked(
             friends: None,
         });
     }
+    // A module may use a seized structure mode in its declarations, so resolve
+    // mode seizes before any variable is declared.
+    let mut module_modes = module_modes;
+    for (index, module) in program.modules.iter().enumerate() {
+        if module.kind == ModuleKind::Spec {
+            continue;
+        }
+        let package_name = module.package_name.as_deref();
+        let module_name = module.name.as_deref();
+        for declaration in &module.declarations {
+            let Declaration::Visibility(visibility) = declaration else {
+                continue;
+            };
+            if visibility.kind != VisibilityKind::Seize {
+                continue;
+            }
+            if visibility.all {
+                for export in exports
+                    .iter()
+                    .filter(|export| export.module != index)
+                    .filter(|export| export.is_accessible_to(package_name, module_name))
+                {
+                    if let ExportKind::Mode(id) = export.kind {
+                        module_modes[index].insert(export.name.clone(), Type::Struct(id));
+                    }
+                }
+            } else {
+                for name in &visibility.names {
+                    let Ok(export) =
+                        program::resolve_export(&exports, name, package_name, module_name)
+                    else {
+                        continue;
+                    };
+                    if let ExportKind::Mode(id) = export.kind {
+                        module_modes[index].insert(name.name.clone(), Type::Struct(id));
+                    }
+                }
+            }
+        }
+    }
+
     let lowered = ir::lower(program, check)
         .map_err(|error| Error::coded("E0400", error.span, error.message))?;
     let mut interpreter = Interpreter {
@@ -142,6 +189,8 @@ pub fn run_checked(
         active_module: 0,
         depth: 0,
         exports,
+        modes,
+        module_modes,
         exprs: lowered.exprs,
         bodies: lowered.bodies,
     };
@@ -168,6 +217,7 @@ enum Value {
     Bool(bool),
     Char(char),
     String(String),
+    Struct(Vec<(String, Value)>),
 }
 
 struct Var {
@@ -176,6 +226,23 @@ struct Var {
 }
 
 type VarCell = Rc<RefCell<Var>>;
+
+#[derive(Clone, Copy)]
+enum ImportKind {
+    Var,
+    Proc,
+    Mode,
+}
+
+impl ImportKind {
+    fn of(kind: &ExportKind) -> Self {
+        match kind {
+            ExportKind::Var(_) => Self::Var,
+            ExportKind::Proc(_) => Self::Proc,
+            ExportKind::Mode(_) => Self::Mode,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct ProcRef<'a> {
@@ -187,6 +254,7 @@ struct ProcRef<'a> {
 struct Scope<'a> {
     vars: HashMap<String, VarCell>,
     procs: HashMap<String, ProcRef<'a>>,
+    modes: HashMap<String, Type>,
 }
 
 struct Frame {
@@ -212,6 +280,8 @@ struct Interpreter<'a> {
     active_module: usize,
     depth: usize,
     exports: Vec<program::ExportEntry>,
+    modes: Rc<crate::modes::ModeTable>,
+    module_modes: Vec<HashMap<String, Type>>,
     exprs: ir::ExprTable,
     bodies: ir::BodyTable,
 }
@@ -219,9 +289,14 @@ struct Interpreter<'a> {
 impl<'a> Interpreter<'a> {
     fn declare_modules(&mut self, program: &'a Program) -> Result<(), Error> {
         for (index, module) in program.modules.iter().enumerate() {
-            let mut scope = Scope::default();
+            let mode_names = self.module_modes[index].clone();
+            let modes = Rc::clone(&self.modes);
+            let mut scope = Scope {
+                modes: mode_names.clone(),
+                ..Scope::default()
+            };
             if module.kind == ModuleKind::Body {
-                declare_into_scope(&mut scope, &module.declarations, index)?;
+                declare_into_scope(&mut scope, &module.declarations, index, &mode_names, &modes)?;
             }
             self.modules.push(scope);
         }
@@ -285,7 +360,7 @@ impl<'a> Interpreter<'a> {
                             export.name.clone(),
                             visibility.span,
                             export.module,
-                            matches!(&export.kind, ExportKind::Proc(_)),
+                            ImportKind::of(&export.kind),
                         ));
                     }
                     continue;
@@ -317,45 +392,44 @@ impl<'a> Interpreter<'a> {
                         name.name.clone(),
                         name.span,
                         export.module,
-                        matches!(&export.kind, ExportKind::Proc(_)),
+                        ImportKind::of(&export.kind),
                     ));
                 }
             }
         }
 
-        for (current, name, span, source, is_proc) in imports {
-            if is_proc {
-                let proc_ref = *self.modules[source].procs.get(&name).ok_or_else(|| {
-                    Error::new(span, format!("cannot SEIZE `{name}`: not a procedure"))
-                })?;
-                if self.modules[current]
-                    .procs
-                    .insert(name.clone(), proc_ref)
-                    .is_some()
-                {
-                    return Err(Error::new(
-                        span,
-                        format!("duplicate declaration of `{name}`"),
-                    ));
-                }
-            } else {
-                let cell = self.modules[source]
-                    .vars
-                    .get(&name)
-                    .cloned()
-                    .ok_or_else(|| {
-                        Error::new(span, format!("cannot SEIZE `{name}`: not a location"))
+        for (current, name, span, source, kind) in imports {
+            let duplicate = match kind {
+                ImportKind::Proc => {
+                    let proc_ref = *self.modules[source].procs.get(&name).ok_or_else(|| {
+                        Error::new(span, format!("cannot SEIZE `{name}`: not a procedure"))
                     })?;
-                if self.modules[current]
-                    .vars
-                    .insert(name.clone(), cell)
-                    .is_some()
-                {
-                    return Err(Error::new(
-                        span,
-                        format!("duplicate declaration of `{name}`"),
-                    ));
+                    self.modules[current]
+                        .procs
+                        .insert(name.clone(), proc_ref)
+                        .is_some()
                 }
+                ImportKind::Var => {
+                    let cell = self.modules[source]
+                        .vars
+                        .get(&name)
+                        .cloned()
+                        .ok_or_else(|| {
+                            Error::new(span, format!("cannot SEIZE `{name}`: not a location"))
+                        })?;
+                    self.modules[current]
+                        .vars
+                        .insert(name.clone(), cell)
+                        .is_some()
+                }
+                // Mode seizes are installed before declarations are collected.
+                ImportKind::Mode => false,
+            };
+            if duplicate {
+                return Err(Error::new(
+                    span,
+                    format!("duplicate declaration of `{name}`"),
+                ));
             }
         }
 
@@ -379,17 +453,21 @@ impl<'a> Interpreter<'a> {
 
     fn declare_local(&mut self, declarations: &'a [Declaration]) -> Result<(), Error> {
         let module = self.active_module;
+        let mode_names = self.module_modes[module].clone();
+        let modes = Rc::clone(&self.modes);
         let scope = self.locals.last_mut().expect("local scope");
-        declare_into_scope(scope, declarations, module)
+        declare_into_scope(scope, declarations, module, &mode_names, &modes)
     }
 
     fn declare_local_vars(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
+        let mode_names = self.modules[self.active_module].modes.clone();
+        let modes = Rc::clone(&self.modes);
         let scope = self.locals.last_mut().expect("local scope");
         for declaration in declarations {
             match declaration {
                 Declaration::Var(vars) => {
                     for var in vars {
-                        let ty = mode_type(&var.mode)?;
+                        let ty = resolve_mode_with(&var.mode, &mode_names)?;
                         if scope.vars.contains_key(&var.name) || scope.procs.contains_key(&var.name)
                         {
                             return Err(Error::new(
@@ -401,7 +479,7 @@ impl<'a> Interpreter<'a> {
                             var.name.clone(),
                             Rc::new(RefCell::new(Var {
                                 ty,
-                                value: Value::Undefined,
+                                value: default_value(&modes, ty),
                             })),
                         );
                     }
@@ -448,7 +526,7 @@ impl<'a> Interpreter<'a> {
         for stmt in stmts {
             match stmt {
                 ir::Stmt::Assign {
-                    name,
+                    target,
                     op,
                     value,
                     span,
@@ -456,9 +534,9 @@ impl<'a> Interpreter<'a> {
                     let value = if *op == AssignOp::Assign {
                         self.eval_ir(value)?
                     } else {
-                        let current = self.read_var(name, *span)?;
+                        let current = self.read_target(target, *span)?;
                         let right = self.eval_ir(value)?;
-                        let target_ty = self.var_type(name, *span)?;
+                        let target_ty = self.target_type(target, *span)?;
                         self.apply_binary(
                             binary_for_assign(*op),
                             current,
@@ -467,7 +545,7 @@ impl<'a> Interpreter<'a> {
                             *span,
                         )?
                     };
-                    self.assign_var(name, value, *span)?;
+                    self.assign_target(target, value, *span)?;
                 }
                 ir::Stmt::Assert { condition, span } => {
                     let value = self.eval_ir(condition)?;
@@ -780,6 +858,12 @@ impl<'a> Interpreter<'a> {
                     UnaryOp::Not => Ok(Value::Bool(!self.as_bool(value, *span)?)),
                 }
             }
+            ir::Expr::Field {
+                base, field, span, ..
+            } => {
+                let value = self.eval_ir(base)?;
+                read_field(value, field, *span)
+            }
             ir::Expr::Binary {
                 op,
                 left,
@@ -846,7 +930,7 @@ impl<'a> Interpreter<'a> {
         span: Span,
     ) -> Result<Value, Error> {
         for (param, arg) in proc_def.params.iter().zip(args) {
-            let ty = mode_type(&param.mode)?;
+            let ty = self.resolve_mode(&param.mode)?;
             let value = self.convert(arg, ty, param.span)?;
             let scope = self.locals.last_mut().expect("local scope");
             if scope.vars.contains_key(&param.name) || scope.procs.contains_key(&param.name) {
@@ -864,7 +948,7 @@ impl<'a> Interpreter<'a> {
         self.initialize_declarations(&proc_def.declarations)?;
 
         let result_type = match &proc_def.result {
-            Some(mode) => Some(mode_type(mode)?),
+            Some(mode) => Some(self.resolve_mode(mode)?),
             None => None,
         };
 
@@ -1078,20 +1162,68 @@ impl<'a> Interpreter<'a> {
                 Value::String(value) => Ok(Value::String(value)),
                 _ => Err(Error::new(span, "expected a character string value")),
             },
-            Type::Struct(_) => Err(Error::new(
-                span,
-                "structure values are not implemented in the interpreter yet",
-            )),
+            Type::Struct(_) => match value {
+                Value::Struct(_) => Ok(value),
+                _ => Err(Error::new(span, "expected a structure value")),
+            },
             Type::IntLiteral => Err(Error::new(span, "internal: cannot declare a literal type")),
         }
     }
 
-    fn var_type(&self, name: &str, span: Span) -> Result<Type, Error> {
+    fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        resolve_mode_with(mode, &self.modules[self.active_module].modes)
+    }
+
+    fn target_type(&self, target: &ir::AssignTarget, span: Span) -> Result<Type, Error> {
+        match target {
+            ir::AssignTarget::Var(name) => {
+                let cell = self
+                    .find_var_cell(name)
+                    .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+                let ty = cell.borrow().ty;
+                Ok(ty)
+            }
+            ir::AssignTarget::Field { ty, .. } => Ok(*ty),
+        }
+    }
+
+    fn read_target(&self, target: &ir::AssignTarget, span: Span) -> Result<Value, Error> {
+        match target {
+            ir::AssignTarget::Var(name) => self.read_var(name, span),
+            ir::AssignTarget::Field { root, path, .. } => self.read_field_path(root, path, span),
+        }
+    }
+
+    fn read_field_path(&self, root: &str, path: &[String], span: Span) -> Result<Value, Error> {
         let cell = self
-            .find_var_cell(name)
-            .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
-        let ty = cell.borrow().ty;
-        Ok(ty)
+            .find_var_cell(root)
+            .ok_or_else(|| Error::new(span, format!("unknown variable `{root}`")))?;
+        let value = match &cell.borrow().value {
+            Value::Undefined => {
+                return Err(Error::new(span, format!("use of undefined value `{root}`")));
+            }
+            value => value.clone(),
+        };
+        read_path(value, path, span)
+    }
+
+    fn assign_target(
+        &mut self,
+        target: &ir::AssignTarget,
+        value: Value,
+        span: Span,
+    ) -> Result<(), Error> {
+        match target {
+            ir::AssignTarget::Var(name) => self.assign_var(name, value, span),
+            ir::AssignTarget::Field { root, path, ty } => {
+                let value = self.convert(value, *ty, span)?;
+                let cell = self
+                    .find_var_cell(root)
+                    .ok_or_else(|| Error::new(span, format!("unknown variable `{root}`")))?;
+                let mut var = cell.borrow_mut();
+                assign_path(&mut var.value, path, value, span)
+            }
+        }
     }
 
     fn read_var(&self, name: &str, span: Span) -> Result<Value, Error> {
@@ -1154,12 +1286,14 @@ fn declare_into_scope<'a>(
     scope: &mut Scope<'a>,
     declarations: &'a [Declaration],
     module: usize,
+    mode_names: &HashMap<String, Type>,
+    modes: &crate::modes::ModeTable,
 ) -> Result<(), Error> {
     for declaration in declarations {
         match declaration {
             Declaration::Var(vars) => {
                 for var in vars {
-                    let ty = mode_type(&var.mode)?;
+                    let ty = resolve_mode_with(&var.mode, mode_names)?;
                     if scope.vars.contains_key(&var.name) || scope.procs.contains_key(&var.name) {
                         return Err(Error::new(
                             var.span,
@@ -1170,7 +1304,7 @@ fn declare_into_scope<'a>(
                         var.name.clone(),
                         Rc::new(RefCell::new(Var {
                             ty,
-                            value: Value::Undefined,
+                            value: default_value(modes, ty),
                         })),
                     );
                 }
@@ -1198,9 +1332,70 @@ fn declare_into_scope<'a>(
     Ok(())
 }
 
-fn mode_type(mode: &ModeRef) -> Result<Type, Error> {
-    types::resolve_mode(&mode.name)
+fn read_field(value: Value, field: &str, span: Span) -> Result<Value, Error> {
+    let Value::Struct(fields) = value else {
+        return Err(Error::new(span, "expected a structure value"));
+    };
+    let Some((_, value)) = fields.iter().find(|(name, _)| name == field) else {
+        return Err(Error::new(span, format!("unknown field `{field}`")));
+    };
+    match value {
+        Value::Undefined => Err(Error::new(
+            span,
+            format!("use of undefined value `{field}`"),
+        )),
+        value => Ok(value.clone()),
+    }
+}
+
+fn read_path(value: Value, path: &[String], span: Span) -> Result<Value, Error> {
+    let mut value = value;
+    for field in path {
+        value = read_field(value, field, span)?;
+    }
+    Ok(value)
+}
+
+fn assign_path(
+    value: &mut Value,
+    path: &[String],
+    new_value: Value,
+    span: Span,
+) -> Result<(), Error> {
+    let Value::Struct(fields) = value else {
+        return Err(Error::new(span, "expected a structure value"));
+    };
+    let Some((_, slot)) = fields.iter_mut().find(|(name, _)| name == &path[0]) else {
+        return Err(Error::new(span, format!("unknown field `{}`", path[0])));
+    };
+    if path.len() == 1 {
+        *slot = new_value;
+        Ok(())
+    } else {
+        assign_path(slot, &path[1..], new_value, span)
+    }
+}
+
+fn resolve_mode_with(mode: &ModeRef, mode_names: &HashMap<String, Type>) -> Result<Type, Error> {
+    mode_names
+        .get(&mode.name)
+        .copied()
+        .or_else(|| types::resolve_mode(&mode.name))
         .ok_or_else(|| Error::new(mode.span, format!("unknown mode `{}`", mode.name)))
+}
+
+fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
+    match ty {
+        Type::Struct(id) => Value::Struct(
+            modes
+                .get(id)
+                .fields
+                .iter()
+                .map(|field| (field.name.clone(), default_value(modes, field.ty)))
+                .collect(),
+        ),
+        _ => Value::Undefined,
+    }
 }
 
 fn binary_for_assign(op: AssignOp) -> BinaryOp {
@@ -1511,5 +1706,118 @@ END M;
 "#,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn structure_fields_can_be_assigned_and_read() {
+        run_source(
+            r#"
+M: MODULE
+  NEWMODE S = STRUCT(x INT, y BOOL);
+  DCL s S;
+  s.x := 2;
+  s.y := TRUE;
+  ASSERT s.x = 2;
+  ASSERT s.y;
+  s.x := s.x + 3;
+  ASSERT s.x = 5;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_structure_fields_and_whole_value_copy() {
+        run_source(
+            r#"
+M: MODULE
+  NEWMODE Inner = STRUCT(v INT);
+  NEWMODE Outer = STRUCT(inner Inner, tag BOOL);
+  DCL a Outer, b Outer;
+  a.inner.v := 7;
+  a.tag := TRUE;
+  b := a;
+  b.inner.v := 9;
+  ASSERT a.inner.v = 7;
+  ASSERT b.inner.v = 9;
+  ASSERT b.tag;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn seized_structure_mode_is_usable_at_runtime() {
+        run_source(
+            r#"
+A: MODULE
+  NEWMODE S = STRUCT(x INT);
+  GRANT S;
+END A;
+
+B: MODULE
+  SEIZE S;
+  DCL s S;
+  s.x := 4;
+  ASSERT s.x = 4;
+END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn procedures_can_return_structures() {
+        run_source(
+            r#"
+M: MODULE
+  NEWMODE S = STRUCT(x INT);
+
+  Make: PROC () RETURNS (S);
+    DCL tmp S;
+    tmp.x := 11;
+    RETURN tmp;
+  END Make;
+
+  DCL s S INIT := Make();
+  ASSERT s.x = 11;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn structure_field_compound_assignment() {
+        run_source(
+            r#"
+M: MODULE
+  NEWMODE S = STRUCT(x INT);
+  DCL s S;
+  s.x := 1;
+  s.x +:= 2;
+  ASSERT s.x = 3;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn undefined_structure_field_is_reported() {
+        let error = run_source(
+            r#"
+M: MODULE
+  NEWMODE S = STRUCT(x INT);
+  DCL s S;
+  ASSERT s.x = 1;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "E0504");
+        assert!(error.message.contains("undefined value `x`"));
     }
 }

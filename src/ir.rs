@@ -62,6 +62,12 @@ pub enum Expr {
         ty: Type,
         span: Span,
     },
+    Field {
+        base: Node,
+        field: String,
+        ty: Type,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -75,7 +81,8 @@ impl Expr {
             | Self::Conversion { span, .. }
             | Self::Call { span, .. }
             | Self::Unary { span, .. }
-            | Self::Binary { span, .. } => *span,
+            | Self::Binary { span, .. }
+            | Self::Field { span, .. } => *span,
         }
     }
 
@@ -88,16 +95,28 @@ impl Expr {
             | Self::Name { ty, .. }
             | Self::Conversion { ty, .. }
             | Self::Unary { ty, .. }
-            | Self::Binary { ty, .. } => Some(*ty),
+            | Self::Binary { ty, .. }
+            | Self::Field { ty, .. } => Some(*ty),
             Self::Call { ty, .. } => *ty,
         }
     }
 }
 
+/// An assignment location: a variable, or a field path rooted at a variable.
+#[derive(Debug)]
+pub enum AssignTarget {
+    Var(String),
+    Field {
+        root: String,
+        path: Vec<String>,
+        ty: Type,
+    },
+}
+
 #[derive(Debug)]
 pub enum Stmt {
     Assign {
-        name: String,
+        target: AssignTarget,
         op: crate::ast::AssignOp,
         value: Node,
         span: Span,
@@ -300,20 +319,12 @@ impl Lowerer<'_> {
                 op,
                 value,
                 span,
-            } => {
-                let AstExpr::Name { name, .. } = target else {
-                    return Err(Error::new(
-                        target.span(),
-                        "structure field assignment is not implemented in the interpreter yet",
-                    ));
-                };
-                Ok(Stmt::Assign {
-                    name: name.clone(),
-                    op: *op,
-                    value: self.lower_expr(value)?,
-                    span: *span,
-                })
-            }
+            } => Ok(Stmt::Assign {
+                target: self.lower_target(target)?,
+                op: *op,
+                value: self.lower_expr(value)?,
+                span: *span,
+            }),
             Action::Assert { condition, span } => Ok(Stmt::Assert {
                 condition: self.lower_expr(condition)?,
                 span: *span,
@@ -439,6 +450,33 @@ impl Lowerer<'_> {
         }
     }
 
+    fn lower_target(&mut self, target: &AstExpr) -> Result<AssignTarget, Error> {
+        match target {
+            AstExpr::Name { name, .. } => Ok(AssignTarget::Var(name.clone())),
+            AstExpr::Field { .. } => {
+                let ty = self
+                    .check
+                    .types
+                    .get(&target.span())
+                    .copied()
+                    .ok_or_else(|| {
+                        Error::new(target.span(), "internal: field has no checked mode")
+                    })?;
+                let (root, path) = flatten_field(target).ok_or_else(|| {
+                    Error::new(
+                        target.span(),
+                        "assignment target must be a variable or a field of a variable",
+                    )
+                })?;
+                Ok(AssignTarget::Field { root, path, ty })
+            }
+            _ => Err(Error::new(
+                target.span(),
+                "assignment target must be a variable or a field of a variable",
+            )),
+        }
+    }
+
     fn lower_expr(&mut self, expr: &AstExpr) -> Result<Node, Error> {
         let span = expr.span();
 
@@ -536,15 +574,28 @@ impl Lowerer<'_> {
                 })
             }
             AstExpr::Apply { .. } => unreachable!("handled above"),
-            AstExpr::Field { span, .. } => {
-                return Err(Error::new(
-                    *span,
-                    "structure field access is not implemented in the interpreter yet",
-                ));
-            }
+            AstExpr::Field { base, field, .. } => Rc::new(Expr::Field {
+                base: self.lower_expr(base)?,
+                field: field.clone(),
+                ty,
+                span,
+            }),
         };
 
         self.exprs.insert(&lowered);
         Ok(lowered)
+    }
+}
+
+/// Flatten `a.b.c` into root `a` and path `["b", "c"]`.
+fn flatten_field(expr: &AstExpr) -> Option<(String, Vec<String>)> {
+    match expr {
+        AstExpr::Name { name, .. } => Some((name.clone(), Vec::new())),
+        AstExpr::Field { base, field, .. } => {
+            let (root, mut path) = flatten_field(base)?;
+            path.push(field.clone());
+            Some((root, path))
+        }
+        _ => None,
     }
 }

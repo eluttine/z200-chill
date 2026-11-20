@@ -130,9 +130,9 @@ lib = "../lib/target/z200c/lib.grt.toml"
   `run` cannot link them without a source package.
 - `SEIZE ... PREFIXED ...` and non-empty old prefixes in rename clauses are not
   implemented.
-- Structure modes are checked statically. Field access in the interpreter and mode
-  exports in grant files are not implemented yet; `z200c run` reports a clear error when
-  structure field access is reached, and `z200c grant` omits mode exports.
+- Structure modes and field access are supported inside a linked program, including
+  seized modes. Grant files cannot represent mode definitions yet, so `z200c grant`
+  omits mode exports and external packages cannot seize a structure mode.
 - `TO` friend restrictions are enforced inside a linked program but are not recorded in
   emitted grant files, so an external grant-file interface is visible to all consumers.
 - Contexts, remote pieces, and symbol mangling for native code generation are not

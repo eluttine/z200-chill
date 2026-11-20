@@ -406,14 +406,12 @@ impl Checker {
                 }
                 Declaration::Proc(proc_def) => {
                     let signature =
-                        program::signature_from_params(&proc_def.params, &proc_def.result)
-                            .map_err(map_program_error)?;
+                        self.signature_from_params(&proc_def.params, &proc_def.result)?;
                     self.declare_proc(&proc_def.name, signature, proc_def.span)?;
                 }
                 Declaration::ProcSignature(signature) => {
                     let proc_sig =
-                        program::signature_from_params(&signature.params, &signature.result)
-                            .map_err(map_program_error)?;
+                        self.signature_from_params(&signature.params, &signature.result)?;
                     self.declare_proc(&signature.name, proc_sig, signature.span)?;
                 }
                 Declaration::Mode(_) => {}
@@ -543,6 +541,32 @@ impl Checker {
             scope.modes.insert(name, ty);
         }
         Ok(())
+    }
+
+    fn signature_from_params(
+        &self,
+        params: &[Param],
+        result: &Option<ModeRef>,
+    ) -> Result<ProcType, Error> {
+        let mut param_types = Vec::with_capacity(params.len());
+        let mut seen = HashSet::new();
+        for param in params {
+            if !seen.insert(param.name.clone()) {
+                return Err(Error::new(
+                    param.span,
+                    format!("duplicate parameter `{}`", param.name),
+                ));
+            }
+            param_types.push(self.resolve_mode(&param.mode)?);
+        }
+        let result = match result {
+            Some(mode) => Some(self.resolve_mode(mode)?),
+            None => None,
+        };
+        Ok(ProcType {
+            params: param_types,
+            result,
+        })
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
@@ -821,7 +845,22 @@ impl Checker {
 
     fn location_type(&mut self, target: &Expr) -> Result<Type, Error> {
         match target {
-            Expr::Field { base, field, span } => self.check_field(base, field, *span),
+            Expr::Field { base, field, span } => {
+                let Some(root) = field_root(target) else {
+                    return Err(Error::new(
+                        *span,
+                        "assignment target must be a variable or a field of a variable",
+                    ));
+                };
+                if self.is_readonly(root) {
+                    return Err(Error::new(
+                        *span,
+                        format!("`{root}` is a loop counter and is not a location"),
+                    ));
+                }
+                let ty = self.check_field(base, field, *span)?;
+                Ok(ty)
+            }
             Expr::Name { name, span } => {
                 if self.is_readonly(name) {
                     return Err(Error::new(
@@ -840,14 +879,6 @@ impl Checker {
     }
 
     fn check_field(&mut self, base: &Expr, field: &str, span: Span) -> Result<Type, Error> {
-        if let Expr::Name { name, .. } = base {
-            if self.is_readonly(name) {
-                return Err(Error::new(
-                    span,
-                    format!("`{name}` is a loop counter and is not a location"),
-                ));
-            }
-        }
         let base_ty = self.check_expr(base)?;
         let Type::Struct(id) = base_ty else {
             return Err(Error::new(
@@ -1235,6 +1266,14 @@ impl Checker {
             ));
         }
         Ok(())
+    }
+}
+
+fn field_root(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Name { name, .. } => Some(name),
+        Expr::Field { base, .. } => field_root(base),
+        _ => None,
     }
 }
 

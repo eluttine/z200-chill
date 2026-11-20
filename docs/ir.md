@@ -47,9 +47,10 @@ declarations (`DCL` structure), but initializer expressions are lowered IR expre
 A native or C code-generation backend is future work. The typed expression/statement
 IR is the intended input to that backend.
 
-Structure modes and field selection are currently a static feature only: the checker
-validates modes and `FORBID`, but the interpreter has no structure values or field
-assignment yet and reports a clear error when field access is reached.
+Structure values are represented as ordered field/value pairs. Field selection lowers to
+`Expr::Field`; assignments lower to `AssignTarget::Field` with a root variable and field
+path, so the interpreter mutates the variable in place. Assignment and `IN` argument
+passing copy the whole value, including nested structures.
 
 ## Runtime checks
 

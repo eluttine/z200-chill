@@ -145,9 +145,11 @@ literals and conversions are typed.
   `GRANT S FORBID (field, ...)` / `FORBID ALL` prevents field selection outside the
   defining module (see [grant-file.md](grant-file.md)).
 
-Structure modes are statically checked in v0. Runtime structure values and field access
-are not implemented in the interpreter yet; `z200c run` reports a clear error when field
-access is reached.
+Structure values are fully interpreted: field selection and assignment (including nested
+fields), whole-value assignment with copy semantics, `IN` parameters, results, and
+initialization from another structure value. Fields start undefined and reading one
+before assignment is an error. There are no structure literals in the v0 subset, and
+structure comparison is not defined.
 
 For `v0`, assign the implementation-defined integer mode names directly rather than
 requiring the user to write `NEWMODE` declarations.

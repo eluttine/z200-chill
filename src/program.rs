@@ -455,7 +455,11 @@ pub fn collect_interface(
                 }
             }
             Declaration::Proc(proc_def) => {
-                let signature = match signature_from_params(&proc_def.params, &proc_def.result) {
+                let signature = match signature_from_params_with(
+                    &proc_def.params,
+                    &proc_def.result,
+                    mode_names,
+                ) {
                     Ok(signature) => signature,
                     Err(_) if has_seized_mode(&proc_def.params, &proc_def.result, &seized) => {
                         continue
@@ -475,7 +479,11 @@ pub fn collect_interface(
                 }
             }
             Declaration::ProcSignature(signature) => {
-                let proc_sig = match signature_from_params(&signature.params, &signature.result) {
+                let proc_sig = match signature_from_params_with(
+                    &signature.params,
+                    &signature.result,
+                    mode_names,
+                ) {
                     Ok(proc_sig) => proc_sig,
                     Err(_) if has_seized_mode(&signature.params, &signature.result, &seized) => {
                         continue
@@ -514,6 +522,14 @@ pub fn signature_from_params(
     params: &[Param],
     result: &Option<ModeRef>,
 ) -> Result<ProcType, Error> {
+    signature_from_params_with(params, result, &HashMap::new())
+}
+
+pub fn signature_from_params_with(
+    params: &[Param],
+    result: &Option<ModeRef>,
+    mode_names: &HashMap<String, Type>,
+) -> Result<ProcType, Error> {
     let mut param_types = Vec::with_capacity(params.len());
     let mut seen = HashSet::new();
 
@@ -533,11 +549,11 @@ pub fn signature_from_params(
                 format!("duplicate parameter `{}`", param.name),
             ));
         }
-        param_types.push(resolve_mode(&param.mode)?);
+        param_types.push(resolve_mode_with(&param.mode, mode_names)?);
     }
 
     let result_type = match result {
-        Some(mode) => Some(resolve_mode(mode)?),
+        Some(mode) => Some(resolve_mode_with(mode, mode_names)?),
         None => None,
     };
 
