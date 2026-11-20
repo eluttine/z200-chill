@@ -1,0 +1,78 @@
+use crate::manifest::WidthProfile;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntKind {
+    Short,
+    Int,
+    Long,
+}
+
+impl IntKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Short => "SHORT_INT",
+            Self::Int => "INT",
+            Self::Long => "LONG_INT",
+        }
+    }
+
+    pub fn width(self, profile: WidthProfile) -> u16 {
+        match self {
+            Self::Short => profile.short,
+            Self::Int => profile.int,
+            Self::Long => profile.long,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Type {
+    Int(IntKind),
+    /// The `&INT`-derived class of an integer literal.
+    IntLiteral,
+    Bool,
+    Char,
+    String,
+}
+
+impl Type {
+    pub fn is_int(self) -> bool {
+        matches!(self, Self::Int(_) | Self::IntLiteral)
+    }
+
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Int(kind) => kind.name(),
+            Self::IntLiteral => "integer literal",
+            Self::Bool => "BOOL",
+            Self::Char => "CHAR",
+            Self::String => "character string",
+        }
+    }
+}
+
+/// Resolve a mode name supported by the v0 subset.
+pub fn resolve_mode(name: &str) -> Option<Type> {
+    match name {
+        "SHORT_INT" => Some(Type::Int(IntKind::Short)),
+        "INT" => Some(Type::Int(IntKind::Int)),
+        "LONG_INT" => Some(Type::Int(IntKind::Long)),
+        "BOOL" => Some(Type::Bool),
+        _ => None,
+    }
+}
+
+/// Inclusive bounds for a signed integer mode, or `None` if the width is
+/// outside the range this implementation can represent.
+pub fn int_bounds(kind: IntKind, profile: WidthProfile) -> Option<(i128, i128)> {
+    let width = kind.width(profile);
+    if width == 0 || width > 127 {
+        return None;
+    }
+    let magnitude = 1i128 << (width - 1);
+    Some((-magnitude, magnitude - 1))
+}
+
+pub fn contains(kind: IntKind, value: i128, profile: WidthProfile) -> bool {
+    int_bounds(kind, profile).is_some_and(|(low, high)| (low..=high).contains(&value))
+}

@@ -1,5 +1,8 @@
 pub mod ast;
 pub mod cli;
+pub mod interp;
 pub mod lexer;
 pub mod manifest;
 pub mod parser;
+pub mod sema;
+pub mod types;

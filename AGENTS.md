@@ -30,7 +30,7 @@ Prioritize clarity, deterministic behavior, and small, verifiable changes over c
 ## Build, Lint, and Test Commands
 - Build compiler & CLI (`z200c`): `cargo build`
 - Run unit & integration tests: `cargo test`
-- Run a sample `.ch` program: `cargo run -- check examples/hello` (use `cargo run -- run examples/hello` once `run` lands)
+- Run a sample `.ch` program: `cargo run -- run examples/hello`
 - Lint / typecheck: `cargo fmt --all --check && cargo clippy --all-targets -- -D warnings`
 
 ## Working Style

@@ -6,17 +6,24 @@ CHILL was designed for large, long-lived, high-reliability systems (such as tele
 
 ## Project Status
 
-Early development / experimental starter layout. The project is building incrementally from a core CHILL subset (modules, procedures, declarations, expressions, conditionals, loops, and configurable integer widths) toward richer language features and runtime support.
+Early development. The `z200c` CLI can currently load and validate `Chill.toml` (edition and integer-width profiles), tokenize and parse the v0 subset, perform mode checking, and interpret a package end to end.
+
+```sh
+cargo run -- check examples/hello
+cargo run -- run examples/hello
+```
+
+`examples/hello` is the first acceptance test: it computes `11` and verifies it with `ASSERT`, exiting successfully with no output.
 
 ## Repository Structure
 
 ```text
 z200-chill/
 ├── AGENTS.md           # Guidelines and conventions for coding agents & contributors
+├── Cargo.toml          # Rust package for z200c
 ├── README.md           # This file
-├── src/                # Compiler and z200c CLI implementation
-├── runtime/            # Linux runtime support library (libz200rt / libchillrt)
-├── tests/              # Parser, semantic, and end-to-end execution tests
+├── src/                # CLI, lexer, parser, AST, mode checker, interpreter, manifest
+├── tests/              # CLI integration tests
 ├── examples/
 │   └── hello/          # Starter CHILL package and manifest example
-└── docs/               # Subset notes, manifest format, and design docs
+└── docs/               # Subset notes and design docs

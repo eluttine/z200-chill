@@ -1,6 +1,9 @@
-use crate::lexer;
+use crate::ast::Program;
+use crate::interp;
+use crate::lexer::{self, Span};
 use crate::manifest::Manifest;
 use crate::parser;
+use crate::sema;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -25,8 +28,12 @@ where
             let target = args.next().unwrap_or_else(|| ".".to_owned());
             check(Path::new(&target))
         }
-        Some(command @ ("run" | "build")) => {
-            eprintln!("error: `{command}` is not implemented yet; try `z200c check <path>`");
+        Some("run") => {
+            let target = args.next().unwrap_or_else(|| ".".to_owned());
+            run_package(Path::new(&target))
+        }
+        Some("build") => {
+            eprintln!("error: `build` is not implemented yet; try `z200c run <path>`");
             2
         }
         Some(command) => {
@@ -51,7 +58,70 @@ fn check(target: &Path) -> i32 {
     }
 }
 
+fn run_package(target: &Path) -> i32 {
+    match run_impl(target) {
+        Ok(()) => 0,
+        Err(message) => {
+            eprintln!("{message}");
+            1
+        }
+    }
+}
+
 fn check_impl(target: &Path) -> Result<String, String> {
+    let package = load_package(target)?;
+
+    sema::check(&package.program, package.manifest.build.int_widths).map_err(|error| {
+        format_span_error(
+            &package.entry_path,
+            &package.source,
+            error.span,
+            &error.message,
+        )
+    })?;
+
+    Ok(format!(
+        "checked {} (edition {}, widths {})\n  {}: {} tokens, {} module(s)",
+        package.manifest.package.name,
+        package.manifest.package.edition,
+        package.manifest.build.int_widths,
+        package.entry_path.display(),
+        package.token_count,
+        package.program.modules.len()
+    ))
+}
+
+fn run_impl(target: &Path) -> Result<(), String> {
+    let package = load_package(target)?;
+
+    sema::check(&package.program, package.manifest.build.int_widths).map_err(|error| {
+        format_span_error(
+            &package.entry_path,
+            &package.source,
+            error.span,
+            &error.message,
+        )
+    })?;
+
+    interp::run(&package.program, package.manifest.build.int_widths).map_err(|error| {
+        format_span_error(
+            &package.entry_path,
+            &package.source,
+            error.span,
+            &error.message,
+        )
+    })
+}
+
+struct LoadedPackage {
+    manifest: Manifest,
+    entry_path: PathBuf,
+    source: String,
+    token_count: usize,
+    program: Program,
+}
+
+fn load_package(target: &Path) -> Result<LoadedPackage, String> {
     let manifest_path = resolve_manifest(target)?;
     let manifest = Manifest::load(&manifest_path).map_err(|error| format!("error: {error}"))?;
 
@@ -63,19 +133,18 @@ fn check_impl(target: &Path) -> Result<String, String> {
 
     let tokens = lexer::tokenize(&source)
         .map_err(|errors| format_lex_errors(&entry_path, &source, &errors))?;
+    let token_count = tokens.len();
 
-    let program =
-        parser::parse(&tokens).map_err(|error| format_parse_error(&entry_path, &source, &error))?;
+    let program = parser::parse(&tokens)
+        .map_err(|error| format_span_error(&entry_path, &source, error.span, &error.message))?;
 
-    Ok(format!(
-        "checked {} (edition {}, widths {})\n  {}: {} tokens, {} module(s)",
-        manifest.package.name,
-        manifest.package.edition,
-        manifest.build.int_widths,
-        entry_path.display(),
-        tokens.len(),
-        program.modules.len()
-    ))
+    Ok(LoadedPackage {
+        manifest,
+        entry_path,
+        source,
+        token_count,
+        program,
+    })
 }
 
 fn resolve_manifest(target: &Path) -> Result<PathBuf, String> {
@@ -114,21 +183,17 @@ fn format_lex_errors(path: &Path, source: &str, errors: &[lexer::Error]) -> Stri
     lines.join("\n")
 }
 
-fn format_parse_error(path: &Path, source: &str, error: &parser::Error) -> String {
-    let (line, column) = lexer::line_col(source, error.span.start);
-    format!(
-        "{}:{line}:{column}: error: {}",
-        path.display(),
-        error.message
-    )
+fn format_span_error(path: &Path, source: &str, span: Span, message: &str) -> String {
+    let (line, column) = lexer::line_col(source, span.start);
+    format!("{}:{line}:{column}: error: {message}", path.display())
 }
 
 fn print_help() {
     println!(
         "z200c {VERSION}
 Usage:
-  z200c check [path]    Parse the manifest and lex the entry source
-  z200c run [path]      Execute a package (not implemented yet)
+  z200c check [path]    Parse and mode-check a package
+  z200c run [path]      Execute a package
   z200c build [path]    Build a package (not implemented yet)
   z200c --version
   z200c --help

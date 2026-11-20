@@ -48,6 +48,30 @@ Explicitly **out of scope for v0** (keep the frontend/IR boundary clean for them
 - `SPEC`/`CONTEXT`/`REMOTE` piecewise compilation beyond the simple two-module case
   described in §7.
 
+### 1.1 Implementation status (v0)
+
+Implemented in `z200c`:
+
+- manifest loading and width-profile validation;
+- lexer, parser, and AST for the constructs in the subset above;
+- mode checking for `SHORT_INT` / `INT` / `LONG_INT` / `BOOL`, literals, arithmetic,
+  relational and boolean expressions, procedures, calls, assignments, `ASSERT`,
+  `IF`, `DO WHILE` / `DO FOR EVER`, and `BEGIN … END`;
+- a tree-walking interpreter, so `z200c run examples/hello` executes the example and
+  verifies its `ASSERT`.
+
+Not implemented yet (rejected or deferred with a diagnostic):
+
+- `GRANT` / `SEIZE` parsing and visibility checking;
+- `SPEC` modules, contexts, and remote pieces;
+- `DO FOR` counters, labelled `EXIT`, and `CASE`;
+- `OUT` / `INOUT` / `LOC` parameter passing;
+- exceptions (`EXCEPTIONS`, `CAUSE`, handlers) and text I/O;
+- processes, regions, timers, powersets, references, and generics.
+
+The interpreter is a bootstrap for validating semantics; native code generation is a
+later milestone.
+
 ---
 
 ## 2. Lexical rules (verified)
@@ -302,8 +326,9 @@ action, but it is non-idiomatic and has been removed from the example.)
   - you may not `SEIZE` a name that is not visible/granted in the enclosing reach;
   - referring to a granted name without seizing it is an error.
 - Full Z.200 also supports prefixes (`module!name`), grant windows (`ALL`, `FORBID`),
-  friend clauses (`TO`), contexts, spec modules, and remote pieces. **v0 will support
-  only the simple form** `GRANT a, b;` / `SEIZE a, b;`.
+  friend clauses (`TO`), contexts, spec modules, and remote pieces. The current
+  implementation does not parse `GRANT` / `SEIZE` yet; when it does, v0 will support
+  only the simple form `GRANT a, b;` / `SEIZE a, b;`.
 
 ### 7.3 SPEC modules (§10.10.2)
 
@@ -433,15 +458,16 @@ Decide the on-disk grant information and symbol-mangling scheme before adding mu
 builds. Z.200 permits several piecewise schemes (§10.10); v0 should implement one simple
 one and reject the rest with clear diagnostics.
 
-### 10.5 Range-check default (open)
+### 10.5 Range-check default (resolved for v0)
 
-Z.200 leaves generation of dynamic checks optional unless a handler is specified
-(§1.1, §1.8). Decide whether z200-chill always emits overflow/range checks (recommended
-for a first implementation) and make it a documented flag if configurable.
+The interpreter always checks integer range/overflow conditions. Z.200 leaves these
+checks optional unless a handler is present (§1.1, §1.8); a configurable flag can be
+added with the native backend.
 
-### 10.6 Width defaults (open)
+### 10.6 Width defaults (resolved)
 
-Confirm the Linux defaults (16/32/64). The standard does not constrain them.
+Confirmed: `SHORT_INT` = 16, `INT` = 32, `LONG_INT` = 64 on Linux. The standard does
+not constrain them.
 
 ---
 
