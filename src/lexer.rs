@@ -1,9 +1,19 @@
 use std::fmt;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SourceId(pub usize);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
+    pub source: SourceId,
     pub start: usize,
     pub end: usize,
+}
+
+impl Span {
+    pub fn new(source: SourceId, start: usize, end: usize) -> Self {
+        Self { source, start, end }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -259,6 +269,7 @@ impl fmt::Display for TokenKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
+    pub source: SourceId,
     pub offset: usize,
     pub message: String,
 }
@@ -266,9 +277,15 @@ pub struct Error {
 impl Error {
     pub fn new(offset: usize, message: impl Into<String>) -> Self {
         Self {
+            source: SourceId(0),
             offset,
             message: message.into(),
         }
+    }
+
+    pub fn with_source(mut self, source: SourceId) -> Self {
+        self.source = source;
+        self
     }
 }
 
@@ -282,7 +299,11 @@ impl std::error::Error for Error {}
 
 /// Tokenize a complete source file, collecting every lexical error.
 pub fn tokenize(source: &str) -> Result<Vec<Token>, Vec<Error>> {
-    let mut lexer = Lexer::new(source);
+    tokenize_with_source(source, SourceId(0))
+}
+
+pub fn tokenize_with_source(source: &str, source_id: SourceId) -> Result<Vec<Token>, Vec<Error>> {
+    let mut lexer = Lexer::new(source, source_id);
     let mut tokens = Vec::new();
     let mut errors = Vec::new();
 
@@ -292,7 +313,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, Vec<Error>> {
             Ok(Some(token)) => tokens.push(token),
             Ok(None) => break,
             Err(error) => {
-                errors.push(error);
+                errors.push(error.with_source(source_id));
                 // Guarantee progress even if the error was raised without consuming.
                 if lexer.pos == before {
                     lexer.bump();
@@ -328,12 +349,17 @@ pub fn line_col(source: &str, offset: usize) -> (usize, usize) {
 
 struct Lexer<'a> {
     source: &'a str,
+    source_id: SourceId,
     pos: usize,
 }
 
 impl<'a> Lexer<'a> {
-    fn new(source: &'a str) -> Self {
-        Self { source, pos: 0 }
+    fn new(source: &'a str, source_id: SourceId) -> Self {
+        Self {
+            source,
+            source_id,
+            pos: 0,
+        }
     }
 
     fn peek(&self) -> Option<char> {
@@ -380,10 +406,7 @@ impl<'a> Lexer<'a> {
 
         Ok(Some(Token {
             kind,
-            span: Span {
-                start,
-                end: self.pos,
-            },
+            span: Span::new(self.source_id, start, self.pos),
         }))
     }
 

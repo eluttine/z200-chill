@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::lexer::Span;
+use crate::lexer::{SourceId, Span};
 use crate::manifest::WidthProfile;
 use crate::types::{self, IntKind, Type};
 use std::collections::{HashMap, HashSet};
@@ -75,7 +75,7 @@ pub fn check_with_externals(
         .modules
         .first()
         .map(|module| module.span)
-        .unwrap_or(Span { start: 0, end: 0 });
+        .unwrap_or(Span::new(SourceId(0), 0, 0));
 
     for info in external {
         if exports.contains_key(&info.name) {

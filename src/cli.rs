@@ -1,10 +1,11 @@
 use crate::ast::Program;
 use crate::grant;
 use crate::interp;
-use crate::lexer::{self, Span};
+use crate::lexer;
 use crate::manifest::Manifest;
 use crate::parser;
 use crate::sema;
+use crate::source::SourceMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -90,24 +91,10 @@ fn build_impl(target: &Path) -> Result<PathBuf, String> {
         package.manifest.build.int_widths,
         &package.external,
     )
-    .map_err(|error| {
-        format_span_error(
-            &package.entry_path,
-            &package.source,
-            error.span,
-            &error.message,
-        )
-    })?;
+    .map_err(|error| package.source_map.format(error.span, &error.message))?;
 
-    let grant_file =
-        grant::GrantFile::from_package(&package.manifest, &package.program).map_err(|error| {
-            format_span_error(
-                &package.entry_path,
-                &package.source,
-                error.span,
-                &error.message,
-            )
-        })?;
+    let grant_file = grant::GrantFile::from_package(&package.manifest, &package.program)
+        .map_err(|error| package.source_map.format(error.span, &error.message))?;
     let text = grant_file
         .to_toml()
         .map_err(|error| format!("error: {error}"))?;
@@ -139,14 +126,7 @@ fn check_impl(target: &Path) -> Result<String, String> {
         package.manifest.build.int_widths,
         &package.external,
     )
-    .map_err(|error| {
-        format_span_error(
-            &package.entry_path,
-            &package.source,
-            error.span,
-            &error.message,
-        )
-    })?;
+    .map_err(|error| package.source_map.format(error.span, &error.message))?;
 
     Ok(format!(
         "checked {} (edition {}, widths {})\n  {}: {} tokens, {} module(s)",
@@ -167,14 +147,7 @@ fn run_impl(target: &Path) -> Result<(), String> {
         package.manifest.build.int_widths,
         &package.external,
     )
-    .map_err(|error| {
-        format_span_error(
-            &package.entry_path,
-            &package.source,
-            error.span,
-            &error.message,
-        )
-    })?;
+    .map_err(|error| package.source_map.format(error.span, &error.message))?;
 
     if !package.external.is_empty() {
         return Err(
@@ -182,21 +155,15 @@ fn run_impl(target: &Path) -> Result<(), String> {
         );
     }
 
-    interp::run(&package.program, package.manifest.build.int_widths).map_err(|error| {
-        format_span_error(
-            &package.entry_path,
-            &package.source,
-            error.span,
-            &error.message,
-        )
-    })
+    interp::run(&package.program, package.manifest.build.int_widths)
+        .map_err(|error| package.source_map.format(error.span, &error.message))
 }
 
 struct LoadedPackage {
     manifest: Manifest,
     package_dir: PathBuf,
     entry_path: PathBuf,
-    source: String,
+    source_map: SourceMap,
     token_count: usize,
     program: Program,
     external: Vec<sema::ExportInfo>,
@@ -212,15 +179,24 @@ fn load_package(target: &Path) -> Result<LoadedPackage, String> {
         .to_path_buf();
     let entry_path = package_dir.join(&manifest.build.entry);
 
-    let source = std::fs::read_to_string(&entry_path)
+    let text = std::fs::read_to_string(&entry_path)
         .map_err(|error| format!("error: cannot read {}: {error}", entry_path.display()))?;
 
-    let tokens = lexer::tokenize(&source)
-        .map_err(|errors| format_lex_errors(&entry_path, &source, &errors))?;
+    let mut source_map = SourceMap::default();
+    let source_id = source_map.add(&entry_path, text);
+
+    let tokens = {
+        let source = &source_map
+            .get(source_id)
+            .expect("entry source was just added")
+            .text;
+        lexer::tokenize_with_source(source, source_id)
+            .map_err(|errors| source_map.format_lex_errors(&errors))?
+    };
     let token_count = tokens.len();
 
-    let program = parser::parse(&tokens)
-        .map_err(|error| format_span_error(&entry_path, &source, error.span, &error.message))?;
+    let program =
+        parser::parse(&tokens).map_err(|error| source_map.format(error.span, &error.message))?;
 
     let mut external = Vec::new();
     for (name, path) in &manifest.dependencies {
@@ -263,7 +239,7 @@ fn load_package(target: &Path) -> Result<LoadedPackage, String> {
         manifest,
         package_dir,
         entry_path,
-        source,
+        source_map,
         token_count,
         program,
         external,
@@ -291,24 +267,6 @@ fn resolve_manifest(target: &Path) -> Result<PathBuf, String> {
     }
 
     Err(format!("error: path does not exist: {}", target.display()))
-}
-
-fn format_lex_errors(path: &Path, source: &str, errors: &[lexer::Error]) -> String {
-    let mut lines = Vec::with_capacity(errors.len());
-    for error in errors {
-        let (line, column) = lexer::line_col(source, error.offset);
-        lines.push(format!(
-            "{}:{line}:{column}: error: {}",
-            path.display(),
-            error.message
-        ));
-    }
-    lines.join("\n")
-}
-
-fn format_span_error(path: &Path, source: &str, span: Span, message: &str) -> String {
-    let (line, column) = lexer::line_col(source, span.start);
-    format!("{}:{line}:{column}: error: {message}", path.display())
 }
 
 fn print_help() {

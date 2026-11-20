@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::lexer::{Keyword, Span, Token, TokenKind};
+use crate::lexer::{Keyword, SourceId, Span, Token, TokenKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
@@ -25,12 +25,22 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 pub fn parse(tokens: &[Token]) -> Result<Program, Error> {
-    Parser { tokens, index: 0 }.parse_program()
+    let source = tokens
+        .first()
+        .map(|token| token.span.source)
+        .unwrap_or(SourceId(0));
+    Parser {
+        tokens,
+        index: 0,
+        source,
+    }
+    .parse_program()
 }
 
 struct Parser<'a> {
     tokens: &'a [Token],
     index: usize,
+    source: SourceId,
 }
 
 impl<'a> Parser<'a> {
@@ -105,10 +115,7 @@ impl<'a> Parser<'a> {
             kind,
             declarations,
             actions,
-            span: Span {
-                start: start.start,
-                end: end.end,
-            },
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 
@@ -170,10 +177,7 @@ impl<'a> Parser<'a> {
         Ok(Visibility {
             kind,
             names,
-            span: Span {
-                start: start.start,
-                end: end.end,
-            },
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 
@@ -222,10 +226,7 @@ impl<'a> Parser<'a> {
                     name,
                     mode: mode.clone(),
                     init: init.clone(),
-                    span: Span {
-                        start: name_span.start,
-                        end,
-                    },
+                    span: Span::new(self.source, name_span.start, end),
                 });
             }
 
@@ -271,10 +272,7 @@ impl<'a> Parser<'a> {
             exceptions,
             declarations,
             actions,
-            span: Span {
-                start: start.start,
-                end: end.end,
-            },
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 
@@ -302,10 +300,7 @@ impl<'a> Parser<'a> {
             params,
             result,
             exceptions,
-            span: Span {
-                start: start.start,
-                end: end.end,
-            },
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 
@@ -332,10 +327,7 @@ impl<'a> Parser<'a> {
                         name: param_name,
                         mode: mode.clone(),
                         passing,
-                        span: Span {
-                            start: name_span.start,
-                            end: param_end,
-                        },
+                        span: Span::new(self.source, name_span.start, param_end),
                     });
                 }
 
@@ -424,10 +416,7 @@ impl<'a> Parser<'a> {
             let action = self.parse_action()?;
             return Ok(Action::Labelled {
                 label,
-                span: Span {
-                    start: start.start,
-                    end: action.span().end,
-                },
+                span: Span::new(self.source, start.start, action.span().end),
                 action: Box::new(action),
             });
         }
@@ -457,10 +446,7 @@ impl<'a> Parser<'a> {
         let end = self.expect_semicolon()?;
         Ok(Action::Assert {
             condition,
-            span: Span {
-                start: start.start,
-                end: end.end,
-            },
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 
@@ -475,10 +461,7 @@ impl<'a> Parser<'a> {
         let end = self.expect_semicolon()?;
         Ok(Action::Return {
             value,
-            span: Span {
-                start: start.start,
-                end: end.end,
-            },
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 
@@ -489,10 +472,7 @@ impl<'a> Parser<'a> {
         let end = self.expect_semicolon()?;
         Ok(Action::Result {
             value,
-            span: Span {
-                start: start.start,
-                end: end.end,
-            },
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 
@@ -509,10 +489,7 @@ impl<'a> Parser<'a> {
         let end = self.expect_semicolon()?;
         Ok(Action::Exit {
             label,
-            span: Span {
-                start: start.start,
-                end: end.end,
-            },
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 
@@ -545,10 +522,7 @@ impl<'a> Parser<'a> {
         Ok(Action::If {
             branches,
             else_actions,
-            span: Span {
-                start: start.start,
-                end: end.end,
-            },
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 
@@ -576,10 +550,7 @@ impl<'a> Parser<'a> {
             alternatives.push(CaseAlternative {
                 labels,
                 body,
-                span: Span {
-                    start: alternative_start.start,
-                    end,
-                },
+                span: Span::new(self.source, alternative_start.start, end),
             });
         }
 
@@ -601,10 +572,7 @@ impl<'a> Parser<'a> {
             selector,
             alternatives,
             else_actions,
-            span: Span {
-                start: start.start,
-                end: end.end,
-            },
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 
@@ -735,10 +703,7 @@ impl<'a> Parser<'a> {
         Ok(Action::Do {
             control,
             body,
-            span: Span {
-                start: start.start,
-                end: end.end,
-            },
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 
@@ -753,10 +718,7 @@ impl<'a> Parser<'a> {
         Ok(Action::Begin {
             declarations,
             actions,
-            span: Span {
-                start: start.start,
-                end: end.end,
-            },
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 
@@ -773,10 +735,7 @@ impl<'a> Parser<'a> {
                 target,
                 op,
                 value,
-                span: Span {
-                    start,
-                    end: value_end,
-                },
+                span: Span::new(self.source, start, value_end),
             });
         }
 
@@ -814,10 +773,7 @@ impl<'a> Parser<'a> {
             }
             self.advance();
             let right = self.parse_binary(precedence + 1)?;
-            let span = Span {
-                start: left.span().start,
-                end: right.span().end,
-            };
+            let span = Span::new(self.source, left.span().start, right.span().end);
             left = Expr::Binary {
                 op,
                 left: Box::new(left),
@@ -840,10 +796,7 @@ impl<'a> Parser<'a> {
             let start = self.current_span();
             self.advance();
             let operand = self.parse_unary()?;
-            let span = Span {
-                start: start.start,
-                end: operand.span().end,
-            };
+            let span = Span::new(self.source, start.start, operand.span().end);
             return Ok(Expr::Unary {
                 op,
                 operand: Box::new(operand),
@@ -913,10 +866,7 @@ impl<'a> Parser<'a> {
                     Ok(Expr::Apply {
                         name,
                         args,
-                        span: Span {
-                            start: name_span.start,
-                            end: end.end,
-                        },
+                        span: Span::new(self.source, name_span.start, end.end),
                     })
                 } else {
                     Ok(Expr::Name {
@@ -987,10 +937,7 @@ impl<'a> Parser<'a> {
 
     fn eof_span(&self) -> Span {
         let offset = self.tokens.last().map(|token| token.span.end).unwrap_or(0);
-        Span {
-            start: offset,
-            end: offset,
-        }
+        Span::new(self.source, offset, offset)
     }
 
     fn advance(&mut self) -> Option<&'a Token> {
