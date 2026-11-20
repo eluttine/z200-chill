@@ -247,6 +247,8 @@ struct Scope<'a> {
     vars: HashMap<String, VarCell>,
     procs: HashMap<String, ProcRef<'a>>,
     modes: HashMap<String, Type>,
+    /// Variable names granted into this reach by directly enclosed modules.
+    exports: HashMap<String, Vec<VarCell>>,
 }
 
 struct Frame {
@@ -677,6 +679,7 @@ impl<'a> Interpreter<'a> {
         actions: &[ir::Stmt],
         _span: Span,
     ) -> Result<Flow, Error> {
+        let parent_is_local = !self.locals.is_empty();
         let parent = self.current_reach();
         self.locals.push(Scope::default());
         let previous_floor = self.module_floor;
@@ -686,6 +689,7 @@ impl<'a> Interpreter<'a> {
             self.apply_nested_seizes(declarations, &parent)?;
             self.declare_local_vars(declarations)?;
             self.initialize_declarations(declarations)?;
+            self.register_nested_grants(declarations, parent_is_local)?;
 
             let mut frame = Frame {
                 result_type: None,
@@ -740,6 +744,10 @@ impl<'a> Interpreter<'a> {
                 for (name, ty) in &parent.modes {
                     self.insert_nested_mode(name, *ty, visibility.span)?;
                 }
+                for (name, cells) in &parent.exports {
+                    let cell = single_reach_export(name, cells, visibility.span)?;
+                    self.insert_nested_var(name, cell, visibility.span)?;
+                }
                 continue;
             }
 
@@ -756,6 +764,9 @@ impl<'a> Interpreter<'a> {
                     self.insert_nested_proc(&name.name, *proc_ref, name.span)?;
                 } else if let Some(ty) = parent.modes.get(&name.name) {
                     self.insert_nested_mode(&name.name, *ty, name.span)?;
+                } else if let Some(cells) = parent.exports.get(&name.name) {
+                    let cell = single_reach_export(&name.name, cells, name.span)?;
+                    self.insert_nested_var(&name.name, cell, name.span)?;
                 } else {
                     return Err(Error::new(
                         name.span,
@@ -817,6 +828,72 @@ impl<'a> Interpreter<'a> {
             ));
         }
         scope.modes.insert(name.to_owned(), ty);
+        Ok(())
+    }
+
+    fn register_nested_grants(
+        &mut self,
+        declarations: &[Declaration],
+        parent_is_local: bool,
+    ) -> Result<(), Error> {
+        let mut local_vars: HashMap<String, VarCell> = HashMap::new();
+        for declaration in declarations {
+            if let Declaration::Var(list) = declaration {
+                for var in list {
+                    if let Some(cell) = self
+                        .locals
+                        .last()
+                        .and_then(|scope| scope.vars.get(&var.name))
+                        .cloned()
+                    {
+                        local_vars.insert(var.name.clone(), cell);
+                    }
+                }
+            }
+        }
+
+        for declaration in declarations {
+            let Declaration::Visibility(visibility) = declaration else {
+                continue;
+            };
+            if visibility.kind != VisibilityKind::Grant {
+                continue;
+            }
+            let names: Vec<(String, Span)> = if visibility.all {
+                local_vars
+                    .keys()
+                    .map(|name| (name.clone(), visibility.span))
+                    .collect()
+            } else {
+                visibility
+                    .names
+                    .iter()
+                    .map(|name| (name.name.clone(), name.span))
+                    .collect()
+            };
+
+            for (name, span) in names {
+                let Some(cell) = local_vars.get(&name).cloned() else {
+                    return Err(Error::new(
+                        span,
+                        format!("cannot GRANT `{name}`: not a declaration of this module"),
+                    ));
+                };
+                let parent_index = self.locals.len().checked_sub(2);
+                let parent_scope = if parent_is_local {
+                    let index = parent_index.expect("parent scope exists");
+                    &mut self.locals[index]
+                } else {
+                    &mut self.modules[self.active_module]
+                };
+                let _ = span;
+                parent_scope
+                    .exports
+                    .entry(name.clone())
+                    .or_default()
+                    .push(cell);
+            }
+        }
         Ok(())
     }
 
@@ -1445,12 +1522,22 @@ impl<'a> Interpreter<'a> {
             if let Some(cell) = scope.vars.get(name) {
                 return Some(cell.clone());
             }
+            if let Some(cells) = scope.exports.get(name) {
+                if let [cell] = cells.as_slice() {
+                    return Some(cell.clone());
+                }
+            }
         }
-        self.modules
-            .get(self.active_module)?
-            .vars
-            .get(name)
-            .cloned()
+        let module = self.modules.get(self.active_module)?;
+        if let Some(cell) = module.vars.get(name) {
+            return Some(cell.clone());
+        }
+        if let Some(cells) = module.exports.get(name) {
+            if let [cell] = cells.as_slice() {
+                return Some(cell.clone());
+            }
+        }
+        None
     }
 
     fn lookup_proc(&self, name: &str) -> Option<ProcRef<'a>> {
@@ -1523,6 +1610,16 @@ fn declare_into_scope<'a>(
         }
     }
     Ok(())
+}
+
+fn single_reach_export(name: &str, cells: &[VarCell], span: Span) -> Result<VarCell, Error> {
+    match cells {
+        [cell] => Ok(cell.clone()),
+        _ => Err(Error::new(
+            span,
+            format!("SEIZE `{name}` is ambiguous; several sibling modules grant it"),
+        )),
+    }
 }
 
 fn read_field(value: Value, field: &str, span: Span) -> Result<Value, Error> {
@@ -1776,6 +1873,65 @@ M: MODULE
     SEIZE x;
     ASSERT x = 3;
   END Helper;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn parent_reach_can_use_a_child_grant() {
+        run_source(
+            r#"
+M: MODULE
+  A: MODULE
+    GRANT x;
+    DCL x INT INIT := 1;
+  END A;
+  ASSERT x = 1;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_parent_can_use_a_grandchild_grant() {
+        run_source(
+            r#"
+M: MODULE
+  A: MODULE
+    B: MODULE
+      GRANT x;
+      DCL x INT INIT := 2;
+    END B;
+    ASSERT x = 2;
+  END A;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_grants_are_shared_with_siblings() {
+        run_source(
+            r#"
+M: MODULE
+  A: MODULE
+    GRANT x;
+    DCL x INT INIT := 1;
+  END A;
+
+  B: MODULE
+    SEIZE x;
+    x := 2;
+  END B;
+
+  C: MODULE
+    SEIZE x;
+    ASSERT x = 2;
+  END C;
 END M;
 "#,
         )

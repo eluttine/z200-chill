@@ -220,6 +220,8 @@ struct Scope {
     vars: HashMap<String, Type>,
     procs: HashMap<String, ProcType>,
     modes: HashMap<String, Type>,
+    /// Variable names granted into this reach by directly enclosed modules.
+    exports: HashMap<String, Vec<Type>>,
     readonly: HashSet<String>,
 }
 
@@ -300,6 +302,7 @@ impl Checker {
         self.collect_declarations(&module.declarations)?;
         self.check_initializers(&module.declarations)?;
         self.check_proc_bodies(&module.declarations)?;
+        self.preload_child_grants(&module.actions)?;
 
         let has_module_label = module.name.is_some();
         if let Some(name) = &module.name {
@@ -315,12 +318,6 @@ impl Checker {
     fn check_nested_module(&mut self, module: &Module) -> Result<(), Error> {
         for declaration in &module.declarations {
             match declaration {
-                Declaration::Visibility(visibility) if visibility.kind == VisibilityKind::Grant => {
-                    return Err(Error::new(
-                        visibility.span,
-                        "GRANT in a nested module is not supported yet",
-                    ));
-                }
                 Declaration::Proc(proc_def) => {
                     return Err(Error::new(
                         proc_def.span,
@@ -354,6 +351,8 @@ impl Checker {
             self.apply_nested_seizes(&module.declarations, &parent)?;
             self.collect_declarations(&module.declarations)?;
             self.check_initializers(&module.declarations)?;
+            self.check_nested_grants(module)?;
+            self.preload_child_grants(&module.actions)?;
 
             let has_label = module.name.is_some();
             if let Some(name) = &module.name {
@@ -371,6 +370,135 @@ impl Checker {
         result
     }
 
+    fn check_nested_grants(&mut self, module: &Module) -> Result<(), Error> {
+        let mut local_vars: HashMap<String, Type> = HashMap::new();
+        for declaration in &module.declarations {
+            if let Declaration::Var(list) = declaration {
+                for var in list {
+                    let ty = self.resolve_mode(&var.mode)?;
+                    local_vars.insert(var.name.clone(), ty);
+                }
+            }
+        }
+
+        let mut granted = HashSet::new();
+        for declaration in &module.declarations {
+            let Declaration::Visibility(visibility) = declaration else {
+                continue;
+            };
+            if visibility.kind != VisibilityKind::Grant {
+                continue;
+            }
+            if visibility.prefix.is_some() {
+                return Err(Error::new(
+                    visibility.span,
+                    "prefix clauses in a nested GRANT are not supported yet",
+                ));
+            }
+            if !visibility.friends.is_empty() {
+                return Err(Error::new(
+                    visibility.span,
+                    "TO restrictions in a nested GRANT are not supported yet",
+                ));
+            }
+            if visibility.forbid.is_some() {
+                return Err(Error::new(
+                    visibility.span,
+                    "FORBID in a nested GRANT is not supported yet",
+                ));
+            }
+
+            let names: Vec<(String, Span)> = if visibility.all {
+                local_vars
+                    .keys()
+                    .map(|name| (name.clone(), visibility.span))
+                    .collect()
+            } else {
+                visibility
+                    .names
+                    .iter()
+                    .map(|name| (name.name.clone(), name.span))
+                    .collect()
+            };
+
+            for (name, span) in names {
+                if !granted.insert(name.clone()) {
+                    return Err(Error::new(
+                        span,
+                        format!("`{name}` is granted more than once"),
+                    ));
+                }
+                if !local_vars.contains_key(&name) {
+                    return Err(Error::new(
+                        span,
+                        format!(
+                            "cannot GRANT `{name}`: only declarations of this module are grantable in a nested module"
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn single_reach_export(name: &str, types: &[Type], span: Span) -> Result<Type, Error> {
+        match types {
+            [ty] => Ok(*ty),
+            _ => Err(Error::new(
+                span,
+                format!("SEIZE `{name}` is ambiguous; several sibling modules grant it"),
+            )),
+        }
+    }
+
+    fn preload_child_grants(&mut self, actions: &[Action]) -> Result<(), Error> {
+        for action in actions {
+            let Action::Module(child) = action else {
+                continue;
+            };
+
+            let mut vars: HashMap<String, Type> = HashMap::new();
+            for declaration in &child.declarations {
+                if let Declaration::Var(list) = declaration {
+                    for var in list {
+                        if let Ok(ty) = self.resolve_mode(&var.mode) {
+                            vars.entry(var.name.clone()).or_insert(ty);
+                        }
+                    }
+                }
+            }
+
+            for declaration in &child.declarations {
+                let Declaration::Visibility(visibility) = declaration else {
+                    continue;
+                };
+                if visibility.kind != VisibilityKind::Grant {
+                    continue;
+                }
+                if visibility.prefix.is_some() || !visibility.friends.is_empty() {
+                    continue;
+                }
+                let names: Vec<String> = if visibility.all {
+                    vars.keys().cloned().collect()
+                } else {
+                    visibility
+                        .names
+                        .iter()
+                        .map(|name| name.name.clone())
+                        .collect()
+                };
+                for name in names {
+                    let Some(ty) = vars.get(&name) else {
+                        continue;
+                    };
+                    let scope = self.scopes.last_mut().expect("scope stack is never empty");
+                    scope.exports.entry(name).or_default().push(*ty);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn check_nested_contexts(&self, module: &Module, parent: &Scope) -> Result<(), Error> {
         let mut names = HashSet::new();
         for context in &module.contexts {
@@ -385,8 +513,14 @@ impl Checker {
                                 ));
                             }
                             let declared = self.resolve_mode(&var.mode)?;
-                            match parent.vars.get(&var.name) {
-                                Some(actual) if *actual == declared => {}
+                            let parent_ty = parent.vars.get(&var.name).copied().or_else(|| {
+                                parent
+                                    .exports
+                                    .get(&var.name)
+                                    .and_then(|types| (types.len() == 1).then_some(types[0]))
+                            });
+                            match parent_ty {
+                                Some(actual) if actual == declared => {}
                                 Some(actual) => {
                                     return Err(Error::new(
                                         var.span,
@@ -419,8 +553,9 @@ impl Checker {
                         }
                         let declared =
                             self.signature_from_params(&signature.params, &signature.result)?;
-                        match parent.procs.get(&signature.name) {
-                            Some(actual) if *actual == declared => {}
+                        let parent_sig = parent.procs.get(&signature.name).cloned();
+                        match parent_sig {
+                            Some(actual) if actual == declared => {}
                             Some(_) => {
                                 return Err(Error::new(
                                     signature.span,
@@ -482,6 +617,10 @@ impl Checker {
                 for (name, ty) in &parent.modes {
                     self.declare_mode(name, *ty, visibility.span)?;
                 }
+                for (name, types) in &parent.exports {
+                    let ty = Self::single_reach_export(name, types, visibility.span)?;
+                    self.declare_var(name, ty, visibility.span)?;
+                }
                 continue;
             }
 
@@ -498,6 +637,9 @@ impl Checker {
                     self.declare_proc(&name.name, signature.clone(), name.span)?;
                 } else if let Some(ty) = parent.modes.get(&name.name) {
                     self.declare_mode(&name.name, *ty, name.span)?;
+                } else if let Some(types) = parent.exports.get(&name.name) {
+                    let ty = Self::single_reach_export(&name.name, types, name.span)?;
+                    self.declare_var(&name.name, ty, name.span)?;
                 } else {
                     return Err(Error::new(
                         name.span,
@@ -807,10 +949,17 @@ impl Checker {
     }
 
     fn lookup_var(&self, name: &str) -> Option<Type> {
-        self.scopes[self.module_floor..]
-            .iter()
-            .rev()
-            .find_map(|scope| scope.vars.get(name).copied())
+        for scope in self.scopes[self.module_floor..].iter().rev() {
+            if let Some(ty) = scope.vars.get(name) {
+                return Some(*ty);
+            }
+            if let Some(types) = scope.exports.get(name) {
+                if types.len() == 1 {
+                    return Some(types[0]);
+                }
+            }
+        }
+        None
     }
 
     fn lookup_proc(&self, name: &str) -> Option<ProcType> {
@@ -1943,24 +2092,173 @@ END M;
     }
 
     #[test]
-    fn nested_module_rejects_grant_and_local_definitions() {
+    fn nested_grants_are_visible_to_siblings() {
+        check_source(
+            r#"
+M: MODULE
+  A: MODULE
+    GRANT x;
+    DCL x INT INIT := 1;
+  END A;
+
+  B: MODULE
+    SEIZE x;
+    ASSERT x = 1;
+  END B;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_grants_are_order_independent_for_checking() {
+        check_source(
+            r#"
+M: MODULE
+  B: MODULE
+    SEIZE x;
+    ASSERT x = 1;
+  END B;
+
+  A: MODULE
+    GRANT x;
+    DCL x INT INIT := 1;
+  END A;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn parent_reach_can_use_a_child_grant() {
+        check_source(
+            r#"
+M: MODULE
+  A: MODULE
+    GRANT x;
+    DCL x INT INIT := 1;
+  END A;
+  ASSERT x = 1;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_parent_can_use_a_grandchild_grant() {
+        check_source(
+            r#"
+M: MODULE
+  A: MODULE
+    B: MODULE
+      GRANT x;
+      DCL x INT INIT := 1;
+    END B;
+    ASSERT x = 1;
+  END A;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn duplicate_sibling_grants_are_ambiguous_to_seize() {
         let error = check_source(
             r#"
 M: MODULE
-  Helper: MODULE
+  A: MODULE
     GRANT x;
+    DCL x INT INIT := 1;
+  END A;
+
+  B: MODULE
+    GRANT x;
+    DCL x INT INIT := 2;
+  END B;
+
+  C: MODULE
+    SEIZE x;
+  END C;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("ambiguous"), "{}", error.message);
+    }
+
+    #[test]
+    fn nested_grants_do_not_escape_to_the_outer_reach() {
+        let error = check_source(
+            r#"
+M: MODULE
+  A: MODULE
+    GRANT x;
+    DCL x INT INIT := 1;
+  END A;
+END M;
+
+Outside: MODULE
+  SEIZE x;
+END Outside;
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("cannot SEIZE `x`"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn nested_context_can_describe_a_sibling_grant() {
+        check_source(
+            r#"
+M: MODULE
+  A: MODULE
+    GRANT x;
+    DCL x INT INIT := 1;
+  END A;
+
+  CONTEXT
     DCL x INT;
-  END Helper;
+  FOR
+  B: MODULE
+    SEIZE x;
+  END B;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_module_cannot_grant_a_seized_name() {
+        let error = check_source(
+            r#"
+M: MODULE
+  DCL x INT INIT := 1;
+  A: MODULE
+    SEIZE x;
+    GRANT x;
+  END A;
 END M;
 "#,
         )
         .unwrap_err();
         assert!(
-            error.message.contains("GRANT in a nested module"),
+            error.message.contains("only declarations of this module"),
             "{}",
             error.message
         );
+    }
 
+    #[test]
+    fn nested_module_rejects_local_definitions() {
         let error = check_source(
             r#"
 M: MODULE

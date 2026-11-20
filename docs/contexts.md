@@ -102,18 +102,30 @@ Implemented:
 - seized variables alias the parent location; parent procedures remain callable;
 - `module_floor` scoping: parent names are hidden unless seized, and nested locals do
   not escape;
-- contexts on nested modules, checked against the parent reach;
+- `GRANT` of a nested module's own variable declarations into its parent reach;
+- sibling modules can `SEIZE` those grants (visibility is checked independently of
+  textual order; duplicate names are ambiguous at the `SEIZE`);
+- the parent reach itself can use a child's grant directly, and a nested parent can use
+  a grandchild's grant;
+- contexts on nested modules, checked against the parent reach, including sibling
+  grants;
 - `EXIT <module name>` from inside the module.
+
+Grants are preloaded from modules directly in a module body. Modules inside action
+blocks (`BEGIN`, `IF`, `DO`) use that block's reach, but static preloading for those
+block reaches is not implemented yet.
 
 Not implemented yet:
 
-- `GRANT` inside a nested module;
 - procedure or mode definitions inside a nested module (modes may be seized from the
   parent);
+- **re-granting a child's grant from the parent** (the parent can use the name directly,
+  but its own `GRANT` still resolves only against its local declarations);
+- prefix clauses, `TO`, or `FORBID` in a nested `GRANT`;
 - prefix clauses or qualified names in a nested `SEIZE`;
-- sibling grants into the parent reach (the full reach/export model);
 - Z.200 lifetime: nested module locations are recreated each time the module action is
-  executed instead of living to the end of the closest surrounding block;
+  executed instead of living to the end of the closest surrounding block, so at runtime
+  the grant must be registered before a sibling or parent uses it;
 - nested spec modules and regions.
 
 ## Why the full feature needs more
@@ -133,11 +145,12 @@ full reach/export model:
 ### Stage 1 — nested modulions and reaches (partially done)
 
 Done: `Action::Module`, parser/AST support, nested execution, parent-reach `SEIZE`,
-`module_floor` hiding, nested contexts.
+`module_floor` hiding, nested contexts, nested `GRANT` of own declarations, sibling
+grants entering the parent reach, and direct use of child grants in the parent reach.
 
-Still to do: nested `GRANT`, sibling grants entering the parent reach, nested
-procedures/modes, nested spec modules/regions, and Z.200 location lifetime for nested
-modules.
+Still to do: parent re-grant of child grants, block-reach preloading, nested
+procedures/modes, nested spec modules/regions, runtime reach hoisting (Z.200 location
+lifetime), and the remaining nested `GRANT` clauses.
 
 ### Stage 2 — finish quasi declarations
 
