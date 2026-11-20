@@ -1,5 +1,6 @@
 use crate::ast::{
-    Declaration, ModeRef, Module, ModuleKind, NameRef, Param, Passing, Program, VisibilityKind,
+    Declaration, ModeRef, Module, ModuleKind, NameRef, Param, Passing, PrefixClause, Program,
+    VisibilityKind,
 };
 use crate::lexer::Span;
 use crate::modes::{FieldInfo, ModeTable, StructMode};
@@ -840,6 +841,64 @@ fn has_grant(module: &Module) -> bool {
     })
 }
 
+/// Old and new prefixes of a visibility statement, following §12.2.3.3.
+///
+/// `PREFIXED` is shorthand: for `GRANT` the new prefix is attached and the old
+/// prefix is empty; for `SEIZE` the old prefix is attached and the new prefix is
+/// empty. The subset does not support locally prefixed names, so a non-empty new
+/// prefix on `SEIZE` is rejected.
+pub fn seize_old_prefix(prefix: &Option<PrefixClause>) -> Result<&[String], String> {
+    match prefix {
+        None | Some(PrefixClause::Prefixed(None)) => Ok(&[]),
+        Some(PrefixClause::Prefixed(Some(prefix))) => Ok(prefix),
+        Some(PrefixClause::Rename { old, new }) => {
+            if new.is_empty() {
+                Ok(old)
+            } else {
+                Err("SEIZE with a non-empty new prefix is not implemented yet".to_owned())
+            }
+        }
+    }
+}
+
+/// Resolve a `SEIZE` postfix to its source name and the local simple name.
+pub fn seize_name(
+    name: &NameRef,
+    prefix: &Option<PrefixClause>,
+) -> Result<(NameRef, String), String> {
+    let old = seize_old_prefix(prefix)?;
+    let mut source_prefix = old.to_vec();
+    source_prefix.extend(name.prefix.iter().cloned());
+    Ok((
+        NameRef {
+            prefix: source_prefix,
+            name: name.name.clone(),
+            span: name.span,
+        },
+        name.name.clone(),
+    ))
+}
+
+fn grant_prefixes(
+    visibility: &crate::ast::Visibility,
+    module: &Module,
+) -> Result<(Vec<String>, Vec<String>), Error> {
+    match &visibility.prefix {
+        None => Ok((Vec::new(), Vec::new())),
+        Some(PrefixClause::Prefixed(Some(prefix))) => Ok((Vec::new(), prefix.clone())),
+        Some(PrefixClause::Prefixed(None)) => {
+            let name = module.name.clone().ok_or_else(|| {
+                Error::new(
+                    visibility.span,
+                    "GRANT ... PREFIXED without a prefix requires a named module",
+                )
+            })?;
+            Ok((Vec::new(), vec![name]))
+        }
+        Some(PrefixClause::Rename { old, new }) => Ok((old.clone(), new.clone())),
+    }
+}
+
 fn add_grants(
     module: &Module,
     interface: &ModuleInterface,
@@ -871,43 +930,46 @@ fn add_grants(
                     .collect::<Vec<_>>(),
             )
         };
-        let export_prefix = match &visibility.prefix {
-            None => Vec::new(),
-            Some(parts) if parts.is_empty() => module
-                .name
-                .clone()
-                .map(|name| vec![name])
-                .unwrap_or_default(),
-            Some(parts) => parts.clone(),
-        };
+        let (old_prefix, export_prefix) = grant_prefixes(visibility, module)?;
 
         let names: Vec<(String, Span)> = if visibility.all {
-            let mut names: Vec<String> = interface
-                .vars
-                .keys()
-                .chain(interface.procs.keys())
-                .chain(
-                    interface
-                        .modes
-                        .iter()
-                        .filter(|(_, ty)| matches!(ty, Type::Struct(_)))
-                        .map(|(name, _)| name),
-                )
-                .cloned()
-                .collect();
-            names.sort();
-            names.dedup();
-            names
-                .into_iter()
-                .map(|name| (name, visibility.span))
-                .collect()
+            if old_prefix.is_empty() {
+                let mut names: Vec<String> = interface
+                    .vars
+                    .keys()
+                    .chain(interface.procs.keys())
+                    .chain(
+                        interface
+                            .modes
+                            .iter()
+                            .filter(|(_, ty)| matches!(ty, Type::Struct(_)))
+                            .map(|(name, _)| name),
+                    )
+                    .cloned()
+                    .collect();
+                names.sort();
+                names.dedup();
+                names
+                    .into_iter()
+                    .map(|name| (name, visibility.span))
+                    .collect()
+            } else {
+                // Only prefixed names in the module's reach match; the subset
+                // has no such grantable names (nested modules are unsupported).
+                Vec::new()
+            }
         } else {
             let mut names = Vec::with_capacity(visibility.names.len());
             for name in &visibility.names {
-                if !name.prefix.is_empty() {
+                if !old_prefix.is_empty() || !name.prefix.is_empty() {
+                    let mut source = old_prefix.clone();
+                    source.extend(name.prefix.iter().cloned());
                     return Err(Error::new(
                         name.span,
-                        "GRANT prefixes are not implemented yet",
+                        format!(
+                            "cannot GRANT `{}`: prefixed names are not declared in this module",
+                            format_args!("{}!{}", source.join("!"), name.name)
+                        ),
                     ));
                 }
                 names.push((name.name.clone(), name.span));
@@ -916,7 +978,7 @@ fn add_grants(
         };
 
         for (name, span) in names {
-            let grant_key = format!("{}!{name}", export_prefix.join("!"));
+            let grant_key = format!("{}!{name}", old_prefix.join("!"));
             if !granted.insert(grant_key) {
                 return Err(Error::new(
                     span,

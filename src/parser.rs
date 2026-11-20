@@ -185,12 +185,6 @@ impl<'a> Parser<'a> {
         let mut prefix = None;
 
         if self.at_lparen() {
-            if kind == VisibilityKind::Seize {
-                return Err(self.error_here_code(
-                    "E0205",
-                    "SEIZE prefix-rename clauses are not implemented yet",
-                ));
-            }
             self.advance(); // (
             let old = if self.at_arrow() {
                 Vec::new()
@@ -205,14 +199,7 @@ impl<'a> Parser<'a> {
             };
             self.expect_rparen()?;
             self.expect_bang()?;
-
-            if !old.is_empty() {
-                return Err(self.error_here_code(
-                    "E0205",
-                    "prefix rename with a non-empty old prefix is not implemented yet",
-                ));
-            }
-            prefix = Some(new);
+            prefix = Some(PrefixClause::Rename { old, new });
         }
 
         let mut names = Vec::new();
@@ -265,16 +252,13 @@ impl<'a> Parser<'a> {
         }
 
         if self.at_keyword(Keyword::Prefixed) {
-            if kind == VisibilityKind::Seize {
-                return Err(self.error_here_code("E0205", "SEIZE PREFIXED is not implemented yet"));
-            }
             self.advance();
             let parts = if self.at_identifier() {
-                self.parse_prefix_parts()?
+                Some(self.parse_prefix_parts()?)
             } else {
-                Vec::new()
+                None
             };
-            prefix = Some(parts);
+            prefix = Some(PrefixClause::Prefixed(parts));
         }
 
         if self.at_keyword(Keyword::To) {
@@ -1690,19 +1674,71 @@ END M;
         let Declaration::Visibility(prefix) = &program.modules[0].declarations[0] else {
             panic!("expected GRANT");
         };
-        assert_eq!(prefix.prefix, Some(vec!["P".to_owned()]));
+        assert_eq!(
+            prefix.prefix,
+            Some(PrefixClause::Prefixed(Some(vec!["P".to_owned()])))
+        );
 
         let Declaration::Visibility(module_prefix) = &program.modules[0].declarations[1] else {
             panic!("expected GRANT ALL");
         };
         assert!(module_prefix.all);
-        assert_eq!(module_prefix.prefix, Some(Vec::new()));
+        assert_eq!(module_prefix.prefix, Some(PrefixClause::Prefixed(None)));
 
         let Declaration::Visibility(rename) = &program.modules[0].declarations[2] else {
             panic!("expected prefix rename");
         };
-        assert_eq!(rename.prefix, Some(vec!["Q".to_owned()]));
+        assert_eq!(
+            rename.prefix,
+            Some(PrefixClause::Rename {
+                old: Vec::new(),
+                new: vec!["Q".to_owned()],
+            })
+        );
         assert_eq!(rename.names[0].name, "y");
+    }
+
+    #[test]
+    fn parses_seize_prefixes() {
+        let program = parse_source(
+            r#"
+M: MODULE
+  SEIZE x PREFIXED P;
+  SEIZE ( -> Q ) ! y;
+  SEIZE (R -> ) ! z;
+END M;
+"#,
+        );
+
+        let Declaration::Visibility(prefixed) = &program.modules[0].declarations[0] else {
+            panic!("expected SEIZE");
+        };
+        assert_eq!(
+            prefixed.prefix,
+            Some(PrefixClause::Prefixed(Some(vec!["P".to_owned()])))
+        );
+
+        let Declaration::Visibility(new_prefix) = &program.modules[0].declarations[1] else {
+            panic!("expected SEIZE rename");
+        };
+        assert_eq!(
+            new_prefix.prefix,
+            Some(PrefixClause::Rename {
+                old: Vec::new(),
+                new: vec!["Q".to_owned()],
+            })
+        );
+
+        let Declaration::Visibility(old_prefix) = &program.modules[0].declarations[2] else {
+            panic!("expected SEIZE rename");
+        };
+        assert_eq!(
+            old_prefix.prefix,
+            Some(PrefixClause::Rename {
+                old: vec!["R".to_owned()],
+                new: Vec::new(),
+            })
+        );
     }
 
     #[test]

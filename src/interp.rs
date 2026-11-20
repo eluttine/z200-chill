@@ -313,10 +313,13 @@ impl<'a> Interpreter<'a> {
                 }
 
                 if visibility.all {
+                    let old_prefix = program::seize_old_prefix(&visibility.prefix)
+                        .map_err(|message| Error::new(visibility.span, message))?;
                     let mut accessible: Vec<&program::ExportEntry> = self
                         .exports
                         .iter()
                         .filter(|export| export.module != current)
+                        .filter(|export| export.prefix == old_prefix)
                         .filter(|export| export.is_accessible_to(package_name, module_name))
                         .collect();
                     accessible.sort_by(|left, right| {
@@ -358,8 +361,10 @@ impl<'a> Interpreter<'a> {
                 }
 
                 for name in &visibility.names {
+                    let (source, local) = program::seize_name(name, &visibility.prefix)
+                        .map_err(|message| Error::new(name.span, message))?;
                     let export =
-                        program::resolve_export(&self.exports, name, package_name, module_name)
+                        program::resolve_export(&self.exports, &source, package_name, module_name)
                             .map_err(|message| Error::new(name.span, message))?;
 
                     if export.module == current {
@@ -380,7 +385,7 @@ impl<'a> Interpreter<'a> {
 
                     imports.push((
                         current,
-                        name.name.clone(),
+                        local,
                         name.span,
                         export.module,
                         ImportKind::of(&export.kind),
@@ -1538,6 +1543,61 @@ END A;
 B: MODULE
   SEIZE P!a;
   ASSERT a = 1;
+END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn seizes_with_prefixed_clause() {
+        run_source(
+            r#"
+A: MODULE
+  GRANT a PREFIXED P;
+  DCL a INT INIT := 1;
+END A;
+
+B: MODULE
+  SEIZE a PREFIXED P;
+  ASSERT a = 1;
+END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn seizes_with_old_prefix_rename() {
+        run_source(
+            r#"
+A: MODULE
+  GRANT a PREFIXED P;
+  DCL a INT INIT := 5;
+END A;
+
+B: MODULE
+  SEIZE ( P -> ) ! a;
+  ASSERT a = 5;
+END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn seizes_all_with_prefixed_clause() {
+        run_source(
+            r#"
+A: MODULE
+  GRANT a, b PREFIXED P;
+  DCL a INT INIT := 1;
+  DCL b INT INIT := 2;
+END A;
+
+B: MODULE
+  SEIZE ALL PREFIXED P;
+  ASSERT a + b = 3;
 END B;
 "#,
         )

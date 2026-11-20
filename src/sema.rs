@@ -312,14 +312,16 @@ impl Checker {
             }
 
             if visibility.all {
-                self.seize_all(visibility.span)?;
+                self.seize_all(visibility)?;
                 continue;
             }
 
             for name in &visibility.names {
+                let (source, local) = program::seize_name(name, &visibility.prefix)
+                    .map_err(|message| Error::new(name.span, message))?;
                 let export = program::resolve_export(
                     &self.exports,
-                    name,
+                    &source,
                     self.current_package_name.as_deref(),
                     self.current_module_name.as_deref(),
                 )
@@ -333,17 +335,21 @@ impl Checker {
                     ));
                 }
 
-                self.import_export(&name.name, &export, name.span)?;
+                self.import_export(&local, &export, name.span)?;
             }
         }
         Ok(())
     }
 
-    fn seize_all(&mut self, span: Span) -> Result<(), Error> {
+    fn seize_all(&mut self, visibility: &Visibility) -> Result<(), Error> {
+        let span = visibility.span;
+        let old_prefix = program::seize_old_prefix(&visibility.prefix)
+            .map_err(|message| Error::new(span, message))?;
         let mut accessible: Vec<program::ExportEntry> = self
             .exports
             .iter()
             .filter(|export| export.module != self.current_module)
+            .filter(|export| export.prefix == old_prefix)
             .filter(|export| {
                 export.is_accessible_to(
                     self.current_package_name.as_deref(),
@@ -1618,6 +1624,105 @@ END B;
 "#,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn seize_prefixed_clause_imports_simple_name() {
+        check_source(
+            r#"
+A: MODULE
+  GRANT a PREFIXED P;
+  DCL a INT INIT := 1;
+END A;
+
+B: MODULE
+  SEIZE a PREFIXED P;
+  ASSERT a = 1;
+END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn seize_all_prefixed_imports_only_matching_names() {
+        let error = check_source(
+            r#"
+A: MODULE
+  GRANT a PREFIXED P;
+  GRANT b;
+  DCL a INT INIT := 1;
+  DCL b INT INIT := 2;
+END A;
+
+B: MODULE
+  SEIZE ALL PREFIXED P;
+  ASSERT a = 1;
+  ASSERT b = 2;
+END B;
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("unknown name `b`"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn seize_all_ignores_prefixed_names() {
+        let error = check_source(
+            r#"
+A: MODULE
+  GRANT a PREFIXED P;
+  DCL a INT INIT := 1;
+END A;
+
+B: MODULE
+  SEIZE ALL;
+  ASSERT a = 1;
+END B;
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("unknown name `a`"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn seize_rejects_new_prefix() {
+        let error = check_source(
+            r#"
+A: MODULE
+  GRANT a;
+  DCL a INT;
+END A;
+
+B: MODULE
+  SEIZE ( -> Q ) ! a;
+END B;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("non-empty new prefix"));
+    }
+
+    #[test]
+    fn grant_non_empty_old_prefix_requires_a_source_name() {
+        let error = check_source(
+            r#"
+A: MODULE
+  GRANT ( P -> Q ) ! a;
+  DCL a INT;
+END A;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("prefixed names are not declared"));
     }
 
     #[test]

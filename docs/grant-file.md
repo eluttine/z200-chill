@@ -14,11 +14,19 @@ Visibility is static and independent of textual order:
   - `name` (simple),
   - `Module!name`,
   - `package!Module!name`.
-- Prefix output is supported:
+- Prefix clauses follow §12.2.3.3:
   - `GRANT x PREFIXED P;` exports `P!x`;
   - `GRANT ALL PREFIXED;` uses the granting module name as the prefix;
-  - `GRANT ( -> P ) ! x;` is the prefix-rename form.
-  Prefixed exports are not addressable by their bare simple name.
+  - `GRANT (old -> new) ! x;` links the source `old!x` to the exported
+    name `new!x`. An empty old prefix is the common form; a non-empty old prefix
+    requires a prefixed source name in the granting module's reach, which the
+    current subset does not provide (nested modules are unsupported).
+  - `SEIZE x PREFIXED P;` imports `P!x` as the local simple name `x`.
+  - `SEIZE ALL PREFIXED P;` imports every visible `P!name` as `name`.
+  - `SEIZE (old -> new) ! x;` follows the same link rule. A non-empty new prefix
+    would create a locally prefixed name, which the subset does not support yet.
+  Prefixed exports are not addressable by their bare simple name, and `SEIZE ALL`
+  without a prefix does not import prefixed exports.
 - `SEIZE name;` imports the unique visible export with that simple name. If more than one
   module exports it, the seize is ambiguous and must be qualified.
 - `SEIZE A!x;` / `SEIZE pkg!A!x;` select a module/package-qualified export.
@@ -40,8 +48,8 @@ Visibility is static and independent of textual order:
 - A seized procedure executes in its **defining** module's scope; it does not see the
   caller's module or local names.
 - A module cannot seize a name it grants itself.
-- Only prefix renames with an empty old prefix are supported; a non-empty old prefix is
-  rejected. `SEIZE ... PREFIXED ...`, contexts, and remote pieces are not implemented.
+- A `SEIZE` with a non-empty new prefix is rejected because locally prefixed names are
+  not supported. Contexts and remote pieces are not implemented.
 
 `z200c grant` records each export's simple name, module/package names, and optional
 prefix, so duplicate simple names and prefixed outputs can be represented. Consumers can
@@ -156,8 +164,7 @@ lib = "../lib/target/z200c/lib.grt.toml"
 
 - Interface-only grant files are static: `check`, `grant`, and structure-mode use work,
   but `run` cannot execute external variables/procedures without a source package.
-- `SEIZE ... PREFIXED ...` and non-empty old prefixes in rename clauses are not
-  implemented.
+- `SEIZE` with a non-empty new prefix (locally prefixed names) is not implemented.
 - Structure modes travel through grant files: an external package can `SEIZE` a granted
   structure mode and use its fields statically. Grant files still contain interfaces,
   not bodies, so `run` needs source linking before external variables or procedures can

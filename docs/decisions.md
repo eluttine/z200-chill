@@ -35,16 +35,17 @@ must share edition and width profile. Modules are identified by package plus sim
 so different packages may contain a module with the same name. `SEIZE` supports
 `Module!name` and `package!Module!name`, plus `GRANT ALL`/`SEIZE ALL` and `TO` friend
 restrictions. Emitted grant files record each export's module/package names, so
-qualified external seizes work. `GRANT ... PREFIXED ...` and prefix-rename clauses with
-an empty old prefix are implemented, including in emitted grant files. Structure modes
-and static `FORBID (fields)` / `FORBID ALL` are implemented for internal `GRANT`/`SEIZE`.
+qualified external seizes work. `GRANT ... PREFIXED ...`, `SEIZE ... PREFIXED ...`, and
+prefix-rename clauses (including a non-empty old prefix) are implemented. Structure
+modes and static `FORBID (fields)` / `FORBID ALL` are implemented for internal
+`GRANT`/`SEIZE`.
 Structure values are interpreted with field assignment, nested fields, and copy
 semantics. Grant-file schema 2 records structure modes under symbolic names
 (`package!Module!Mode`), per-grant `FORBID`, and `TO` friends, so external packages can
 seize modes and enforce restrictions. The format is a `z200c` artifact; it is not defined
 by Z.200, and schema changes are deliberately breaking while the project is early.
-Still open: non-empty old prefixes, `SEIZE ... PREFIXED ...`, and symbol mangling for a
-code-generation backend. Z.200 permits several piecewise schemes (§10.10).
+Still open: `SEIZE` with a non-empty new prefix (locally prefixed names), and symbol
+mangling for a code-generation backend. Z.200 permits several piecewise schemes (§10.10).
 
 ## 10.7 Multi-file packages (resolved)
 

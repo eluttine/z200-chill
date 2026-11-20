@@ -69,12 +69,19 @@ pub struct Visibility {
     pub all: bool,
     /// `TO` friend modules for a GRANT.
     pub friends: Vec<NameRef>,
-    /// New prefix for a GRANT (`PREFIXED` or prefix-rename clause).
-    /// An empty vector means "use the module name".
-    pub prefix: Option<Vec<String>>,
+    /// Prefix clause or prefix rename clause (§12.2.3.3).
+    pub prefix: Option<PrefixClause>,
     /// `FORBID` restriction on a granted structure mode.
     pub forbid: Option<Forbid>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrefixClause {
+    /// `PREFIXED [prefix]`. `None` uses the granting module's name.
+    Prefixed(Option<Vec<String>>),
+    /// `(old -> new) ! postfix`
+    Rename { old: Vec<String>, new: Vec<String> },
 }
 
 #[derive(Debug, Clone)]
