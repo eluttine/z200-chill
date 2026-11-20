@@ -1026,7 +1026,12 @@ impl Checker {
                 if left.is_int() && right.is_int() {
                     self.combine_int(left, right, span)?;
                     Ok(Type::Bool)
-                } else if left == right && matches!(left, Type::Bool | Type::Char | Type::String) {
+                } else if left == right
+                    && matches!(
+                        left,
+                        Type::Bool | Type::Char | Type::String | Type::Struct(_)
+                    )
+                {
                     Ok(Type::Bool)
                 } else {
                     Err(Error::new(
@@ -1606,6 +1611,38 @@ END A;
         )
         .unwrap_err();
         assert!(error.message.contains("not a field"));
+    }
+
+    #[test]
+    fn structure_equality_requires_the_same_mode() {
+        check_source(
+            r#"
+M: MODULE
+  NEWMODE S = STRUCT(x INT, y BOOL);
+  DCL a S, b S;
+  ASSERT a = b;
+  ASSERT a /= b;
+END M;
+"#,
+        )
+        .unwrap();
+
+        let error = check_source(
+            r#"
+M: MODULE
+  NEWMODE S = STRUCT(x INT);
+  NEWMODE T = STRUCT(x INT);
+  DCL a S, b T;
+  ASSERT a = b;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("cannot compare"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

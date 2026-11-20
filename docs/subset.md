@@ -148,8 +148,9 @@ literals and conversions are typed.
 Structure values are fully interpreted: field selection and assignment (including nested
 fields), whole-value assignment with copy semantics, `IN` parameters, results, and
 initialization from another structure value. Fields start undefined and reading one
-before assignment is an error. There are no structure literals in the v0 subset, and
-structure comparison is not defined.
+before assignment is an error. Equality and inequality are defined recursively for
+values of the same structure mode (§5.3.5); ordering comparisons remain undefined for
+structures. There are no structure literals in the v0 subset.
 
 For `v0`, assign the implementation-defined integer mode names directly rather than
 requiring the user to write `NEWMODE` declarations.

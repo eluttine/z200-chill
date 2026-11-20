@@ -1082,11 +1082,34 @@ impl<'a> Interpreter<'a> {
     }
 
     fn values_equal(&self, left: &Value, right: &Value, span: Span) -> Result<bool, Error> {
+        if matches!(left, Value::Undefined) || matches!(right, Value::Undefined) {
+            return Err(Error::new(span, "use of undefined value"));
+        }
         match (left, right) {
             (Value::Int { value: left, .. }, Value::Int { value: right, .. }) => Ok(left == right),
             (Value::Bool(left), Value::Bool(right)) => Ok(left == right),
             (Value::Char(left), Value::Char(right)) => Ok(left == right),
             (Value::String(left), Value::String(right)) => Ok(left == right),
+            (Value::Struct(left), Value::Struct(right)) => {
+                if left.len() != right.len() {
+                    return Err(Error::new(
+                        span,
+                        "cannot compare structures of different modes",
+                    ));
+                }
+                for ((left_name, left_value), (right_name, right_value)) in left.iter().zip(right) {
+                    if left_name != right_name {
+                        return Err(Error::new(
+                            span,
+                            "cannot compare structures of different modes",
+                        ));
+                    }
+                    if !self.values_equal(left_value, right_value, span)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
             _ => Err(Error::new(span, "cannot compare these values")),
         }
     }
@@ -1547,6 +1570,44 @@ END B;
 "#,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn compares_structure_values_recursively() {
+        run_source(
+            r#"
+M: MODULE
+  NEWMODE Inner = STRUCT(v INT);
+  NEWMODE Outer = STRUCT(inner Inner, tag BOOL);
+  DCL a Outer, b Outer;
+  a.inner.v := 1;
+  a.tag := TRUE;
+  b := a;
+  ASSERT a = b;
+  ASSERT NOT (a /= b);
+  b.inner.v := 2;
+  ASSERT a /= b;
+  ASSERT NOT (a = b);
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn comparing_undefined_structure_field_is_reported() {
+        let error = run_source(
+            r#"
+M: MODULE
+  NEWMODE S = STRUCT(x INT);
+  DCL a S, b S;
+  ASSERT a = b;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "E0504");
+        assert!(error.message.contains("undefined value"));
     }
 
     #[test]
