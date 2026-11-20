@@ -108,7 +108,7 @@ pub fn run_checked(
     program: &Program,
     profile: WidthProfile,
     check: &CheckResult,
-    external: &[program::ExportInfo],
+    external: &[program::ExternalInterface],
 ) -> Result<(), Error> {
     let info = program::analyze(program)
         .map_err(|error| Error::coded(error.code, error.span, error.message))?;
@@ -117,27 +117,18 @@ pub fn run_checked(
         .iter()
         .map(|interface| interface.modes.clone())
         .collect();
-    let modes = Rc::new(info.modes);
+    let error_span = program
+        .modules
+        .first()
+        .map(|module| module.span)
+        .unwrap_or_else(|| Span::new(SourceId(0), 0, 0));
+    let mut modes = info.modes;
+    let external_modes = program::add_external_modes(&mut modes, external)
+        .map_err(|message| Error::coded("E0600", error_span, message))?;
     let mut exports = info.exports;
-    for info in external {
-        let kind = match &info.kind {
-            program::ExportInfoKind::Var(ty) => ExportKind::Var(*ty),
-            program::ExportInfoKind::Proc { params, result } => ExportKind::Proc(types::ProcType {
-                params: params.clone(),
-                result: *result,
-            }),
-        };
-        exports.push(program::ExportEntry {
-            module: usize::MAX,
-            package: usize::MAX,
-            package_name: info.package_name.clone(),
-            module_name: info.module_name.clone(),
-            name: info.name.clone(),
-            prefix: info.prefix.clone(),
-            kind,
-            friends: None,
-        });
-    }
+    program::add_external_exports(&mut exports, external, &external_modes)
+        .map_err(|message| Error::coded("E0600", error_span, message))?;
+    let modes = Rc::new(modes);
     // A module may use a seized structure mode in its declarations, so resolve
     // mode seizes before any variable is declared.
     let mut module_modes = module_modes;

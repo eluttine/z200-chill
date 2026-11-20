@@ -192,6 +192,34 @@ pub fn resolve_export<'a>(
     }
 }
 
+/// A type as recorded in a portable interface. Structure modes are referenced
+/// by their stable symbolic name (`package!Module!Mode`); local `ModeId`s are
+/// never serialized.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExternalType {
+    Builtin(Type),
+    Mode(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct ModeInfo {
+    pub name: String,
+    pub module_name: Option<String>,
+    pub package_name: Option<String>,
+    pub fields: Vec<(String, ExternalType)>,
+    pub forbidden: Vec<String>,
+}
+
+impl ModeInfo {
+    pub fn symbol(&self) -> String {
+        crate::modes::mode_symbol(
+            self.package_name.as_deref(),
+            self.module_name.as_deref(),
+            &self.name,
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ExportInfo {
     pub name: String,
@@ -199,15 +227,17 @@ pub struct ExportInfo {
     pub package_name: Option<String>,
     pub prefix: Vec<String>,
     pub kind: ExportInfoKind,
+    pub friends: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
 pub enum ExportInfoKind {
-    Var(Type),
+    Var(ExternalType),
     Proc {
-        params: Vec<Type>,
-        result: Option<Type>,
+        params: Vec<ExternalType>,
+        result: Option<ExternalType>,
     },
+    Mode(ModeInfo),
 }
 
 /// Static structure shared by the checker, interpreter, and grant emitter:
@@ -304,20 +334,40 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
     })
 }
 
-/// The public interface of the program, sorted by name.
+/// The portable public interface of the program, sorted by name.
 pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
-    let mut exports: Vec<ExportInfo> = analyze(program)?
+    let info = analyze(program)?;
+    let modes = info.modes;
+    let mut exports: Vec<ExportInfo> = info
         .exports
         .into_iter()
-        .filter(|export| !matches!(export.kind, ExportKind::Mode(_)))
         .map(|export| {
             let kind = match export.kind {
-                ExportKind::Var(ty) => ExportInfoKind::Var(ty),
+                ExportKind::Var(ty) => ExportInfoKind::Var(portable_type(ty, &modes)),
                 ExportKind::Proc(signature) => ExportInfoKind::Proc {
-                    params: signature.params,
-                    result: signature.result,
+                    params: signature
+                        .params
+                        .into_iter()
+                        .map(|ty| portable_type(ty, &modes))
+                        .collect(),
+                    result: signature.result.map(|ty| portable_type(ty, &modes)),
                 },
-                ExportKind::Mode(_) => unreachable!("mode exports are filtered out"),
+                ExportKind::Mode(id) => {
+                    let mode = modes.get(id);
+                    let mut forbidden: Vec<String> = mode.forbidden.iter().cloned().collect();
+                    forbidden.sort();
+                    ExportInfoKind::Mode(ModeInfo {
+                        name: mode.name.clone(),
+                        module_name: mode.module_name.clone(),
+                        package_name: mode.package_name.clone(),
+                        fields: mode
+                            .fields
+                            .iter()
+                            .map(|field| (field.name.clone(), portable_type(field.ty, &modes)))
+                            .collect(),
+                        forbidden,
+                    })
+                }
             };
             ExportInfo {
                 name: export.name,
@@ -325,6 +375,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                 package_name: export.package_name,
                 prefix: export.prefix,
                 kind,
+                friends: export.friends,
             }
         })
         .collect();
@@ -335,6 +386,212 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
             .then_with(|| left.module_name.cmp(&right.module_name))
     });
     Ok(exports)
+}
+
+pub fn portable_type(ty: Type, modes: &ModeTable) -> ExternalType {
+    match ty {
+        Type::Struct(id) => ExternalType::Mode(modes.get(id).symbol()),
+        other => ExternalType::Builtin(other),
+    }
+}
+
+/// A dependency's portable interface: mode definitions needed to interpret its
+/// exported types, plus the names it actually grants.
+#[derive(Debug, Clone, Default)]
+pub struct ExternalInterface {
+    pub modes: Vec<ModeInfo>,
+    pub exports: Vec<ExportInfo>,
+}
+
+/// Symbolic mode names encountered in external interfaces, mapped to freshly
+/// allocated local `ModeId`s.
+#[derive(Debug, Default)]
+pub struct ExternalModeIds {
+    ids: HashMap<String, ModeId>,
+}
+
+impl ExternalModeIds {
+    pub fn get(&self, symbol: &str) -> Option<ModeId> {
+        self.ids.get(symbol).copied()
+    }
+}
+
+/// Instantiate structure modes from external grant files into `modes`.
+pub fn add_external_modes(
+    modes: &mut ModeTable,
+    external: &[ExternalInterface],
+) -> Result<ExternalModeIds, String> {
+    let mut ids = ExternalModeIds::default();
+    let mut definitions: Vec<&ModeInfo> = Vec::new();
+
+    for interface in external {
+        for mode in &interface.modes {
+            let symbol = mode.symbol();
+            if ids.ids.contains_key(&symbol) {
+                continue;
+            }
+            let id = ModeId(modes.modes.len());
+            ids.ids.insert(symbol.clone(), id);
+            modes.modes.push(StructMode {
+                name: mode.name.clone(),
+                // External modes are never the local defining module.
+                package: usize::MAX,
+                module: usize::MAX,
+                package_name: mode.package_name.clone(),
+                module_name: mode.module_name.clone(),
+                fields: Vec::new(),
+                forbidden: HashSet::new(),
+            });
+            definitions.push(mode);
+        }
+    }
+
+    detect_mode_cycles(&definitions, &ids)?;
+
+    for mode in definitions {
+        let id = ids.ids[&mode.symbol()];
+        let mut fields = Vec::with_capacity(mode.fields.len());
+        let mut names = HashSet::new();
+        for (name, ty) in &mode.fields {
+            if !names.insert(name.clone()) {
+                return Err(format!(
+                    "duplicate field `{name}` in external mode `{}`",
+                    mode.symbol()
+                ));
+            }
+            let ty = resolve_external_type(ty, &ids)?;
+            fields.push(FieldInfo {
+                name: name.clone(),
+                ty,
+            });
+        }
+        let mut forbidden = HashSet::new();
+        for name in &mode.forbidden {
+            if !fields.iter().any(|field| &field.name == name) {
+                return Err(format!(
+                    "external mode `{}` forbids unknown field `{name}`",
+                    mode.symbol()
+                ));
+            }
+            forbidden.insert(name.clone());
+        }
+        let entry = modes.get_mut(id);
+        entry.fields = fields;
+        entry.forbidden = forbidden;
+    }
+
+    Ok(ids)
+}
+
+fn detect_mode_cycles(definitions: &[&ModeInfo], ids: &ExternalModeIds) -> Result<(), String> {
+    fn visit(
+        index: usize,
+        definitions: &[&ModeInfo],
+        by_symbol: &HashMap<String, usize>,
+        ids: &ExternalModeIds,
+        visiting: &mut HashSet<usize>,
+        done: &mut HashSet<usize>,
+    ) -> Result<(), String> {
+        if done.contains(&index) {
+            return Ok(());
+        }
+        if !visiting.insert(index) {
+            return Err(format!(
+                "cyclic structure mode `{}` in external interface",
+                definitions[index].symbol()
+            ));
+        }
+        for (_, ty) in &definitions[index].fields {
+            let ExternalType::Mode(reference) = ty else {
+                continue;
+            };
+            if ids.get(reference).is_none() {
+                return Err(format!(
+                    "external mode `{}` references unknown mode `{reference}`",
+                    definitions[index].symbol()
+                ));
+            }
+            if let Some(next) = by_symbol.get(reference) {
+                visit(*next, definitions, by_symbol, ids, visiting, done)?;
+            }
+        }
+        visiting.remove(&index);
+        done.insert(index);
+        Ok(())
+    }
+
+    let by_symbol: HashMap<String, usize> = definitions
+        .iter()
+        .enumerate()
+        .map(|(index, mode)| (mode.symbol(), index))
+        .collect();
+    let mut done = HashSet::new();
+    for index in 0..definitions.len() {
+        let mut visiting = HashSet::new();
+        visit(
+            index,
+            definitions,
+            &by_symbol,
+            ids,
+            &mut visiting,
+            &mut done,
+        )?;
+    }
+    Ok(())
+}
+
+pub fn add_external_exports(
+    exports: &mut Vec<ExportEntry>,
+    external: &[ExternalInterface],
+    ids: &ExternalModeIds,
+) -> Result<(), String> {
+    for interface in external {
+        for info in &interface.exports {
+            let kind = match &info.kind {
+                ExportInfoKind::Var(ty) => ExportKind::Var(resolve_external_type(ty, ids)?),
+                ExportInfoKind::Proc { params, result } => ExportKind::Proc(ProcType {
+                    params: params
+                        .iter()
+                        .map(|ty| resolve_external_type(ty, ids))
+                        .collect::<Result<_, _>>()?,
+                    result: match result {
+                        Some(ty) => Some(resolve_external_type(ty, ids)?),
+                        None => None,
+                    },
+                }),
+                ExportInfoKind::Mode(mode) => {
+                    let id = ids.get(&mode.symbol()).ok_or_else(|| {
+                        format!("external mode `{}` was not materialized", mode.symbol())
+                    })?;
+                    ExportKind::Mode(id)
+                }
+            };
+            exports.push(ExportEntry {
+                module: usize::MAX,
+                package: usize::MAX,
+                package_name: info.package_name.clone(),
+                module_name: info.module_name.clone(),
+                name: info.name.clone(),
+                prefix: info.prefix.clone(),
+                kind,
+                friends: info.friends.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn resolve_external_type(ty: &ExternalType, ids: &ExternalModeIds) -> Result<Type, String> {
+    match ty {
+        ExternalType::Builtin(Type::Struct(_)) => {
+            Err("internal: structure modes must use symbolic references".to_owned())
+        }
+        ExternalType::Builtin(ty) => Ok(*ty),
+        ExternalType::Mode(symbol) => ids
+            .get(symbol)
+            .map(Type::Struct)
+            .ok_or_else(|| format!("external interface references unknown mode `{symbol}`")),
+    }
 }
 
 fn build_modes(program: &Program) -> Result<(ModeTable, Vec<HashMap<String, Type>>), Error> {
@@ -369,6 +626,8 @@ fn build_modes(program: &Program) -> Result<(ModeTable, Vec<HashMap<String, Type
                         name: mode_def.name.clone(),
                         package: module.package,
                         module: index,
+                        package_name: module.package_name.clone(),
+                        module_name: module.name.clone(),
                         fields: field_infos,
                         forbidden: std::collections::HashSet::new(),
                     });

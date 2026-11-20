@@ -100,7 +100,7 @@ pub fn check(program: &Program, profile: WidthProfile) -> Result<(), Error> {
 pub fn check_with_externals(
     program: &Program,
     profile: WidthProfile,
-    external: &[program::ExportInfo],
+    external: &[program::ExternalInterface],
 ) -> Result<(), Error> {
     let result = analyze_with_externals(program, profile, external);
     match result.diagnostics.into_iter().next() {
@@ -129,7 +129,7 @@ pub fn check_all(program: &Program, profile: WidthProfile) -> Vec<Diagnostic> {
 pub fn check_all_with_externals(
     program: &Program,
     profile: WidthProfile,
-    external: &[program::ExportInfo],
+    external: &[program::ExternalInterface],
 ) -> Vec<Diagnostic> {
     analyze_with_externals(program, profile, external).diagnostics
 }
@@ -137,7 +137,7 @@ pub fn check_all_with_externals(
 pub fn analyze_with_externals(
     program: &Program,
     profile: WidthProfile,
-    external: &[program::ExportInfo],
+    external: &[program::ExternalInterface],
 ) -> CheckResult {
     let info = match program::analyze(program) {
         Ok(info) => info,
@@ -149,26 +149,19 @@ pub fn analyze_with_externals(
             };
         }
     };
+    let module_modes: Vec<HashMap<String, Type>> = info
+        .interfaces
+        .iter()
+        .map(|interface| interface.modes.clone())
+        .collect();
+    let mut modes = info.modes;
+    let external_modes = match program::add_external_modes(&mut modes, external) {
+        Ok(ids) => ids,
+        Err(message) => return external_error(message),
+    };
     let mut exports = info.exports;
-
-    for info in external {
-        let kind = match &info.kind {
-            program::ExportInfoKind::Var(ty) => ExportKind::Var(*ty),
-            program::ExportInfoKind::Proc { params, result } => ExportKind::Proc(ProcType {
-                params: params.clone(),
-                result: *result,
-            }),
-        };
-        exports.push(program::ExportEntry {
-            module: usize::MAX,
-            package: usize::MAX,
-            package_name: info.package_name.clone(),
-            module_name: info.module_name.clone(),
-            name: info.name.clone(),
-            prefix: info.prefix.clone(),
-            kind,
-            friends: None,
-        });
+    if let Err(message) = program::add_external_exports(&mut exports, external, &external_modes) {
+        return external_error(message);
     }
 
     let mut checker = Checker {
@@ -176,12 +169,8 @@ pub fn analyze_with_externals(
         scopes: Vec::new(),
         results: Vec::new(),
         exports,
-        modes: info.modes,
-        module_modes: info
-            .interfaces
-            .iter()
-            .map(|interface| interface.modes.clone())
-            .collect(),
+        modes,
+        module_modes,
         current_module: 0,
         current_package: 0,
         current_package_name: None,
@@ -210,6 +199,14 @@ pub fn analyze_with_externals(
         diagnostics: checker.diagnostics,
         types: checker.types,
         resolutions: checker.resolutions,
+    }
+}
+
+fn external_error(message: String) -> CheckResult {
+    CheckResult {
+        diagnostics: vec![Diagnostic::new("E0600", None, message)],
+        types: HashMap::new(),
+        resolutions: HashMap::new(),
     }
 }
 

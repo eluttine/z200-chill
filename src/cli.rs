@@ -188,14 +188,14 @@ struct LoadedPackage {
     source_map: SourceMap,
     token_count: usize,
     program: Program,
-    external: Vec<program::ExportInfo>,
+    external: Vec<program::ExternalInterface>,
 }
 
 struct Loader {
     source_map: SourceMap,
     modules: Vec<crate::ast::Module>,
     token_count: usize,
-    external: Vec<program::ExportInfo>,
+    external: Vec<program::ExternalInterface>,
     visiting: HashSet<PathBuf>,
     loaded: HashSet<PathBuf>,
     next_package: usize,
@@ -407,9 +407,9 @@ impl Loader {
             }
         }
 
-        self.external.extend(
+        self.external.push(
             grant_file
-                .to_export_infos()
+                .to_interface()
                 .map_err(|error| format!("error[E0600]: {}: {error}", path.display()))?,
         );
         Ok(())

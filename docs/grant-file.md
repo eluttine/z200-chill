@@ -76,14 +76,34 @@ Implemented v0 rules:
 - At runtime, spec grants resolve to the paired body's variables and procedures.
 
 `z200c grant` writes the compiled interface to
-`target/z200c/<package>.grt.toml`:
+`target/z200c/<package>.grt.toml`. The grant file is a `z200c` artifact, not a Z.200
+construct: the standard defines `GRANT`/`SEIZE` semantics (§12.2.3.4–12.2.3.5), not an
+interchange format. The file must preserve those semantics, but its encoding is ours.
 
 ```toml
-schema = 1
+schema = 2
 package = "spec"
 edition = "z200-11/99"
 int_widths = "16-32-64"
 package_dir = "/absolute/path/to/spec"
+
+[[modes]]
+name = "S"
+module = "Counter"
+package = "spec"
+fields = [
+  { name = "x", mode = "INT" },
+  { name = "hidden", mode = "BOOL" },
+]
+
+[[exports]]
+name = "S"
+module = "Counter"
+package = "spec"
+kind = "mode"
+mode = "spec!Counter!S"
+forbid = ["hidden"]
+friends = ["spec!Driver"]
 
 [[exports]]
 name = "Bump"
@@ -99,6 +119,14 @@ package = "spec"
 kind = "variable"
 mode = "INT"
 ```
+
+Structure modes use the symbolic identity `package!Module!Mode`; local `ModeId`s are never
+written. All structure modes declared by named modules are recorded so field types can be
+resolved, even if a nested mode is not granted itself. `forbid` is per grant, matching
+`GRANT ... FORBID ...`.
+
+Schema changes are breaking while the project is early: `z200c` accepts exactly
+`schema = 2` and does not read older layouts.
 
 `package_dir` is optional. `z200c grant` records the source package directory so `run`
 can link the dependency when the source is available; interface-only grant files omit it
@@ -126,14 +154,13 @@ lib = "../lib/target/z200c/lib.grt.toml"
 
 ## Current limits
 
-- Interface-only grant files are static: `check` and `grant` use their interfaces, but
-  `run` cannot link them without a source package.
+- Interface-only grant files are static: `check`, `grant`, and structure-mode use work,
+  but `run` cannot execute external variables/procedures without a source package.
 - `SEIZE ... PREFIXED ...` and non-empty old prefixes in rename clauses are not
   implemented.
-- Structure modes and field access are supported inside a linked program, including
-  seized modes. Grant files cannot represent mode definitions yet, so `z200c grant`
-  omits mode exports and external packages cannot seize a structure mode.
-- `TO` friend restrictions are enforced inside a linked program but are not recorded in
-  emitted grant files, so an external grant-file interface is visible to all consumers.
+- Structure modes travel through grant files: an external package can `SEIZE` a granted
+  structure mode and use its fields statically. Grant files still contain interfaces,
+  not bodies, so `run` needs source linking before external variables or procedures can
+  be executed.
 - Contexts, remote pieces, and symbol mangling for native code generation are not
   implemented.

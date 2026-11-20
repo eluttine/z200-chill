@@ -139,7 +139,7 @@ fn checks_against_dependency_grant_file() {
     std::fs::write(
         dir.join("lib.grt.toml"),
         r#"
-schema = 1
+schema = 2
 package = "lib"
 edition = "z200-11/99"
 int_widths = "16-32-64"
@@ -211,7 +211,7 @@ fn run_allows_unused_dependency() {
     std::fs::write(
         dir.join("lib.grt.toml"),
         r#"
-schema = 1
+schema = 2
 package = "lib"
 edition = "z200-11/99"
 int_widths = "16-32-64"
@@ -512,6 +512,113 @@ END Client;
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+
+    std::fs::remove_dir_all(&base).unwrap();
+}
+
+#[test]
+fn runs_with_structure_mode_from_grant_file() {
+    let base = std::env::temp_dir().join(format!("z200c-struct-grant-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let lib = base.join("libstruct");
+    std::fs::create_dir_all(lib.join("src")).unwrap();
+
+    std::fs::write(
+        lib.join("Chill.toml"),
+        r#"
+[package]
+name = "structlib"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+int_widths = "16-32-64"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        lib.join("src/main.ch"),
+        r#"
+A: MODULE
+  NEWMODE S = STRUCT(x INT, hidden BOOL);
+  GRANT S FORBID (hidden);
+END A;
+"#,
+    )
+    .unwrap();
+
+    let grant = z200c().arg("grant").arg(&lib).output().unwrap();
+    assert!(
+        grant.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&grant.stdout),
+        String::from_utf8_lossy(&grant.stderr)
+    );
+    let grant_path = lib.join("target/z200c/structlib.grt.toml");
+    let text = std::fs::read_to_string(&grant_path).unwrap();
+    assert!(text.contains("schema = 2"));
+    assert!(text.contains("[[modes]]"));
+    assert!(text.contains("mode = \"structlib!A!S\""));
+
+    let client = base.join("client");
+    std::fs::create_dir_all(client.join("src")).unwrap();
+    std::fs::write(
+        client.join("Chill.toml"),
+        format!(
+            r#"
+[package]
+name = "client"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+int_widths = "16-32-64"
+
+[dependencies]
+structlib = "{}"
+"#,
+            grant_path.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        client.join("src/main.ch"),
+        r#"
+Client: MODULE
+  SEIZE S;
+  DCL s S;
+  s.x := 7;
+  ASSERT s.x = 7;
+END Client;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("run").arg(&client).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::write(
+        client.join("src/main.ch"),
+        r#"
+Client: MODULE
+  SEIZE S;
+  DCL s S;
+  s.hidden := TRUE;
+END Client;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("check").arg(&client).output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("FORBIDden"), "stderr: {stderr}");
 
     std::fs::remove_dir_all(&base).unwrap();
 }
