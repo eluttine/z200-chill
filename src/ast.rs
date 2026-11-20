@@ -17,6 +17,26 @@ pub struct Module {
 pub enum Declaration {
     Var(Vec<VarDecl>),
     Proc(ProcDef),
+    Visibility(Visibility),
+}
+
+#[derive(Debug, Clone)]
+pub struct Visibility {
+    pub kind: VisibilityKind,
+    pub names: Vec<NameRef>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisibilityKind {
+    Grant,
+    Seize,
+}
+
+#[derive(Debug, Clone)]
+pub struct NameRef {
+    pub name: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

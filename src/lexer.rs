@@ -177,6 +177,7 @@ define_keywords! {
     Return => "RETURN",
     Returns => "RETURNS",
     Row => "ROW",
+    Seize => "SEIZE",
     SelfKw => "SELF",
     Send => "SEND",
     Set => "SET",

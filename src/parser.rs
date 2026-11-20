@@ -61,7 +61,7 @@ impl<'a> Parser<'a> {
             self.advance();
         }
 
-        let declarations = self.parse_declarations()?;
+        let declarations = self.parse_declarations(true)?;
         let actions = self.parse_actions_until(&[Keyword::End])?;
         self.expect_keyword(Keyword::End)?;
 
@@ -88,18 +88,61 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_declarations(&mut self) -> Result<Vec<Declaration>, Error> {
+    fn parse_declarations(&mut self, allow_visibility: bool) -> Result<Vec<Declaration>, Error> {
         let mut declarations = Vec::new();
         loop {
             if self.at_keyword(Keyword::Dcl) {
                 declarations.push(Declaration::Var(self.parse_dcl()?));
             } else if self.at_proc_definition() {
                 declarations.push(Declaration::Proc(self.parse_proc()?));
+            } else if self.at_keyword(Keyword::Grant) {
+                if !allow_visibility {
+                    return Err(self.error_here("GRANT is only allowed at module level"));
+                }
+                declarations.push(Declaration::Visibility(
+                    self.parse_visibility(VisibilityKind::Grant)?,
+                ));
+            } else if self.at_keyword(Keyword::Seize) {
+                if !allow_visibility {
+                    return Err(self.error_here("SEIZE is only allowed at module level"));
+                }
+                declarations.push(Declaration::Visibility(
+                    self.parse_visibility(VisibilityKind::Seize)?,
+                ));
             } else {
                 break;
             }
         }
         Ok(declarations)
+    }
+
+    fn parse_visibility(&mut self, kind: VisibilityKind) -> Result<Visibility, Error> {
+        let start = self.current_span();
+        self.advance(); // GRANT or SEIZE
+
+        let mut names = Vec::new();
+        loop {
+            if matches!(self.kind(), Some(TokenKind::Keyword(Keyword::All))) {
+                return Err(self.error_here("GRANT/SEIZE ALL is not implemented yet"));
+            }
+            let (name, span) = self.expect_identifier()?;
+            names.push(NameRef { name, span });
+            if self.at_comma() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        let end = self.expect_semicolon()?;
+        Ok(Visibility {
+            kind,
+            names,
+            span: Span {
+                start: start.start,
+                end: end.end,
+            },
+        })
     }
 
     fn parse_dcl(&mut self) -> Result<Vec<VarDecl>, Error> {
@@ -241,7 +284,7 @@ impl<'a> Parser<'a> {
         }
 
         self.expect_semicolon()?;
-        let declarations = self.parse_declarations()?;
+        let declarations = self.parse_declarations(false)?;
         let actions = self.parse_actions_until(&[Keyword::End])?;
         self.expect_keyword(Keyword::End)?;
 
@@ -475,7 +518,7 @@ impl<'a> Parser<'a> {
     fn parse_begin(&mut self) -> Result<Action, Error> {
         let start = self.current_span();
         self.expect_keyword(Keyword::Begin)?;
-        let declarations = self.parse_declarations()?;
+        let declarations = self.parse_declarations(false)?;
         let actions = self.parse_actions_until(&[Keyword::End])?;
         self.expect_keyword(Keyword::End)?;
         let end = self.expect_semicolon()?;
@@ -969,6 +1012,51 @@ END M;
         assert_eq!(proc_def.params[1].passing, Passing::In);
         assert_eq!(proc_def.params[2].name, "c");
         assert_eq!(proc_def.params[2].passing, Passing::Out);
+    }
+
+    #[test]
+    fn parses_visibility_statements() {
+        let program = parse_source(
+            r#"
+M: MODULE
+  GRANT x, F;
+  SEIZE y;
+END M;
+"#,
+        );
+
+        let declarations = &program.modules[0].declarations;
+        assert_eq!(declarations.len(), 2);
+
+        let Declaration::Visibility(grant) = &declarations[0] else {
+            panic!("expected GRANT");
+        };
+        assert_eq!(grant.kind, VisibilityKind::Grant);
+        assert_eq!(grant.names.len(), 2);
+        assert_eq!(grant.names[0].name, "x");
+        assert_eq!(grant.names[1].name, "F");
+
+        let Declaration::Visibility(seize) = &declarations[1] else {
+            panic!("expected SEIZE");
+        };
+        assert_eq!(seize.kind, VisibilityKind::Seize);
+        assert_eq!(seize.names[0].name, "y");
+    }
+
+    #[test]
+    fn visibility_is_rejected_inside_procedures() {
+        let tokens = lexer::tokenize(
+            r#"
+M: MODULE
+  P: PROC ();
+    GRANT x;
+  END P;
+END M;
+"#,
+        )
+        .unwrap();
+        let error = parse(&tokens).unwrap_err();
+        assert!(error.message.contains("only allowed at module level"));
     }
 
     #[test]

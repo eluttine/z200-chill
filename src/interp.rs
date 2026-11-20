@@ -2,8 +2,10 @@ use crate::ast::*;
 use crate::lexer::Span;
 use crate::manifest::WidthProfile;
 use crate::types::{self, IntKind, Type};
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
@@ -31,12 +33,22 @@ impl std::error::Error for Error {}
 pub fn run(program: &Program, profile: WidthProfile) -> Result<(), Error> {
     let mut interpreter = Interpreter {
         profile,
-        scopes: Vec::new(),
+        modules: Vec::new(),
+        locals: Vec::new(),
+        call_bases: Vec::new(),
+        active_module: 0,
         depth: 0,
     };
-    for module in &program.modules {
+
+    interpreter.declare_modules(program)?;
+    interpreter.apply_seizes(program)?;
+
+    for (index, module) in program.modules.iter().enumerate() {
+        interpreter.active_module = index;
+        interpreter.initialize_declarations(&module.declarations)?;
         interpreter.run_module(module)?;
     }
+
     Ok(())
 }
 
@@ -54,10 +66,24 @@ struct Var {
     value: Value,
 }
 
+type VarCell = Rc<RefCell<Var>>;
+
+#[derive(Clone, Copy)]
+struct ProcRef<'a> {
+    def: &'a ProcDef,
+    module: usize,
+}
+
 #[derive(Default)]
 struct Scope<'a> {
-    vars: HashMap<String, Var>,
-    procs: HashMap<String, &'a ProcDef>,
+    vars: HashMap<String, VarCell>,
+    procs: HashMap<String, ProcRef<'a>>,
+}
+
+#[derive(Clone, Copy)]
+struct ExportRef {
+    module: usize,
+    is_proc: bool,
 }
 
 struct Frame {
@@ -74,66 +100,147 @@ enum Flow {
 
 struct Interpreter<'a> {
     profile: WidthProfile,
-    scopes: Vec<Scope<'a>>,
+    /// Persistent scopes, one per module, indexed like `program.modules`.
+    modules: Vec<Scope<'a>>,
+    /// Call and `BEGIN` scopes, searched before the active module scope.
+    locals: Vec<Scope<'a>>,
+    /// Index into `locals` at each procedure-call entry.
+    call_bases: Vec<usize>,
+    active_module: usize,
     depth: usize,
 }
 
 impl<'a> Interpreter<'a> {
-    fn run_module(&mut self, module: &'a Module) -> Result<(), Error> {
-        self.scopes.push(Scope::default());
-        let result = self.run_module_body(module);
-        self.scopes.pop();
-        result
-    }
-
-    fn run_module_body(&mut self, module: &'a Module) -> Result<(), Error> {
-        self.collect_declarations(&module.declarations)?;
-        let mut frame = Frame {
-            result_type: None,
-            result: None,
-        };
-        self.exec_actions(&module.actions, &mut frame)?;
+    fn declare_modules(&mut self, program: &'a Program) -> Result<(), Error> {
+        for (index, module) in program.modules.iter().enumerate() {
+            let mut scope = Scope::default();
+            declare_into_scope(&mut scope, &module.declarations, index)?;
+            self.modules.push(scope);
+        }
         Ok(())
     }
 
-    fn collect_declarations(&mut self, declarations: &'a [Declaration]) -> Result<(), Error> {
-        for declaration in declarations {
-            match declaration {
-                Declaration::Var(vars) => {
-                    for var in vars {
-                        let ty = self.mode_type(&var.mode)?;
-                        let scope = self.scopes.last_mut().expect("scope stack is never empty");
-                        if scope.vars.contains_key(&var.name) || scope.procs.contains_key(&var.name)
-                        {
-                            return Err(Error::new(
-                                var.span,
-                                format!("duplicate declaration of `{}`", var.name),
-                            ));
-                        }
-                        scope.vars.insert(
-                            var.name.clone(),
-                            Var {
-                                ty,
-                                value: Value::Undefined,
-                            },
-                        );
-                    }
+    fn apply_seizes(&mut self, program: &'a Program) -> Result<(), Error> {
+        let exports = self.build_exports(program)?;
+        let mut imports = Vec::new();
+
+        for (current, module) in program.modules.iter().enumerate() {
+            for declaration in &module.declarations {
+                let Declaration::Visibility(visibility) = declaration else {
+                    continue;
+                };
+                if visibility.kind != VisibilityKind::Seize {
+                    continue;
                 }
-                Declaration::Proc(proc_def) => {
-                    let scope = self.scopes.last_mut().expect("scope stack is never empty");
-                    if scope.vars.contains_key(&proc_def.name)
-                        || scope.procs.contains_key(&proc_def.name)
-                    {
+                for name in &visibility.names {
+                    let Some(export) = exports.get(&name.name) else {
                         return Err(Error::new(
-                            proc_def.span,
-                            format!("duplicate declaration of `{}`", proc_def.name),
+                            name.span,
+                            format!("cannot SEIZE `{}`: no module grants it", name.name),
+                        ));
+                    };
+                    if export.module == current {
+                        return Err(Error::new(
+                            name.span,
+                            format!("cannot SEIZE `{}` from the same module", name.name),
                         ));
                     }
-                    scope.procs.insert(proc_def.name.clone(), proc_def);
+                    imports.push((
+                        current,
+                        name.name.clone(),
+                        name.span,
+                        export.module,
+                        export.is_proc,
+                    ));
                 }
             }
         }
 
+        for (current, name, span, source, is_proc) in imports {
+            if is_proc {
+                let proc_ref = *self.modules[source].procs.get(&name).ok_or_else(|| {
+                    Error::new(span, format!("cannot SEIZE `{name}`: not a procedure"))
+                })?;
+                if self.modules[current]
+                    .procs
+                    .insert(name.clone(), proc_ref)
+                    .is_some()
+                {
+                    return Err(Error::new(
+                        span,
+                        format!("duplicate declaration of `{name}`"),
+                    ));
+                }
+            } else {
+                let cell = self.modules[source]
+                    .vars
+                    .get(&name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::new(span, format!("cannot SEIZE `{name}`: not a location"))
+                    })?;
+                if self.modules[current]
+                    .vars
+                    .insert(name.clone(), cell)
+                    .is_some()
+                {
+                    return Err(Error::new(
+                        span,
+                        format!("duplicate declaration of `{name}`"),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn build_exports(&self, program: &'a Program) -> Result<HashMap<String, ExportRef>, Error> {
+        let mut exports = HashMap::new();
+
+        for (index, module) in program.modules.iter().enumerate() {
+            for declaration in &module.declarations {
+                let Declaration::Visibility(visibility) = declaration else {
+                    continue;
+                };
+                if visibility.kind != VisibilityKind::Grant {
+                    continue;
+                }
+                for name in &visibility.names {
+                    let is_proc = if self.modules[index].procs.contains_key(&name.name) {
+                        true
+                    } else if self.modules[index].vars.contains_key(&name.name) {
+                        false
+                    } else {
+                        return Err(Error::new(
+                            name.span,
+                            format!("cannot GRANT `{}`: not declared in this module", name.name),
+                        ));
+                    };
+
+                    if exports
+                        .insert(
+                            name.name.clone(),
+                            ExportRef {
+                                module: index,
+                                is_proc,
+                            },
+                        )
+                        .is_some()
+                    {
+                        return Err(Error::new(
+                            name.span,
+                            format!("`{}` is granted more than once", name.name),
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(exports)
+    }
+
+    fn initialize_declarations(&mut self, declarations: &'a [Declaration]) -> Result<(), Error> {
         for declaration in declarations {
             let Declaration::Var(vars) = declaration else {
                 continue;
@@ -145,13 +252,22 @@ impl<'a> Interpreter<'a> {
                 }
             }
         }
-
         Ok(())
     }
 
-    fn mode_type(&self, mode: &ModeRef) -> Result<Type, Error> {
-        types::resolve_mode(&mode.name)
-            .ok_or_else(|| Error::new(mode.span, format!("unknown mode `{}`", mode.name)))
+    fn declare_local(&mut self, declarations: &'a [Declaration]) -> Result<(), Error> {
+        let module = self.active_module;
+        let scope = self.locals.last_mut().expect("local scope");
+        declare_into_scope(scope, declarations, module)
+    }
+
+    fn run_module(&mut self, module: &'a Module) -> Result<(), Error> {
+        let mut frame = Frame {
+            result_type: None,
+            result: None,
+        };
+        self.exec_actions(&module.actions, &mut frame)?;
+        Ok(())
     }
 
     fn exec_actions(&mut self, actions: &'a [Action], frame: &mut Frame) -> Result<Flow, Error> {
@@ -236,12 +352,13 @@ impl<'a> Interpreter<'a> {
                     actions,
                     ..
                 } => {
-                    self.scopes.push(Scope::default());
+                    self.locals.push(Scope::default());
                     let result = (|| {
-                        self.collect_declarations(declarations)?;
+                        self.declare_local(declarations)?;
+                        self.initialize_declarations(declarations)?;
                         self.exec_actions(actions, frame)
                     })();
-                    self.scopes.pop();
+                    self.locals.pop();
                     return result;
                 }
                 Action::Empty { .. } => {}
@@ -366,9 +483,10 @@ impl<'a> Interpreter<'a> {
             return self.make_int(value, Some(kind), span);
         }
 
-        let Some(proc_def) = self.lookup_proc(name) else {
+        let Some(proc_ref) = self.lookup_proc(name) else {
             return Err(Error::new(span, format!("unknown name `{name}`")));
         };
+        let proc_def = proc_ref.def;
         if proc_def.params.len() != args.len() {
             return Err(Error::new(
                 span,
@@ -385,24 +503,31 @@ impl<'a> Interpreter<'a> {
             values.push(self.eval_expr(arg)?);
         }
 
-        self.scopes.push(Scope::default());
-        let result = self.call_proc(proc_def, values, span);
-        self.scopes.pop();
-        result
+        self.call_proc(proc_ref, values, span)
     }
 
     fn call_proc(
         &mut self,
-        proc_def: &'a ProcDef,
+        proc_ref: ProcRef<'a>,
         args: Vec<Value>,
         span: Span,
     ) -> Result<Value, Error> {
         if self.depth >= 1024 {
             return Err(Error::new(span, "call depth limit exceeded"));
         }
+
+        let previous_module = self.active_module;
+        self.active_module = proc_ref.module;
+        self.locals.push(Scope::default());
+        self.call_bases.push(self.locals.len() - 1);
         self.depth += 1;
-        let result = self.call_proc_inner(proc_def, args, span);
+
+        let result = self.call_proc_inner(proc_ref.def, args, span);
+
         self.depth -= 1;
+        self.call_bases.pop();
+        self.locals.pop();
+        self.active_module = previous_module;
         result
     }
 
@@ -413,22 +538,25 @@ impl<'a> Interpreter<'a> {
         span: Span,
     ) -> Result<Value, Error> {
         for (param, arg) in proc_def.params.iter().zip(args) {
-            let ty = self.mode_type(&param.mode)?;
+            let ty = mode_type(&param.mode)?;
             let value = self.convert(arg, ty, param.span)?;
-            let scope = self.scopes.last_mut().expect("scope stack is never empty");
+            let scope = self.locals.last_mut().expect("local scope");
             if scope.vars.contains_key(&param.name) || scope.procs.contains_key(&param.name) {
                 return Err(Error::new(
                     param.span,
                     format!("duplicate declaration of `{}`", param.name),
                 ));
             }
-            scope.vars.insert(param.name.clone(), Var { ty, value });
+            scope
+                .vars
+                .insert(param.name.clone(), Rc::new(RefCell::new(Var { ty, value })));
         }
 
-        self.collect_declarations(&proc_def.declarations)?;
+        self.declare_local(&proc_def.declarations)?;
+        self.initialize_declarations(&proc_def.declarations)?;
 
         let result_type = match &proc_def.result {
-            Some(mode) => Some(self.mode_type(mode)?),
+            Some(mode) => Some(mode_type(mode)?),
             None => None,
         };
 
@@ -632,45 +760,112 @@ impl<'a> Interpreter<'a> {
     }
 
     fn read_var(&self, name: &str, span: Span) -> Result<Value, Error> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(var) = scope.vars.get(name) {
-                return match &var.value {
-                    Value::Undefined => {
-                        Err(Error::new(span, format!("use of undefined value `{name}`")))
-                    }
-                    value => Ok(value.clone()),
-                };
-            }
+        let cell = self
+            .find_var_cell(name)
+            .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+        let var = cell.borrow();
+        match &var.value {
+            Value::Undefined => Err(Error::new(span, format!("use of undefined value `{name}`"))),
+            value => Ok(value.clone()),
         }
-        Err(Error::new(span, format!("unknown variable `{name}`")))
     }
 
     fn assign_var(&mut self, name: &str, value: Value, span: Span) -> Result<(), Error> {
-        let ty = self
-            .scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.vars.get(name).map(|var| var.ty))
+        let cell = self
+            .find_var_cell(name)
             .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
-
+        let ty = cell.borrow().ty;
         let value = self.convert(value, ty, span)?;
+        cell.borrow_mut().value = value;
+        Ok(())
+    }
 
-        for scope in self.scopes.iter_mut().rev() {
-            if let Some(var) = scope.vars.get_mut(name) {
-                var.value = value;
-                return Ok(());
+    fn find_var_cell(&self, name: &str) -> Option<VarCell> {
+        let floor = self.local_floor();
+        for scope in self.locals[floor..].iter().rev() {
+            if let Some(cell) = scope.vars.get(name) {
+                return Some(cell.clone());
             }
         }
-
-        Err(Error::new(span, format!("unknown variable `{name}`")))
+        self.modules
+            .get(self.active_module)?
+            .vars
+            .get(name)
+            .cloned()
     }
 
-    fn lookup_proc(&self, name: &str) -> Option<&'a ProcDef> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.procs.get(name).copied())
+    fn lookup_proc(&self, name: &str) -> Option<ProcRef<'a>> {
+        let floor = self.local_floor();
+        for scope in self.locals[floor..].iter().rev() {
+            if let Some(proc_ref) = scope.procs.get(name) {
+                return Some(*proc_ref);
+            }
+        }
+        self.modules
+            .get(self.active_module)?
+            .procs
+            .get(name)
+            .copied()
     }
+
+    /// Scopes below this index belong to the caller and must not be visible
+    /// to a module-level procedure body.
+    fn local_floor(&self) -> usize {
+        self.call_bases.last().copied().unwrap_or(0)
+    }
+}
+
+fn declare_into_scope<'a>(
+    scope: &mut Scope<'a>,
+    declarations: &'a [Declaration],
+    module: usize,
+) -> Result<(), Error> {
+    for declaration in declarations {
+        match declaration {
+            Declaration::Var(vars) => {
+                for var in vars {
+                    let ty = mode_type(&var.mode)?;
+                    if scope.vars.contains_key(&var.name) || scope.procs.contains_key(&var.name) {
+                        return Err(Error::new(
+                            var.span,
+                            format!("duplicate declaration of `{}`", var.name),
+                        ));
+                    }
+                    scope.vars.insert(
+                        var.name.clone(),
+                        Rc::new(RefCell::new(Var {
+                            ty,
+                            value: Value::Undefined,
+                        })),
+                    );
+                }
+            }
+            Declaration::Proc(proc_def) => {
+                if scope.vars.contains_key(&proc_def.name)
+                    || scope.procs.contains_key(&proc_def.name)
+                {
+                    return Err(Error::new(
+                        proc_def.span,
+                        format!("duplicate declaration of `{}`", proc_def.name),
+                    ));
+                }
+                scope.procs.insert(
+                    proc_def.name.clone(),
+                    ProcRef {
+                        def: proc_def,
+                        module,
+                    },
+                );
+            }
+            Declaration::Visibility(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn mode_type(mode: &ModeRef) -> Result<Type, Error> {
+    types::resolve_mode(&mode.name)
+        .ok_or_else(|| Error::new(mode.span, format!("unknown mode `{}`", mode.name)))
 }
 
 fn binary_for_assign(op: AssignOp) -> BinaryOp {
@@ -759,6 +954,35 @@ M: MODULE
   END Add;
   ASSERT Add(2, 3) = 5;
 END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn seizes_across_modules() {
+        run_source(
+            r#"
+A: MODULE
+  GRANT x, F;
+  DCL x INT INIT := 41;
+  DCL secret INT INIT := 1;
+  F: PROC () RETURNS (INT);
+    RETURN (x + secret);
+  END F;
+END A;
+
+B: MODULE
+  SEIZE x, F;
+  ASSERT x = 41;
+  ASSERT F() = 42;
+  x := x + 1;
+END B;
+
+C: MODULE
+  SEIZE x;
+  ASSERT x = 42;
+END C;
 "#,
         )
         .unwrap();

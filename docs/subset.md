@@ -57,13 +57,14 @@ Implemented in `z200c`:
 - mode checking for `SHORT_INT` / `INT` / `LONG_INT` / `BOOL`, literals, arithmetic,
   relational and boolean expressions, procedures, calls, assignments, `ASSERT`,
   `IF`, `DO WHILE` / `DO FOR EVER`, and `BEGIN … END`;
+- `GRANT` / `SEIZE` visibility between modules in a single entry file, including
+  shared seized locations and procedures;
 - a tree-walking interpreter, so `z200c run examples/hello` executes the example and
   verifies its `ASSERT`.
 
 Not implemented yet (rejected or deferred with a diagnostic):
 
-- `GRANT` / `SEIZE` parsing and visibility checking;
-- `SPEC` modules, contexts, and remote pieces;
+- separate-compilation grant files, `SPEC` modules, contexts, and remote pieces;
 - `DO FOR` counters, labelled `EXIT`, and `CASE`;
 - `OUT` / `INOUT` / `LOC` parameter passing;
 - exceptions (`EXCEPTIONS`, `CAUSE`, handlers) and text I/O;
@@ -326,9 +327,26 @@ action, but it is non-idiomatic and has been removed from the example.)
   - you may not `SEIZE` a name that is not visible/granted in the enclosing reach;
   - referring to a granted name without seizing it is an error.
 - Full Z.200 also supports prefixes (`module!name`), grant windows (`ALL`, `FORBID`),
-  friend clauses (`TO`), contexts, spec modules, and remote pieces. The current
-  implementation does not parse `GRANT` / `SEIZE` yet; when it does, v0 will support
-  only the simple form `GRANT a, b;` / `SEIZE a, b;`.
+  friend clauses (`TO`), contexts, spec modules, and remote pieces.
+
+### 7.2.1 Implemented model (v0, single entry file)
+
+The program units in one entry file are treated as siblings in the imaginary outermost
+process. Visibility is static and independent of textual order:
+
+- `GRANT a, b;` may only name variables or procedures **declared in the same module**.
+  Granted names become candidates for `SEIZE` by other modules.
+- `SEIZE a, b;` imports each name from the unique other module that granted it.
+  Seizing an ungranted name is an error; a name granted by more than one module is an
+  error (v0 has no prefixes to disambiguate).
+- Names are private unless granted and seized. A module cannot see another module's
+  private names.
+- A seized variable aliases the granting module's location, so assignments are shared.
+- A seized procedure executes in its **defining** module's scope; it does not see the
+  caller's module or local names.
+- A module cannot seize a name it grants itself.
+- `GRANT ALL`, `FORBID`, `TO`, prefixes, `SPEC` modules, contexts, remote pieces, and
+  on-disk grant files are not implemented yet.
 
 ### 7.3 SPEC modules (§10.10.2)
 
@@ -452,11 +470,13 @@ need I/O:
 - expected exit status: success;
 - unhandled `ASSERTFAIL`/exception: failure.
 
-### 10.4 Grant-file / multi-module model (open)
+### 10.4 Grant-file / multi-module model (partially resolved)
 
-Decide the on-disk grant information and symbol-mangling scheme before adding multi-file
-builds. Z.200 permits several piecewise schemes (§10.10); v0 should implement one simple
-one and reject the rest with clear diagnostics.
+v0 implements static `GRANT` / `SEIZE` visibility for modules in a single entry file,
+including shared seized locations and procedures. On-disk grant information and symbol
+mangling for separate compilation are still open. Z.200 permits several piecewise
+schemes (§10.10); the next step is one simple grant-file format while rejecting the
+rest with clear diagnostics.
 
 ### 10.5 Range-check default (resolved for v0)
 

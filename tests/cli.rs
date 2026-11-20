@@ -4,13 +4,13 @@ fn z200c() -> Command {
     Command::new(env!("CARGO_BIN_EXE_z200c"))
 }
 
-fn hello_package() -> String {
-    format!("{}/examples/hello", env!("CARGO_MANIFEST_DIR"))
+fn example(name: &str) -> String {
+    format!("{}/examples/{}", env!("CARGO_MANIFEST_DIR"), name)
 }
 
 #[test]
 fn check_hello_succeeds() {
-    let output = z200c().arg("check").arg(hello_package()).output().unwrap();
+    let output = z200c().arg("check").arg(example("hello")).output().unwrap();
 
     assert!(
         output.status.success(),
@@ -23,7 +23,21 @@ fn check_hello_succeeds() {
 
 #[test]
 fn run_hello_succeeds_without_output() {
-    let output = z200c().arg("run").arg(hello_package()).output().unwrap();
+    let output = z200c().arg("run").arg(example("hello")).output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn run_modules_example_succeeds() {
+    let output = z200c().arg("run").arg(example("modules")).output().unwrap();
 
     assert!(
         output.status.success(),

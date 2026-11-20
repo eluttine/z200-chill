@@ -28,12 +28,16 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 pub fn check(program: &Program, profile: WidthProfile) -> Result<(), Error> {
+    let exports = build_exports(program)?;
     let mut checker = Checker {
         profile,
         scopes: Vec::new(),
         results: Vec::new(),
+        exports,
+        current_module: 0,
     };
-    for module in &program.modules {
+    for (index, module) in program.modules.iter().enumerate() {
+        checker.current_module = index;
         checker.check_module(module)?;
     }
     Ok(())
@@ -43,6 +47,97 @@ pub fn check(program: &Program, profile: WidthProfile) -> Result<(), Error> {
 struct ProcSig {
     params: Vec<Type>,
     result: Option<Type>,
+}
+
+#[derive(Clone)]
+enum ExportKind {
+    Var(Type),
+    Proc(ProcSig),
+}
+
+#[derive(Clone)]
+struct Export {
+    module: usize,
+    kind: ExportKind,
+}
+
+/// Collect every `GRANT`ed name across the program. Grants are static, so this
+/// pass runs before modules are checked and is independent of textual order.
+fn build_exports(program: &Program) -> Result<HashMap<String, Export>, Error> {
+    let mut exports: HashMap<String, Export> = HashMap::new();
+
+    for (index, module) in program.modules.iter().enumerate() {
+        let mut vars = HashMap::new();
+        let mut procs = HashMap::new();
+        let mut grants = Vec::new();
+
+        for declaration in &module.declarations {
+            match declaration {
+                Declaration::Var(list) => {
+                    for var in list {
+                        let ty = resolve_mode(&var.mode)?;
+                        if vars.insert(var.name.clone(), ty).is_some()
+                            || procs.contains_key(&var.name)
+                        {
+                            return Err(Error::new(
+                                var.span,
+                                format!("duplicate declaration of `{}`", var.name),
+                            ));
+                        }
+                    }
+                }
+                Declaration::Proc(proc_def) => {
+                    let signature = proc_signature(proc_def)?;
+                    if procs.insert(proc_def.name.clone(), signature).is_some()
+                        || vars.contains_key(&proc_def.name)
+                    {
+                        return Err(Error::new(
+                            proc_def.span,
+                            format!("duplicate declaration of `{}`", proc_def.name),
+                        ));
+                    }
+                }
+                Declaration::Visibility(visibility) if visibility.kind == VisibilityKind::Grant => {
+                    for name in &visibility.names {
+                        grants.push((name.name.clone(), name.span));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for (name, span) in grants {
+            let kind = if let Some(ty) = vars.get(&name) {
+                ExportKind::Var(*ty)
+            } else if let Some(signature) = procs.get(&name) {
+                ExportKind::Proc(signature.clone())
+            } else {
+                return Err(Error::new(
+                    span,
+                    format!("cannot GRANT `{name}`: not declared in this module"),
+                ));
+            };
+
+            if let Some(previous) = exports.get(&name) {
+                let message = if previous.module == index {
+                    format!("`{name}` is granted more than once")
+                } else {
+                    format!("`{name}` is granted by more than one module")
+                };
+                return Err(Error::new(span, message));
+            }
+
+            exports.insert(
+                name,
+                Export {
+                    module: index,
+                    kind,
+                },
+            );
+        }
+    }
+
+    Ok(exports)
 }
 
 #[derive(Default)]
@@ -55,6 +150,8 @@ struct Checker {
     profile: WidthProfile,
     scopes: Vec<Scope>,
     results: Vec<Option<Type>>,
+    exports: HashMap<String, Export>,
+    current_module: usize,
 }
 
 impl Checker {
@@ -67,9 +164,47 @@ impl Checker {
 
     fn check_module_body(&mut self, module: &Module) -> Result<(), Error> {
         self.collect_declarations(&module.declarations)?;
+        self.apply_seizes(&module.declarations)?;
         self.check_initializers(&module.declarations)?;
         self.check_proc_bodies(&module.declarations)?;
         self.check_actions(&module.actions)
+    }
+
+    fn apply_seizes(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
+        for declaration in declarations {
+            let Declaration::Visibility(visibility) = declaration else {
+                continue;
+            };
+            if visibility.kind != VisibilityKind::Seize {
+                continue;
+            }
+
+            for name in &visibility.names {
+                let Some(export) = self.exports.get(&name.name) else {
+                    return Err(Error::new(
+                        name.span,
+                        format!("cannot SEIZE `{}`: no module grants it", name.name),
+                    ));
+                };
+
+                if export.module == self.current_module {
+                    return Err(Error::new(
+                        name.span,
+                        format!("cannot SEIZE `{}` from the same module", name.name),
+                    ));
+                }
+
+                match &export.kind {
+                    ExportKind::Var(ty) => {
+                        self.declare_var(&name.name, *ty, name.span)?;
+                    }
+                    ExportKind::Proc(signature) => {
+                        self.declare_proc(&name.name, signature.clone(), name.span)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn collect_declarations(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
@@ -77,14 +212,15 @@ impl Checker {
             match declaration {
                 Declaration::Var(vars) => {
                     for var in vars {
-                        let ty = self.resolve_mode(&var.mode)?;
+                        let ty = resolve_mode(&var.mode)?;
                         self.declare_var(&var.name, ty, var.span)?;
                     }
                 }
                 Declaration::Proc(proc_def) => {
-                    let signature = self.signature(proc_def)?;
+                    let signature = proc_signature(proc_def)?;
                     self.declare_proc(&proc_def.name, signature, proc_def.span)?;
                 }
+                Declaration::Visibility(_) => {}
             }
         }
         Ok(())
@@ -96,7 +232,7 @@ impl Checker {
                 continue;
             };
             for var in vars {
-                let ty = self.resolve_mode(&var.mode)?;
+                let ty = resolve_mode(&var.mode)?;
                 let Some(init) = &var.init else {
                     continue;
                 };
@@ -133,16 +269,17 @@ impl Checker {
                     format!("duplicate parameter `{}`", param.name),
                 ));
             }
-            let ty = self.resolve_mode(&param.mode)?;
+            let ty = resolve_mode(&param.mode)?;
             self.declare_var(&param.name, ty, param.span)?;
         }
 
         self.collect_declarations(&proc_def.declarations)?;
+        reject_nested_procs(&proc_def.declarations)?;
         self.check_initializers(&proc_def.declarations)?;
         self.check_proc_bodies(&proc_def.declarations)?;
 
         let result_type = match &proc_def.result {
-            Some(mode) => Some(self.resolve_mode(mode)?),
+            Some(mode) => Some(resolve_mode(mode)?),
             None => None,
         };
 
@@ -174,48 +311,6 @@ impl Checker {
         }
         scope.procs.insert(name.to_owned(), signature);
         Ok(())
-    }
-
-    fn signature(&self, proc_def: &ProcDef) -> Result<ProcSig, Error> {
-        let mut params = Vec::with_capacity(proc_def.params.len());
-        let mut seen = HashSet::new();
-        for param in &proc_def.params {
-            if param.passing != Passing::In {
-                return Err(Error::new(
-                    param.span,
-                    format!(
-                        "parameter passing mode `{:?}` is not implemented yet",
-                        param.passing
-                    ),
-                ));
-            }
-            if !seen.insert(param.name.as_str()) {
-                return Err(Error::new(
-                    param.span,
-                    format!("duplicate parameter `{}`", param.name),
-                ));
-            }
-            params.push(self.resolve_mode(&param.mode)?);
-        }
-
-        let result = match &proc_def.result {
-            Some(mode) => Some(self.resolve_mode(mode)?),
-            None => None,
-        };
-
-        Ok(ProcSig { params, result })
-    }
-
-    fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
-        types::resolve_mode(&mode.name).ok_or_else(|| {
-            Error::new(
-                mode.span,
-                format!(
-                    "unknown mode `{}`; v0 supports SHORT_INT, INT, LONG_INT, and BOOL",
-                    mode.name
-                ),
-            )
-        })
     }
 
     fn lookup_var(&self, name: &str) -> Option<Type> {
@@ -338,6 +433,7 @@ impl Checker {
                 self.scopes.push(Scope::default());
                 let result = (|| {
                     self.collect_declarations(declarations)?;
+                    reject_nested_procs(declarations)?;
                     self.check_initializers(declarations)?;
                     self.check_proc_bodies(declarations)?;
                     self.check_actions(actions)
@@ -708,6 +804,60 @@ impl Checker {
     }
 }
 
+fn proc_signature(proc_def: &ProcDef) -> Result<ProcSig, Error> {
+    let mut params = Vec::with_capacity(proc_def.params.len());
+    let mut seen = HashSet::new();
+    for param in &proc_def.params {
+        if param.passing != Passing::In {
+            return Err(Error::new(
+                param.span,
+                format!(
+                    "parameter passing mode `{:?}` is not implemented yet",
+                    param.passing
+                ),
+            ));
+        }
+        if !seen.insert(param.name.as_str()) {
+            return Err(Error::new(
+                param.span,
+                format!("duplicate parameter `{}`", param.name),
+            ));
+        }
+        params.push(resolve_mode(&param.mode)?);
+    }
+
+    let result = match &proc_def.result {
+        Some(mode) => Some(resolve_mode(mode)?),
+        None => None,
+    };
+
+    Ok(ProcSig { params, result })
+}
+
+fn resolve_mode(mode: &ModeRef) -> Result<Type, Error> {
+    types::resolve_mode(&mode.name).ok_or_else(|| {
+        Error::new(
+            mode.span,
+            format!(
+                "unknown mode `{}`; v0 supports SHORT_INT, INT, LONG_INT, and BOOL",
+                mode.name
+            ),
+        )
+    })
+}
+
+fn reject_nested_procs(declarations: &[Declaration]) -> Result<(), Error> {
+    for declaration in declarations {
+        if let Declaration::Proc(proc_def) = declaration {
+            return Err(Error::new(
+                proc_def.span,
+                "procedure definitions inside procedures are not implemented yet",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn binary_for_assign(op: AssignOp) -> BinaryOp {
     match op {
         AssignOp::Assign => BinaryOp::Eq,
@@ -804,5 +954,110 @@ END M;
         )
         .unwrap_err();
         assert!(error.message.contains("outside the range of SHORT_INT"));
+    }
+
+    #[test]
+    fn seizes_granted_variables_and_procedures() {
+        check_source(
+            r#"
+A: MODULE
+  GRANT x, F;
+  DCL x INT INIT := 41;
+  F: PROC () RETURNS (INT);
+    RETURN (x + 1);
+  END F;
+END A;
+
+B: MODULE
+  SEIZE x, F;
+  ASSERT x = 41;
+  ASSERT F() = 42;
+  x := x + 1;
+  ASSERT x = 42;
+END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_seize_of_ungranted_name() {
+        let error = check_source(
+            r#"
+A: MODULE
+  DCL secret INT;
+END A;
+
+B: MODULE
+  SEIZE secret;
+END B;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("no module grants it"));
+    }
+
+    #[test]
+    fn rejects_grant_of_undeclared_name() {
+        let error = check_source(
+            r#"
+A: MODULE
+  GRANT missing;
+END A;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("not declared in this module"));
+    }
+
+    #[test]
+    fn rejects_duplicate_grants() {
+        let error = check_source(
+            r#"
+A: MODULE
+  GRANT x;
+  DCL x INT;
+END A;
+
+B: MODULE
+  GRANT x;
+  DCL x INT;
+END B;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("granted by more than one module"));
+    }
+
+    #[test]
+    fn rejects_seize_from_same_module() {
+        let error = check_source(
+            r#"
+A: MODULE
+  GRANT x;
+  SEIZE x;
+  DCL x INT;
+END A;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("from the same module"));
+    }
+
+    #[test]
+    fn private_names_stay_private() {
+        let error = check_source(
+            r#"
+A: MODULE
+  DCL secret INT;
+END A;
+
+B: MODULE
+  ASSERT secret = 1;
+END B;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("unknown name `secret`"));
     }
 }
