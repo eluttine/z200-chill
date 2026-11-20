@@ -30,4 +30,4 @@ z200-chill/
 │   ├── modules/        # GRANT/SEIZE visibility example
 │   ├── spec/           # SPEC MODULE + body example
 │   └── control/        # DO FOR / CASE / EXIT example
-└── docs/               # Subset notes and design docs
+└── docs/               # subset.md, manifest.md, grant-file.md, decisions.md

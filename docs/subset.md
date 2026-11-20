@@ -190,15 +190,8 @@ The active profile must be part of the build-cache key (per `AGENTS.md`).
 
 ### 4.3 Manifest notation
 
-Chosen format (A): a three-number form
-
-```toml
-int_widths = "16-32-64"   # SHORT_INT-INT-LONG_INT
-```
-
-The two-number legacy form `"32-64"` is read as `INT-LONG_INT`, with `SHORT_INT`
-defaulting to `INT`; this is documented, never silent. Profiles must satisfy the
-containment invariant, and any violation is a manifest error.
+The `int_widths` syntax and the full manifest schema are documented in
+[manifest.md](manifest.md).
 
 ### 4.4 Runtime checks
 
@@ -373,85 +366,10 @@ action, but it is non-idiomatic and has been removed from the example.)
 - Full Z.200 also supports prefixes (`module!name`), grant windows (`ALL`, `FORBID`),
   friend clauses (`TO`), contexts, spec modules, and remote pieces.
 
-### 7.2.1 Implemented model (v0, single entry file)
+### 7.2.1 Implemented model (v0)
 
-The program units in one entry file are treated as siblings in the imaginary outermost
-process. Visibility is static and independent of textual order:
-
-- `GRANT a, b;` may only name variables or procedures **declared in the same module**.
-  Granted names become candidates for `SEIZE` by other modules.
-- `SEIZE a, b;` imports each name from the unique other module that granted it.
-  Seizing an ungranted name is an error; a name granted by more than one module is an
-  error (v0 has no prefixes to disambiguate).
-- Names are private unless granted and seized. A module cannot see another module's
-  private names.
-- A seized variable aliases the granting module's location, so assignments are shared.
-- A seized procedure executes in its **defining** module's scope; it does not see the
-  caller's module or local names.
-- A module cannot seize a name it grants itself.
-- `GRANT ALL`, `FORBID`, `TO`, prefixes, contexts, remote pieces, and cross-package
-  grant-file consumption are not implemented yet.
-
-### 7.3 SPEC modules (§10.10.2)
-
-A spec module declares the static interface of a module body:
-
-```text
-name: SPEC MODULE
-  ... declarations and procedure signatures ...
-  GRANT ... ;
-END name;
-
-name: MODULE SPEC          -- alternative spelling in Z.200 (11/99)
-  ...
-END name;
-```
-
-Implemented v0 rules:
-
-- A spec must be named and must have a body module with the same name. Module names
-  must be unique within their kind, so one spec and one body may share a name.
-- A spec body may contain `DCL` declarations, procedure signatures
-  (`P: PROC (...) [RETURNS (...)] END;`), `GRANT`, and `SEIZE`.
-- Spec variables must not have initializers, and spec modules cannot contain actions.
-- The body must declare every spec variable with the same mode and every spec procedure
-  with a matching parameter/result signature. Extra private declarations are allowed.
-- If a spec exists, `GRANT` must appear in the spec rather than the body. The spec's
-  grants are the module's public interface.
-- At runtime, spec grants resolve to the paired body's variables and procedures.
-
-`z200c grant` writes the compiled interface to
-`target/z200c/<package>.grt.toml`:
-
-```toml
-schema = 1
-package = "spec"
-edition = "z200-11/99"
-int_widths = "16-32-64"
-
-[[exports]]
-name = "Bump"
-kind = "procedure"
-
-[[exports]]
-name = "value"
-kind = "variable"
-mode = "INT"
-```
-
-A package can consume another package's interface through `[dependencies]`:
-
-```toml
-[dependencies]
-lib = "../lib/target/z200c/lib.grt.toml"
-```
-
-- Paths are resolved relative to the depending package's directory.
-- The dependency's `edition` and `int_widths` must match the consuming package.
-- Names exported by both the program and a dependency are an error.
-- `z200c check` and `z200c grant` resolve `SEIZE` against these external exports.
-- `z200c run` does not link external dependencies yet; it rejects a run only when an
-  external name is actually seized.
+The `GRANT`/`SEIZE` model, `SPEC MODULE` pairing, grant-file schema, and dependency
+rules are documented in [grant-file.md](grant-file.md).
 
 ### 7.4 Complete programs (§10.8)
 
@@ -530,48 +448,7 @@ predefine `STDOUT`; the target text location is implementation-defined (GNU CHIL
 
 ## 10. Decisions
 
-### 10.1 Integer mode spelling (resolved)
-
-Z.200 defines only `INT`; extra integer modes are single-identifier names such as
-`LONG_INT`. The project standardizes on `SHORT_INT`, `INT`, and `LONG_INT` everywhere,
-including conversions (`LONG_INT(b)`). The non-standard two-word spellings and the bare
-`LONG` conversion have been removed from the example and from `AGENTS.md`.
-
-### 10.2 `int_widths` notation (resolved)
-
-Three-number form `"16-32-64"` = `SHORT_INT-INT-LONG_INT`. The legacy two-number form
-`"32-64"` is read as `INT-LONG_INT`, with `SHORT_INT` = `INT`. See §4.3.
-
-### 10.3 Harness output convention (resolved)
-
-The hello example verifies itself with the standard `ASSERT` action, so `run_ok` does not
-need I/O:
-
-- expected stdout: empty;
-- expected exit status: success;
-- unhandled `ASSERTFAIL`/exception: failure.
-
-### 10.4 Grant-file / multi-module model (static model resolved; linking open)
-
-v0 implements `SPEC MODULE` pairing, writes a TOML grant file from `z200c grant`, and
-consumes dependency grant files for `SEIZE` resolution in `check` and `grant`. The
-dependency's edition and width profile must match. Linking external dependencies for
-`run`, symbol mangling, and executing dependency code are still open. Z.200 permits
-several piecewise schemes (§10.10); the next step is a linking strategy while rejecting
-unsupported schemes with clear diagnostics.
-
-### 10.5 Range-check default (resolved for v0)
-
-The interpreter always checks integer range/overflow conditions. Z.200 leaves these
-checks optional unless a handler is present (§1.1, §1.8); a configurable flag can be
-added with the native backend.
-
-### 10.6 Width defaults (resolved)
-
-Confirmed: `SHORT_INT` = 16, `INT` = 32, `LONG_INT` = 64 on Linux. The standard does
-not constrain them.
-
----
+Resolved and open project decisions are tracked in [decisions.md](decisions.md).
 
 ## 11. References
 
