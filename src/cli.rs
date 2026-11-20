@@ -106,12 +106,12 @@ fn grant_impl(target: &Path) -> Result<PathBuf, String> {
         })?;
     let text = grant_file
         .to_toml()
-        .map_err(|error| format!("error: {error}"))?;
+        .map_err(|error| format!("error[E0600]: {error}"))?;
 
     let out_dir = package.package_dir.join("target").join("z200c");
     std::fs::create_dir_all(&out_dir).map_err(|error| {
         format!(
-            "error: cannot create output directory {}: {error}",
+            "error[E0600]: cannot create output directory {}: {error}",
             out_dir.display()
         )
     })?;
@@ -119,7 +119,7 @@ fn grant_impl(target: &Path) -> Result<PathBuf, String> {
     let out_path = out_dir.join(format!("{}.grt.toml", package.manifest.package.name));
     std::fs::write(&out_path, text).map_err(|error| {
         format!(
-            "error: cannot write grant file {}: {error}",
+            "error[E0600]: cannot write grant file {}: {error}",
             out_path.display()
         )
     })?;
@@ -211,7 +211,8 @@ struct LoadedPackage {
 
 fn load_package(target: &Path) -> Result<LoadedPackage, String> {
     let manifest_path = resolve_manifest(target)?;
-    let manifest = Manifest::load(&manifest_path).map_err(|error| format!("error: {error}"))?;
+    let manifest =
+        Manifest::load(&manifest_path).map_err(|error| format!("error[E0300]: {error}"))?;
 
     let package_dir = manifest_path
         .parent()
@@ -219,8 +220,12 @@ fn load_package(target: &Path) -> Result<LoadedPackage, String> {
         .to_path_buf();
     let entry_path = package_dir.join(&manifest.build.entry);
 
-    let text = std::fs::read_to_string(&entry_path)
-        .map_err(|error| format!("error: cannot read {}: {error}", entry_path.display()))?;
+    let text = std::fs::read_to_string(&entry_path).map_err(|error| {
+        format!(
+            "error[E0300]: cannot read {}: {error}",
+            entry_path.display()
+        )
+    })?;
 
     let mut source_map = SourceMap::default();
     let source_id = source_map.add(&entry_path, text);
@@ -252,11 +257,11 @@ fn load_package(target: &Path) -> Result<LoadedPackage, String> {
             )
         })?;
         let grant_file = grant::GrantFile::from_toml(&text)
-            .map_err(|error| format!("error: {}: {error}", grant_path.display()))?;
+            .map_err(|error| format!("error[E0600]: {}: {error}", grant_path.display()))?;
 
         if grant_file.edition != manifest.package.edition.as_str() {
             return Err(format!(
-                "error: dependency `{name}` uses edition {}, expected {}",
+                "error[E0600]: dependency `{name}` uses edition {}, expected {}",
                 grant_file.edition, manifest.package.edition
             ));
         }
@@ -272,7 +277,7 @@ fn load_package(target: &Path) -> Result<LoadedPackage, String> {
         external.extend(
             grant_file
                 .to_export_infos()
-                .map_err(|error| format!("error: {}: {error}", grant_path.display()))?,
+                .map_err(|error| format!("error[E0600]: {}: {error}", grant_path.display()))?,
         );
     }
 
@@ -302,12 +307,15 @@ fn resolve_manifest(target: &Path) -> Result<PathBuf, String> {
             }
         }
         return Err(format!(
-            "error: no Chill.toml found for {}",
+            "error[E0300]: no Chill.toml found for {}",
             target.display()
         ));
     }
 
-    Err(format!("error: path does not exist: {}", target.display()))
+    Err(format!(
+        "error[E0300]: path does not exist: {}",
+        target.display()
+    ))
 }
 
 fn print_help() {

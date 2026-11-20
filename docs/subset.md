@@ -65,6 +65,10 @@ Implemented in `z200c`:
 - loading dependency grant files from `[dependencies]` for static `SEIZE` resolution in
   `check` and `grant`;
 - `DO FOR` (ascending, descending, with `BY`), `CASE`, and labelled `EXIT`;
+- a checked annotation table (expression modes and `Apply` resolutions) consumed by the
+  interpreter instead of re-inferring them;
+- source-map diagnostics with stable codes, multi-error checker reporting, a parser
+  nesting limit, and fixture-based parser/sema/run tests;
 - a tree-walking interpreter, so `z200c run examples/hello` executes the example and
   verifies its `ASSERT`.
 
