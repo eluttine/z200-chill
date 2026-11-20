@@ -269,6 +269,7 @@ impl fmt::Display for TokenKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
+    pub code: &'static str,
     pub source: SourceId,
     pub offset: usize,
     pub message: String,
@@ -277,6 +278,16 @@ pub struct Error {
 impl Error {
     pub fn new(offset: usize, message: impl Into<String>) -> Self {
         Self {
+            code: "E0100",
+            source: SourceId(0),
+            offset,
+            message: message.into(),
+        }
+    }
+
+    pub fn coded(code: &'static str, offset: usize, message: impl Into<String>) -> Self {
+        Self {
+            code,
             source: SourceId(0),
             offset,
             message: message.into(),
@@ -423,7 +434,11 @@ impl<'a> Lexer<'a> {
                     Some(index) => self.pos += index + 2,
                     None => {
                         self.pos = self.source.len();
-                        return Err(Error::new(start, "unterminated bracketed comment"));
+                        return Err(Error::coded(
+                            "E0101",
+                            start,
+                            "unterminated bracketed comment",
+                        ));
                     }
                 }
             } else if self.starts_with("--") {
@@ -483,7 +498,11 @@ impl<'a> Lexer<'a> {
             match self.peek() {
                 Some('\'') => break,
                 Some('\n') | None => {
-                    return Err(Error::new(start, "unterminated based integer literal"));
+                    return Err(Error::coded(
+                        "E0102",
+                        start,
+                        "unterminated based integer literal",
+                    ));
                 }
                 Some(_) => {
                     self.bump();
@@ -494,7 +513,8 @@ impl<'a> Lexer<'a> {
         self.bump(); // closing apostrophe
 
         if digits.chars().all(|ch| ch == '_') {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0102",
                 start,
                 "based integer literal must contain at least one digit",
             ));
@@ -508,18 +528,24 @@ impl<'a> Lexer<'a> {
         self.bump(); // opening apostrophe
 
         if self.peek() == Some('^') {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0103",
                 start,
                 "character literal control sequences are not supported yet",
             ));
         }
 
         let Some(value) = self.bump() else {
-            return Err(Error::new(start, "unterminated character literal"));
+            return Err(Error::coded(
+                "E0104",
+                start,
+                "unterminated character literal",
+            ));
         };
 
         if self.peek() != Some('\'') {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0104",
                 start,
                 "character literal must contain exactly one character",
             ));
@@ -536,7 +562,11 @@ impl<'a> Lexer<'a> {
 
         loop {
             let Some(ch) = self.peek() else {
-                return Err(Error::new(start, "unterminated character string literal"));
+                return Err(Error::coded(
+                    "E0105",
+                    start,
+                    "unterminated character string literal",
+                ));
             };
 
             if ch == '"' {
@@ -550,7 +580,8 @@ impl<'a> Lexer<'a> {
             }
 
             if ch == '^' {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0106",
                     self.pos,
                     "character string control sequences are not supported yet",
                 ));
@@ -618,7 +649,8 @@ impl<'a> Lexer<'a> {
             '/' => Ok(TokenKind::Slash),
             '#' => Ok(TokenKind::Hash),
             '!' => Ok(TokenKind::Bang),
-            other => Err(Error::new(
+            other => Err(Error::coded(
+                "E0107",
                 self.pos - other.len_utf8(),
                 format!("unexpected character `{other}`"),
             )),
@@ -637,12 +669,17 @@ fn is_based_prefix(ch: char) -> bool {
 fn parse_integer(text: &str, base: u32, offset: usize) -> Result<TokenKind, Error> {
     let cleaned: String = text.chars().filter(|ch| *ch != '_').collect();
     if cleaned.is_empty() {
-        return Err(Error::new(offset, "integer literal has no digits"));
+        return Err(Error::coded(
+            "E0108",
+            offset,
+            "integer literal has no digits",
+        ));
     }
 
     match i128::from_str_radix(&cleaned, base) {
         Ok(value) => Ok(TokenKind::Integer { value, base }),
-        Err(_) => Err(Error::new(
+        Err(_) => Err(Error::coded(
+            "E0108",
             offset,
             format!("integer literal `{text}` is invalid or out of range for base {base}"),
         )),
@@ -778,6 +815,7 @@ mod tests {
     #[test]
     fn rejects_unterminated_comment() {
         let errors = tokenize("/* nope").unwrap_err();
+        assert_eq!(errors[0].code, "E0101");
         assert!(errors[0].message.contains("unterminated bracketed comment"));
     }
 

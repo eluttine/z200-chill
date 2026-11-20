@@ -9,16 +9,64 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
+    pub code: &'static str,
     pub span: Span,
     pub message: String,
 }
 
 impl Error {
     pub fn new(span: Span, message: impl Into<String>) -> Self {
+        let message = message.into();
         Self {
+            code: classify(&message),
+            span,
+            message,
+        }
+    }
+
+    pub fn coded(code: &'static str, span: Span, message: impl Into<String>) -> Self {
+        Self {
+            code,
             span,
             message: message.into(),
         }
+    }
+}
+
+fn classify(message: &str) -> &'static str {
+    if message.contains("not implemented yet") || message.contains("not supported yet") {
+        "E0409"
+    } else if message.contains("unknown mode") {
+        "E0401"
+    } else if message.contains("duplicate") {
+        "E0402"
+    } else if message.contains("unknown variable") || message.contains("unknown name") {
+        "E0403"
+    } else if message.contains("cannot assign")
+        || message.contains("mixing")
+        || message.contains("mismatch")
+        || message.contains("cannot compare")
+        || message.contains("cannot order")
+        || message.contains("arithmetic requires")
+        || message.contains("requires BOOL")
+        || message.contains("requires an integer")
+    {
+        "E0404"
+    } else if message.contains("outside the range") || message.contains("CASE label") {
+        "E0405"
+    } else if message.contains("GRANT") || message.contains("SEIZE") || message.contains("spec") {
+        "E0406"
+    } else if message.contains("CASE")
+        || message.contains("DO FOR")
+        || message.contains("DO WHILE")
+        || message.contains("EXIT")
+        || message.contains("loop counter")
+    {
+        "E0407"
+    } else if message.contains("RETURN") || message.contains("RESULT") {
+        "E0408"
+    } else {
+        "E0400"
     }
 }
 
@@ -64,7 +112,7 @@ pub fn check_with_externals(
                     .map(|module| module.span)
                     .unwrap_or(Span::new(SourceId(0), 0, 0))
             });
-            Err(Error::new(span, diagnostic.message))
+            Err(Error::coded(diagnostic.code, span, diagnostic.message))
         }
         None => Ok(()),
     }
@@ -95,7 +143,7 @@ pub fn analyze_with_externals(
         Ok(info) => info,
         Err(error) => {
             return CheckResult {
-                diagnostics: vec![Diagnostic::new("E0400", Some(error.span), error.message)],
+                diagnostics: vec![Diagnostic::new(error.code, Some(error.span), error.message)],
                 types: HashMap::new(),
                 resolutions: HashMap::new(),
             };
@@ -112,7 +160,7 @@ pub fn analyze_with_externals(
         if exports.contains_key(&info.name) {
             return CheckResult {
                 diagnostics: vec![Diagnostic::new(
-                    "E0400",
+                    "E0406",
                     Some(fallback_span),
                     format!("name `{}` is already exported", info.name),
                 )],
@@ -168,7 +216,7 @@ pub fn analyze_with_externals(
 }
 
 fn map_program_error(error: program::Error) -> Error {
-    Error::new(error.span, error.message)
+    Error::coded(error.code, error.span, error.message)
 }
 
 #[derive(Default)]
@@ -198,7 +246,7 @@ impl Checker {
             return;
         }
         self.diagnostics
-            .push(Diagnostic::new("E0400", Some(error.span), error.message));
+            .push(Diagnostic::new(error.code, Some(error.span), error.message));
     }
 
     fn check_module(&mut self, module: &Module) -> Result<(), Error> {
@@ -1200,6 +1248,7 @@ END M;
 "#,
         )
         .unwrap_err();
+        assert_eq!(error.code, "E0401");
         assert!(error.message.contains("unknown mode `NOPE`"));
     }
 

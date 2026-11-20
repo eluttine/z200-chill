@@ -7,16 +7,46 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
+    pub code: &'static str,
     pub span: Span,
     pub message: String,
 }
 
 impl Error {
     pub fn new(span: Span, message: impl Into<String>) -> Self {
+        let message = message.into();
         Self {
+            code: classify(&message),
+            span,
+            message,
+        }
+    }
+
+    pub fn coded(code: &'static str, span: Span, message: impl Into<String>) -> Self {
+        Self {
+            code,
             span,
             message: message.into(),
         }
+    }
+}
+
+fn classify(message: &str) -> &'static str {
+    if message.contains("not implemented yet") {
+        "E0409"
+    } else if message.contains("unknown mode") {
+        "E0401"
+    } else if message.contains("duplicate") {
+        "E0402"
+    } else if message.contains("spec")
+        || message.contains("body")
+        || message.contains("GRANT")
+        || message.contains("grant")
+        || message.contains("exported")
+    {
+        "E0406"
+    } else {
+        "E0400"
     }
 }
 

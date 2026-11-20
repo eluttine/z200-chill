@@ -272,7 +272,7 @@ END M;
     let output = z200c().arg("check").arg(&dir).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(stderr.matches("error[E0400]").count(), 2);
+    assert_eq!(stderr.matches("error[E0404]").count(), 2);
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

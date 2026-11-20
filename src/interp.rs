@@ -11,16 +11,68 @@ use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
+    pub code: &'static str,
     pub span: Span,
     pub message: String,
 }
 
 impl Error {
     pub fn new(span: Span, message: impl Into<String>) -> Self {
+        let message = message.into();
         Self {
+            code: classify(&message),
+            span,
+            message,
+        }
+    }
+
+    pub fn coded(code: &'static str, span: Span, message: impl Into<String>) -> Self {
+        Self {
+            code,
             span,
             message: message.into(),
         }
+    }
+}
+
+fn classify(message: &str) -> &'static str {
+    if message.contains("ASSERTFAIL") {
+        "E0501"
+    } else if message.contains("OVERFLOW") {
+        "E0502"
+    } else if message.contains("division by zero")
+        || message.contains("remainder by zero")
+        || message.contains("positive divisor")
+        || message.contains("negative exponent")
+        || message.contains("exponent is too large")
+    {
+        "E0503"
+    } else if message.contains("undefined value") {
+        "E0504"
+    } else if message.contains("unknown variable") || message.contains("unknown name") {
+        "E0505"
+    } else if message.contains("call depth")
+        || message.contains("expects")
+        || message.contains("returned no result")
+    {
+        "E0506"
+    } else if message.contains("EXIT")
+        || message.contains("RETURN")
+        || message.contains("cannot SEIZE")
+        || message.contains("duplicate declaration")
+    {
+        "E0508"
+    } else if message.contains("expected ")
+        || message.contains("requires")
+        || message.contains("cannot compare")
+        || message.contains("cannot order")
+        || message.contains("does not fit")
+        || message.contains("conversion")
+        || message.contains("integer widths")
+    {
+        "E0507"
+    } else {
+        "E0500"
     }
 }
 
@@ -42,7 +94,11 @@ pub fn run(program: &Program, profile: WidthProfile) -> Result<(), Error> {
                 .map(|module| module.span)
                 .unwrap_or(Span::new(SourceId(0), 0, 0))
         });
-        return Err(Error::new(span, diagnostic.message.clone()));
+        return Err(Error::coded(
+            diagnostic.code,
+            span,
+            diagnostic.message.clone(),
+        ));
     }
     run_checked(program, profile, &check)
 }
@@ -52,7 +108,8 @@ pub fn run_checked(
     profile: WidthProfile,
     check: &CheckResult,
 ) -> Result<(), Error> {
-    let info = program::analyze(program).map_err(|error| Error::new(error.span, error.message))?;
+    let info = program::analyze(program)
+        .map_err(|error| Error::coded(error.code, error.span, error.message))?;
     let mut interpreter = Interpreter {
         profile,
         modules: Vec::new(),
@@ -1127,6 +1184,7 @@ END M;
 "#,
         )
         .unwrap_err();
+        assert_eq!(error.code, "E0501");
         assert_eq!(error.message, "ASSERTFAIL");
     }
 

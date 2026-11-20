@@ -102,7 +102,7 @@ fn grant_impl(target: &Path) -> Result<PathBuf, String> {
         grant::GrantFile::from_package(&package.manifest, &package.program).map_err(|error| {
             package
                 .source_map
-                .format_diagnostic("E0600", error.span, &error.message)
+                .format_diagnostic(error.code, error.span, &error.message)
         })?;
     let text = grant_file
         .to_toml()
@@ -172,7 +172,7 @@ fn run_impl(target: &Path) -> Result<(), String> {
         |error| {
             package
                 .source_map
-                .format_diagnostic("E0500", error.span, &error.message)
+                .format_diagnostic(error.code, error.span, &error.message)
         },
     )
 }
@@ -236,7 +236,7 @@ fn load_package(target: &Path) -> Result<LoadedPackage, String> {
     let token_count = tokens.len();
 
     let program = parser::parse(&tokens)
-        .map_err(|error| source_map.format_diagnostic("E0201", error.span, &error.message))?;
+        .map_err(|error| source_map.format_diagnostic(error.code, error.span, &error.message))?;
 
     let mut external = Vec::new();
     for (name, path) in &manifest.dependencies {

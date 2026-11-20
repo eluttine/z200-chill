@@ -3,6 +3,7 @@ use crate::lexer::{Keyword, SourceId, Span, Token, TokenKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
+    pub code: &'static str,
     pub span: Span,
     pub message: String,
 }
@@ -10,6 +11,15 @@ pub struct Error {
 impl Error {
     pub fn new(span: Span, message: impl Into<String>) -> Self {
         Self {
+            code: "E0201",
+            span,
+            message: message.into(),
+        }
+    }
+
+    pub fn coded(code: &'static str, span: Span, message: impl Into<String>) -> Self {
+        Self {
+            code,
             span,
             message: message.into(),
         }
@@ -88,13 +98,13 @@ impl<'a> Parser<'a> {
         };
 
         if kind == ModuleKind::Spec && name.is_none() {
-            return Err(self.error_here("spec module must be named"));
+            return Err(self.error_here_code("E0204", "spec module must be named"));
         }
 
         let declarations = self.parse_declarations(true, kind == ModuleKind::Spec)?;
         let actions = if kind == ModuleKind::Spec {
             if !self.at_keyword(Keyword::End) {
-                return Err(self.error_here("spec module cannot contain actions"));
+                return Err(self.error_here_code("E0204", "spec module cannot contain actions"));
             }
             Vec::new()
         } else {
@@ -105,9 +115,10 @@ impl<'a> Parser<'a> {
         if let Some(TokenKind::Identifier(trailing)) = self.kind() {
             if let Some(expected) = &name {
                 if trailing != expected {
-                    return Err(self.error_here(format!(
-                        "module end name `{trailing}` does not match `{expected}`"
-                    )));
+                    return Err(self.error_here_code(
+                        "E0202",
+                        format!("module end name `{trailing}` does not match `{expected}`"),
+                    ));
                 }
             }
             self.advance();
@@ -140,14 +151,18 @@ impl<'a> Parser<'a> {
                 }
             } else if self.at_keyword(Keyword::Grant) {
                 if !allow_visibility {
-                    return Err(self.error_here("GRANT is only allowed at module level"));
+                    return Err(
+                        self.error_here_code("E0205", "GRANT is only allowed at module level")
+                    );
                 }
                 declarations.push(Declaration::Visibility(
                     self.parse_visibility(VisibilityKind::Grant)?,
                 ));
             } else if self.at_keyword(Keyword::Seize) {
                 if !allow_visibility {
-                    return Err(self.error_here("SEIZE is only allowed at module level"));
+                    return Err(
+                        self.error_here_code("E0205", "SEIZE is only allowed at module level")
+                    );
                 }
                 declarations.push(Declaration::Visibility(
                     self.parse_visibility(VisibilityKind::Seize)?,
@@ -166,7 +181,7 @@ impl<'a> Parser<'a> {
         let mut names = Vec::new();
         loop {
             if matches!(self.kind(), Some(TokenKind::Keyword(Keyword::All))) {
-                return Err(self.error_here("GRANT/SEIZE ALL is not implemented yet"));
+                return Err(self.error_here_code("E0205", "GRANT/SEIZE ALL is not implemented yet"));
             }
             let (name, span) = self.expect_identifier()?;
             names.push(NameRef { name, span });
@@ -261,9 +276,10 @@ impl<'a> Parser<'a> {
 
         if let Some(TokenKind::Identifier(trailing)) = self.kind() {
             if trailing != &name {
-                return Err(self.error_here(format!(
-                    "procedure end name `{trailing}` does not match `{name}`"
-                )));
+                return Err(self.error_here_code(
+                    "E0202",
+                    format!("procedure end name `{trailing}` does not match `{name}`"),
+                ));
             }
             self.advance();
         }
@@ -291,9 +307,10 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Keyword::End)?;
         if let Some(TokenKind::Identifier(trailing)) = self.kind() {
             if trailing != &name {
-                return Err(self.error_here(format!(
-                    "procedure signature end name `{trailing}` does not match `{name}`"
-                )));
+                return Err(self.error_here_code(
+                    "E0202",
+                    format!("procedure signature end name `{trailing}` does not match `{name}`"),
+                ));
             }
             self.advance();
         }
@@ -543,7 +560,9 @@ impl<'a> Parser<'a> {
         let selector = self.parse_expr()?;
 
         if self.at_comma() {
-            return Err(self.error_here("multiple CASE selectors are not implemented yet"));
+            return Err(
+                self.error_here_code("E0206", "multiple CASE selectors are not implemented yet")
+            );
         }
 
         self.expect_keyword(Keyword::Of)?;
@@ -576,7 +595,11 @@ impl<'a> Parser<'a> {
         let end = self.expect_semicolon()?;
 
         if alternatives.is_empty() && else_actions.is_none() {
-            return Err(Error::new(start, "CASE requires at least one alternative"));
+            return Err(Error::coded(
+                "E0206",
+                start,
+                "CASE requires at least one alternative",
+            ));
         }
 
         Ok(Action::Case {
@@ -616,7 +639,10 @@ impl<'a> Parser<'a> {
                     self.advance();
                     let high = self.parse_case_integer()?;
                     if low > high {
-                        return Err(self.error_here("CASE range lower bound exceeds upper bound"));
+                        return Err(self.error_here_code(
+                            "E0206",
+                            "CASE range lower bound exceeds upper bound",
+                        ));
                     }
                     labels.push(CaseLabel::Range { low, high });
                 } else {
@@ -655,7 +681,7 @@ impl<'a> Parser<'a> {
         if negative {
             value
                 .checked_neg()
-                .ok_or_else(|| self.error_here("CASE label is out of range"))
+                .ok_or_else(|| self.error_here_code("E0206", "CASE label is out of range"))
         } else {
             Ok(value)
         }
@@ -977,7 +1003,7 @@ impl<'a> Parser<'a> {
         self.depth += 1;
         if self.depth > MAX_NESTING_DEPTH {
             self.depth -= 1;
-            return Err(self.error_here("nesting too deep"));
+            return Err(self.error_here_code("E0203", "nesting too deep"));
         }
         Ok(())
     }
@@ -988,6 +1014,10 @@ impl<'a> Parser<'a> {
 
     fn error_here(&self, message: impl Into<String>) -> Error {
         Error::new(self.current_span(), message)
+    }
+
+    fn error_here_code(&self, code: &'static str, message: impl Into<String>) -> Error {
+        Error::coded(code, self.current_span(), message)
     }
 
     fn expected(&self, what: &str) -> Error {
@@ -1407,6 +1437,7 @@ END M;
         );
         let tokens = lexer::tokenize(&source).unwrap();
         let error = parse(&tokens).unwrap_err();
+        assert_eq!(error.code, "E0203");
         assert!(error.message.contains("nesting too deep"));
     }
 

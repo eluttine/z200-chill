@@ -60,12 +60,13 @@ impl SourceMap {
                 Some(file) => {
                     let (line, column) = lexer::line_col(&file.text, error.offset);
                     format!(
-                        "{}:{line}:{column}: error[E0100]: {}",
+                        "{}:{line}:{column}: error[{}]: {}",
                         file.path.display(),
+                        error.code,
                         error.message
                     )
                 }
-                None => format!("error[E0100]: {}", error.message),
+                None => format!("error[{}]: {}", error.code, error.message),
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -92,6 +93,6 @@ mod tests {
         let id = map.add("a.ch", "/*".to_owned());
         let errors = lexer::tokenize_with_source("/*", id).unwrap_err();
         let text = map.format_lex_errors(&errors);
-        assert!(text.starts_with("a.ch:1:1: error[E0100]: unterminated bracketed comment"));
+        assert!(text.starts_with("a.ch:1:1: error[E0101]: unterminated bracketed comment"));
     }
 }
