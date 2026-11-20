@@ -508,6 +508,7 @@ impl Checker {
                 span,
             } => {
                 let target_ty = self.location_type(target)?;
+                self.types.insert(target.span(), target_ty);
                 let value_ty = self.check_expr(value)?;
 
                 if *op == AssignOp::Assign {

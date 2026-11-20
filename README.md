@@ -6,7 +6,7 @@ CHILL was designed for large, long-lived, high-reliability systems (such as tele
 
 ## Project Status
 
-Early development. The `z200c` CLI can currently load and validate `Chill.toml` (edition and integer-width profiles), tokenize and parse the v0 subset, perform mode checking, enforce `GRANT`/`SEIZE` visibility between modules, validate `SPEC MODULE` interfaces against their bodies, interpret a package end to end (including `DO FOR`, `CASE`, and labelled `EXIT`), and emit a TOML grant file with `z200c grant`. `check` and `grant` can resolve `SEIZE` against dependency grant files; `run` does not link external dependencies yet. Diagnostics carry stable codes and multiple checker errors are reported together; see [docs/diagnostics.md](docs/diagnostics.md).
+Early development. The `z200c` CLI can currently load and validate `Chill.toml` (edition and integer-width profiles), tokenize and parse the v0 subset, perform mode checking, enforce `GRANT`/`SEIZE` visibility between modules, validate `SPEC MODULE` interfaces against their bodies, compile multi-file packages, link package-directory dependencies for `run`, interpret a package end to end (including `DO FOR`, `CASE`, and labelled `EXIT`), and emit a TOML grant file with `z200c grant`. `check` and `grant` can also resolve `SEIZE` against grant-file dependencies; `run` does not link those interface-only dependencies. Diagnostics carry stable codes and multiple checker errors are reported together; see [docs/diagnostics.md](docs/diagnostics.md).
 
 ```sh
 cargo run -- check examples/hello
@@ -29,5 +29,8 @@ z200-chill/
 │   ├── hello/          # Starter CHILL package and manifest example
 │   ├── modules/        # GRANT/SEIZE visibility example
 │   ├── spec/           # SPEC MODULE + body example
-│   └── control/        # DO FOR / CASE / EXIT example
-└── docs/               # subset.md, manifest.md, grant-file.md, diagnostics.md, decisions.md
+│   ├── control/        # DO FOR / CASE / EXIT example
+│   ├── multifile/      # Manifest `sources` example
+│   ├── liblocal/       # Dependency package used by `app`
+│   └── app/            # Directory-dependency linking example
+└── docs/               # subset.md, manifest.md, grant-file.md, diagnostics.md, ir.md, decisions.md

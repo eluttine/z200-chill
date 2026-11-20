@@ -1,8 +1,9 @@
 use crate::ast::*;
+use crate::ir;
 use crate::lexer::{SourceId, Span};
 use crate::manifest::WidthProfile;
 use crate::program::{self, Export, ExportKind};
-use crate::sema::{self, ApplyResolution, CheckResult};
+use crate::sema::{self, CheckResult};
 use crate::types::{self, IntKind, Type};
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -110,6 +111,8 @@ pub fn run_checked(
 ) -> Result<(), Error> {
     let info = program::analyze(program)
         .map_err(|error| Error::coded(error.code, error.span, error.message))?;
+    let exprs = ir::lower(program, check)
+        .map_err(|error| Error::coded("E0400", error.span, error.message))?;
     let mut interpreter = Interpreter {
         profile,
         modules: Vec::new(),
@@ -118,8 +121,7 @@ pub fn run_checked(
         active_module: 0,
         depth: 0,
         exports: info.exports,
-        types: check.types.clone(),
-        resolutions: check.resolutions.clone(),
+        exprs,
     };
 
     interpreter.declare_modules(program)?;
@@ -188,8 +190,7 @@ struct Interpreter<'a> {
     active_module: usize,
     depth: usize,
     exports: HashMap<String, Export>,
-    types: HashMap<Span, Type>,
-    resolutions: HashMap<Span, ApplyResolution>,
+    exprs: ir::ExprTable,
 }
 
 impl<'a> Interpreter<'a> {
@@ -603,133 +604,102 @@ impl<'a> Interpreter<'a> {
     }
 
     fn eval_expr(&mut self, expr: &'a Expr) -> Result<Value, Error> {
+        let expression = self
+            .exprs
+            .get(expr.span())
+            .ok_or_else(|| Error::new(expr.span(), "internal: missing typed expression"))?;
+        self.eval_ir(&expression)
+    }
+
+    fn eval_ir(&mut self, expr: &ir::Expr) -> Result<Value, Error> {
         match expr {
-            Expr::Integer { value, span, .. } => self.make_int(*value, None, *span),
-            Expr::Bool { value, .. } => Ok(Value::Bool(*value)),
-            Expr::Char { value, .. } => Ok(Value::Char(*value)),
-            Expr::String { value, .. } => Ok(Value::String(value.clone())),
-            Expr::Name { name, span } => self.read_var(name, *span),
-            Expr::Apply { name, args, span } => self.eval_apply(name, args, *span),
-            Expr::Unary { op, operand, span } => {
-                let value = self.eval_expr(operand)?;
+            ir::Expr::Integer {
+                value, ty, span, ..
+            } => self.make_int(*value, type_kind(*ty), *span),
+            ir::Expr::Bool { value, .. } => Ok(Value::Bool(*value)),
+            ir::Expr::Char { value, .. } => Ok(Value::Char(*value)),
+            ir::Expr::String { value, .. } => Ok(Value::String(value.clone())),
+            ir::Expr::Name { name, span, .. } => self.read_var(name, *span),
+            ir::Expr::Conversion {
+                kind, arg, span, ..
+            } => {
+                let value = self.eval_ir(arg)?;
+                let (value, _) = self.expect_int(value, *span)?;
+                self.make_int(value, Some(*kind), *span)
+            }
+            ir::Expr::Call {
+                name, args, span, ..
+            } => {
+                let Some(proc_ref) = self.lookup_proc(name) else {
+                    return Err(Error::new(*span, format!("unknown name `{name}`")));
+                };
+                if proc_ref.def.params.len() != args.len() {
+                    return Err(Error::new(
+                        *span,
+                        format!(
+                            "procedure `{name}` expects {} argument(s), found {}",
+                            proc_ref.def.params.len(),
+                            args.len()
+                        ),
+                    ));
+                }
+
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval_ir(arg)?);
+                }
+                self.call_proc(proc_ref, values, *span)
+            }
+            ir::Expr::Unary {
+                op,
+                operand,
+                ty,
+                span,
+            } => {
+                let value = self.eval_ir(operand)?;
                 match op {
                     UnaryOp::Neg => {
-                        let (value, runtime_kind) = self.expect_int(value, *span)?;
-                        let kind = match self.expr_type(*span) {
-                            Some(Type::Int(kind)) => Some(kind),
-                            Some(Type::IntLiteral) => None,
-                            _ => runtime_kind,
-                        };
+                        let (value, _) = self.expect_int(value, *span)?;
                         let negated = value
                             .checked_neg()
                             .ok_or_else(|| Error::new(*span, "OVERFLOW in unary `-`"))?;
-                        self.make_int(negated, kind, *span)
+                        self.make_int(negated, type_kind(*ty), *span)
                     }
                     UnaryOp::Not => Ok(Value::Bool(!self.as_bool(value, *span)?)),
                 }
             }
-            Expr::Binary {
+            ir::Expr::Binary {
                 op,
                 left,
                 right,
+                ty,
                 span,
             } => match op {
                 BinaryOp::AndIf => {
-                    let left_value = self.eval_expr(left)?;
+                    let left_value = self.eval_ir(left)?;
                     if !self.as_bool(left_value, *span)? {
                         Ok(Value::Bool(false))
                     } else {
-                        let right_value = self.eval_expr(right)?;
+                        let right_value = self.eval_ir(right)?;
                         Ok(Value::Bool(self.as_bool(right_value, *span)?))
                     }
                 }
                 BinaryOp::OrIf => {
-                    let left_value = self.eval_expr(left)?;
+                    let left_value = self.eval_ir(left)?;
                     if self.as_bool(left_value, *span)? {
                         Ok(Value::Bool(true))
                     } else {
-                        let right_value = self.eval_expr(right)?;
+                        let right_value = self.eval_ir(right)?;
                         Ok(Value::Bool(self.as_bool(right_value, *span)?))
                     }
                 }
                 _ => {
-                    let left_value = self.eval_expr(left)?;
-                    let right_value = self.eval_expr(right)?;
-                    self.apply_binary(*op, left_value, right_value, self.expr_type(*span), *span)
+                    let left_value = self.eval_ir(left)?;
+                    let right_value = self.eval_ir(right)?;
+                    self.apply_binary(*op, left_value, right_value, Some(*ty), *span)
                 }
             },
         }
-    }
-
-    fn eval_apply(&mut self, name: &str, args: &'a [Expr], span: Span) -> Result<Value, Error> {
-        match self.resolutions.get(&span).copied() {
-            Some(ApplyResolution::Conversion(kind)) => {
-                return self.eval_conversion(kind, args, span);
-            }
-            Some(ApplyResolution::Procedure) => {
-                return self.eval_procedure_call(name, args, span);
-            }
-            None => {}
-        }
-
-        // Fallback for hands-built ASTs that were not produced by the checker.
-        if let Some(mode) = types::resolve_mode(name) {
-            let Type::Int(kind) = mode else {
-                return Err(Error::new(
-                    span,
-                    format!("conversion to {} is not supported yet", mode.describe()),
-                ));
-            };
-            return self.eval_conversion(kind, args, span);
-        }
-
-        self.eval_procedure_call(name, args, span)
-    }
-
-    fn eval_conversion(
-        &mut self,
-        kind: IntKind,
-        args: &'a [Expr],
-        span: Span,
-    ) -> Result<Value, Error> {
-        if args.len() != 1 {
-            return Err(Error::new(
-                span,
-                format!("conversion to {} takes exactly one argument", kind.name()),
-            ));
-        }
-        let value = self.eval_expr(&args[0])?;
-        let (value, _) = self.expect_int(value, args[0].span())?;
-        self.make_int(value, Some(kind), span)
-    }
-
-    fn eval_procedure_call(
-        &mut self,
-        name: &str,
-        args: &'a [Expr],
-        span: Span,
-    ) -> Result<Value, Error> {
-        let Some(proc_ref) = self.lookup_proc(name) else {
-            return Err(Error::new(span, format!("unknown name `{name}`")));
-        };
-        let proc_def = proc_ref.def;
-        if proc_def.params.len() != args.len() {
-            return Err(Error::new(
-                span,
-                format!(
-                    "procedure `{name}` expects {} argument(s), found {}",
-                    proc_def.params.len(),
-                    args.len()
-                ),
-            ));
-        }
-
-        let mut values = Vec::with_capacity(args.len());
-        for arg in args {
-            values.push(self.eval_expr(arg)?);
-        }
-
-        self.call_proc(proc_ref, values, span)
     }
 
     fn call_proc(
@@ -810,10 +780,6 @@ impl<'a> Interpreter<'a> {
             }),
             None => Ok(Value::Undefined),
         }
-    }
-
-    fn expr_type(&self, span: Span) -> Option<Type> {
-        self.types.get(&span).copied()
     }
 
     fn apply_binary(
@@ -1133,6 +1099,14 @@ fn explicit_label_matches(label: CaseLabel, value: i128) -> bool {
         CaseLabel::Value(label_value) => label_value == value,
         CaseLabel::Range { low, high } => low <= value && value <= high,
         CaseLabel::Else | CaseLabel::Any => false,
+    }
+}
+
+fn type_kind(ty: Type) -> Option<IntKind> {
+    match ty {
+        Type::Int(kind) => Some(kind),
+        Type::IntLiteral => None,
+        _ => None,
     }
 }
 

@@ -93,14 +93,14 @@ lexical errors; parsing stops at the first syntax error.
 
 ## Checked annotations
 
-`z200c` also records a checked annotation table:
+`z200c` records a checked annotation table:
 
 - `types`: the checked mode of every expression, keyed by span;
 - `resolutions`: whether each `Apply` is a mode conversion or a procedure call.
 
-The interpreter consumes these annotations instead of re-inferring arithmetic result
-modes and conversion targets at run time. Range and overflow checks remain runtime
-conditions.
+`ir::lower` turns these annotations into a typed expression IR; the interpreter consumes
+the IR instead of re-inferring arithmetic result modes and conversion targets. See
+[ir.md](ir.md). Range and overflow checks remain runtime conditions.
 
 ## Fixtures
 

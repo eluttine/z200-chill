@@ -3,6 +3,7 @@ pub mod cli;
 pub mod diagnostics;
 pub mod grant;
 pub mod interp;
+pub mod ir;
 pub mod lexer;
 pub mod manifest;
 pub mod parser;
