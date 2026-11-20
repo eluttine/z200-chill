@@ -1,0 +1,9 @@
+[package]
+name = "multifile"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+sources = ["src/library.ch"]
+int_widths = "16-32-64"

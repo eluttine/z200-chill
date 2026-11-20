@@ -78,6 +78,34 @@ fn run_control_example_succeeds() {
 }
 
 #[test]
+fn run_multifile_example_succeeds() {
+    let output = z200c()
+        .arg("run")
+        .arg(example("multifile"))
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_directory_dependency_succeeds() {
+    let output = z200c().arg("run").arg(example("app")).output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn grant_writes_grant_file() {
     let output = z200c()
         .arg("grant")

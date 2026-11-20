@@ -25,10 +25,18 @@ lib = "../lib/target/z200c/lib.grt.toml"
 
 ## `[build]`
 
-- `entry` — the single CHILL entry file. A package compiles one entry file; a
-  `sources` list for multi-file packages is not implemented yet.
+- `entry` — the CHILL entry file. It is compiled last, after `sources`.
+- `sources` — additional CHILL source files, compiled in listed order before the
+  entry. Modules from all files are siblings in the program, so `GRANT`/`SEIZE` works
+  across them.
 - `int_widths` — integer width profile, `SHORT_INT-INT-LONG_INT` or the legacy
   `INT-LONG_INT` form. Defaults to `16-32-64`.
+
+```toml
+[build]
+entry = "src/main.ch"
+sources = ["src/library.ch"]
+```
 
 ## Integer width profiles
 
@@ -68,21 +76,32 @@ containment invariant, and any violation is a manifest error.
 
 ## `[dependencies]`
 
-Each key is a dependency name and each value is a path to that dependency's grant file.
+Each key is a dependency name and each value is either a package directory or a
+compiled grant file.
 
 ```toml
 [dependencies]
-lib = "../lib/target/z200c/lib.grt.toml"
+liblocal = "../liblocal"                         # source-linked dependency
+lib = "../lib/target/z200c/lib.grt.toml"         # interface-only dependency
 ```
 
 - Paths are resolved relative to the depending package's directory.
-- The dependency's `edition` must match.
-- The dependency's `int_widths` must parse to the same `WidthProfile` (equivalent
-  spellings are accepted).
+- A **directory** dependency (or a path to its `Chill.toml`) is loaded recursively and
+  its modules are linked into the program. Dependency modules run before the depending
+  package's `sources` and `entry`.
+- A **grant-file** dependency contributes its exported interface for static checking
+  only; `run` rejects an attempt to seize an external name from it.
+- Directory dependencies are loaded once; cycles and duplicate package loads are
+  detected.
+- The dependency's `edition` must match, and its `int_widths` must parse to the same
+  `WidthProfile` (equivalent spellings are accepted).
 - Names exported by both the program and a dependency are an error.
-- `z200c check` and `z200c grant` resolve `SEIZE` against dependency exports.
-- `z200c run` does not link external dependencies; it rejects a run only when an
-  external name is actually seized.
+- Module names must be unique across all linked packages. Symbol mangling/namespacing
+  is not implemented yet.
+- `z200c check`, `z200c run`, and `z200c grant` all see source-linked dependencies.
+  `check`/`grant` additionally resolve `SEIZE` against grant-file dependencies.
+- `z200c run` links directory dependencies but not grant-file dependencies; it rejects
+  a run only when an external grant-file name is actually seized.
 
 ## Commands
 

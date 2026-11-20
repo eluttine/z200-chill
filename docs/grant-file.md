@@ -78,16 +78,25 @@ lib = "../lib/target/z200c/lib.grt.toml"
 ```
 
 - Paths are resolved relative to the depending package's directory.
+- A grant-file dependency is interface-only. For a run-time-linked dependency, point at
+  the dependency package directory instead:
+  ```toml
+  [dependencies]
+  liblocal = "../liblocal"
+  ```
+- Directory dependencies are loaded recursively, their modules run first, and their
+  exports are available to `SEIZE` without grant files.
 - The dependency's `edition` and `int_widths` must match the consuming package.
 - Names exported by both the program and a dependency are an error.
-- `z200c check` and `z200c grant` resolve `SEIZE` against these external exports.
-- `z200c run` does not link external dependencies yet; it rejects a run only when an
-  external name is actually seized.
+- `z200c check` and `z200c grant` resolve `SEIZE` against both forms.
+- `z200c run` links directory dependencies but not grant-file dependencies; it rejects
+  a run only when an external grant-file name is actually seized.
 
 ## Current limits
 
-- Grant-file consumption is static: `check` and `grant` use dependency interfaces, but
-  `run` has no linker for external code.
+- Grant-file dependencies are static: `check` and `grant` use their interfaces, but
+  `run` has no linker for external code. Use a directory dependency to link code.
+- Module names must be globally unique across linked packages; symbol mangling and
+  namespacing are not implemented.
 - Prefixes (`module!name`), `GRANT ALL`, `FORBID`, `TO`, contexts, and remote pieces are
   not implemented.
-- Symbol mangling and a linked multi-package build are still open.

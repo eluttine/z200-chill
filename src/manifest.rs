@@ -126,6 +126,7 @@ pub struct Package {
 #[derive(Debug, Clone)]
 pub struct Build {
     pub entry: PathBuf,
+    pub sources: Vec<PathBuf>,
     pub int_widths: WidthProfile,
 }
 
@@ -147,6 +148,8 @@ struct RawPackage {
 #[derive(Debug, Deserialize)]
 struct RawBuild {
     entry: String,
+    #[serde(default)]
+    sources: Vec<String>,
     #[serde(default)]
     int_widths: Option<String>,
 }
@@ -178,6 +181,15 @@ impl Manifest {
             None => WidthProfile::default(),
         };
 
+        let mut sources = Vec::with_capacity(raw.build.sources.len());
+        for source in raw.build.sources {
+            let source = source.trim();
+            if source.is_empty() {
+                return Err("build.sources entries must not be empty".to_owned());
+            }
+            sources.push(PathBuf::from(source));
+        }
+
         let mut dependencies = HashMap::new();
         for (name, path) in raw.dependencies {
             let name = name.trim();
@@ -199,6 +211,7 @@ impl Manifest {
             },
             build: Build {
                 entry: PathBuf::from(raw.build.entry.trim()),
+                sources,
                 int_widths,
             },
             dependencies,
@@ -285,6 +298,32 @@ entry = "src/main.ch"
         let text = MANIFEST.replace("src/main.ch", "");
         let err = Manifest::parse(&text).unwrap_err();
         assert!(err.contains("build.entry"));
+    }
+
+    #[test]
+    fn parses_sources() {
+        let text = MANIFEST.replace(
+            "entry = \"src/main.ch\"",
+            "entry = \"src/main.ch\"\nsources = [\"src/library.ch\", \"src/extra.ch\"]",
+        );
+        let manifest = Manifest::parse(&text).unwrap();
+        assert_eq!(
+            manifest.build.sources,
+            vec![
+                PathBuf::from("src/library.ch"),
+                PathBuf::from("src/extra.ch")
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_empty_source() {
+        let text = MANIFEST.replace(
+            "entry = \"src/main.ch\"",
+            "entry = \"src/main.ch\"\nsources = [\"\"]",
+        );
+        let err = Manifest::parse(&text).unwrap_err();
+        assert!(err.contains("build.sources entries must not be empty"));
     }
 
     #[test]

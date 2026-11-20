@@ -209,6 +209,17 @@ struct LoadedPackage {
     external: Vec<program::ExportInfo>,
 }
 
+struct Loader {
+    source_map: SourceMap,
+    modules: Vec<crate::ast::Module>,
+    token_count: usize,
+    external: Vec<program::ExportInfo>,
+    visiting: HashSet<PathBuf>,
+    loaded: HashSet<PathBuf>,
+    root_edition: crate::manifest::Edition,
+    root_widths: WidthProfile,
+}
+
 fn load_package(target: &Path) -> Result<LoadedPackage, String> {
     let manifest_path = resolve_manifest(target)?;
     let manifest =
@@ -220,76 +231,167 @@ fn load_package(target: &Path) -> Result<LoadedPackage, String> {
         .to_path_buf();
     let entry_path = package_dir.join(&manifest.build.entry);
 
-    let text = std::fs::read_to_string(&entry_path).map_err(|error| {
-        format!(
-            "error[E0300]: cannot read {}: {error}",
-            entry_path.display()
-        )
-    })?;
-
-    let mut source_map = SourceMap::default();
-    let source_id = source_map.add(&entry_path, text);
-
-    let tokens = {
-        let source = &source_map
-            .get(source_id)
-            .expect("entry source was just added")
-            .text;
-        lexer::tokenize_with_source(source, source_id)
-            .map_err(|errors| source_map.format_lex_errors(&errors))?
+    let mut loader = Loader {
+        source_map: SourceMap::default(),
+        modules: Vec::new(),
+        token_count: 0,
+        external: Vec::new(),
+        visiting: HashSet::new(),
+        loaded: HashSet::new(),
+        root_edition: manifest.package.edition,
+        root_widths: manifest.build.int_widths,
     };
-    let token_count = tokens.len();
-
-    let program = parser::parse(&tokens)
-        .map_err(|error| source_map.format_diagnostic(error.code, error.span, &error.message))?;
-
-    let mut external = Vec::new();
-    for (name, path) in &manifest.dependencies {
-        let grant_path = if path.is_absolute() {
-            path.clone()
-        } else {
-            package_dir.join(path)
-        };
-        let text = std::fs::read_to_string(&grant_path).map_err(|error| {
-            format!(
-                "error: cannot read dependency `{name}` grant file {}: {error}",
-                grant_path.display()
-            )
-        })?;
-        let grant_file = grant::GrantFile::from_toml(&text)
-            .map_err(|error| format!("error[E0600]: {}: {error}", grant_path.display()))?;
-
-        if grant_file.edition != manifest.package.edition.as_str() {
-            return Err(format!(
-                "error[E0600]: dependency `{name}` uses edition {}, expected {}",
-                grant_file.edition, manifest.package.edition
-            ));
-        }
-        let dependency_widths = WidthProfile::parse(&grant_file.int_widths)
-            .map_err(|error| format!("error[E0600]: dependency `{name}`: {error}"))?;
-        if dependency_widths != manifest.build.int_widths {
-            return Err(format!(
-                "error[E0600]: dependency `{name}` uses int_widths {}, expected {}",
-                dependency_widths, manifest.build.int_widths
-            ));
-        }
-
-        external.extend(
-            grant_file
-                .to_export_infos()
-                .map_err(|error| format!("error[E0600]: {}: {error}", grant_path.display()))?,
-        );
-    }
+    loader.load_package(&manifest_path)?;
 
     Ok(LoadedPackage {
         manifest,
         package_dir,
         entry_path,
-        source_map,
-        token_count,
-        program,
-        external,
+        source_map: loader.source_map,
+        token_count: loader.token_count,
+        program: Program {
+            modules: loader.modules,
+        },
+        external: loader.external,
     })
+}
+
+impl Loader {
+    fn load_package(&mut self, manifest_path: &Path) -> Result<(), String> {
+        let canonical =
+            std::fs::canonicalize(manifest_path).unwrap_or_else(|_| manifest_path.to_path_buf());
+
+        if self.loaded.contains(&canonical) {
+            return Ok(());
+        }
+        if !self.visiting.insert(canonical.clone()) {
+            return Err(format!(
+                "error[E0300]: dependency cycle involving {}",
+                manifest_path.display()
+            ));
+        }
+
+        let result = self.load_package_inner(manifest_path);
+        self.visiting.remove(&canonical);
+        if result.is_ok() {
+            self.loaded.insert(canonical);
+        }
+        result
+    }
+
+    fn load_package_inner(&mut self, manifest_path: &Path) -> Result<(), String> {
+        let manifest =
+            Manifest::load(manifest_path).map_err(|error| format!("error[E0300]: {error}"))?;
+
+        if manifest.package.edition != self.root_edition {
+            return Err(format!(
+                "error[E0600]: {} uses edition {}, expected {}",
+                manifest_path.display(),
+                manifest.package.edition,
+                self.root_edition
+            ));
+        }
+        if manifest.build.int_widths != self.root_widths {
+            return Err(format!(
+                "error[E0600]: {} uses int_widths {}, expected {}",
+                manifest_path.display(),
+                manifest.build.int_widths,
+                self.root_widths
+            ));
+        }
+
+        let package_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+
+        for (name, path) in &manifest.dependencies {
+            let dependency = if path.is_absolute() {
+                path.clone()
+            } else {
+                package_dir.join(path)
+            };
+            if !dependency.exists() {
+                return Err(format!(
+                    "error[E0600]: dependency `{name}` does not exist: {}",
+                    dependency.display()
+                ));
+            }
+
+            let dependency_manifest = if dependency.is_dir() {
+                Some(dependency.join("Chill.toml"))
+            } else if dependency.file_name() == Some(OsStr::new("Chill.toml")) {
+                Some(dependency.clone())
+            } else {
+                None
+            };
+
+            if let Some(dependency_manifest) = dependency_manifest {
+                self.load_package(&dependency_manifest)?;
+            } else {
+                self.load_grant_dependency(name, &dependency)?;
+            }
+        }
+
+        for source in &manifest.build.sources {
+            self.load_source(&package_dir.join(source))?;
+        }
+        self.load_source(&package_dir.join(&manifest.build.entry))
+    }
+
+    fn load_source(&mut self, path: &Path) -> Result<(), String> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|error| format!("error[E0300]: cannot read {}: {error}", path.display()))?;
+        let source_id = self.source_map.add(path.to_path_buf(), text);
+
+        let tokens = {
+            let source = &self
+                .source_map
+                .get(source_id)
+                .expect("source was just added")
+                .text;
+            lexer::tokenize_with_source(source, source_id)
+                .map_err(|errors| self.source_map.format_lex_errors(&errors))?
+        };
+        self.token_count += tokens.len();
+
+        let program = parser::parse(&tokens).map_err(|error| {
+            self.source_map
+                .format_diagnostic(error.code, error.span, &error.message)
+        })?;
+        self.modules.extend(program.modules);
+        Ok(())
+    }
+
+    fn load_grant_dependency(&mut self, name: &str, path: &Path) -> Result<(), String> {
+        let text = std::fs::read_to_string(path).map_err(|error| {
+            format!(
+                "error[E0600]: cannot read dependency `{name}` grant file {}: {error}",
+                path.display()
+            )
+        })?;
+        let grant_file = grant::GrantFile::from_toml(&text)
+            .map_err(|error| format!("error[E0600]: {}: {error}", path.display()))?;
+
+        if grant_file.edition != self.root_edition.as_str() {
+            return Err(format!(
+                "error[E0600]: dependency `{name}` uses edition {}, expected {}",
+                grant_file.edition, self.root_edition
+            ));
+        }
+        let dependency_widths = WidthProfile::parse(&grant_file.int_widths)
+            .map_err(|error| format!("error[E0600]: dependency `{name}`: {error}"))?;
+        if dependency_widths != self.root_widths {
+            return Err(format!(
+                "error[E0600]: dependency `{name}` uses int_widths {}, expected {}",
+                dependency_widths, self.root_widths
+            ));
+        }
+
+        self.external.extend(
+            grant_file
+                .to_export_infos()
+                .map_err(|error| format!("error[E0600]: {}: {error}", path.display()))?,
+        );
+        Ok(())
+    }
 }
 
 fn resolve_manifest(target: &Path) -> Result<PathBuf, String> {
