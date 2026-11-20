@@ -1,13 +1,13 @@
-Hello: MODULE;
-  AddScaled: PROC (a SHORT INT, b SHORT INT) RETURNS (LONG INT);
-    DCL scale LONG INT;
-    DCL result LONG INT;
-    scale := LONG(b) * 2;
-    result := LONG(a) + scale;
+Hello: MODULE
+  AddScaled: PROC (a SHORT_INT, b SHORT_INT) RETURNS (LONG_INT);
+    DCL scale LONG_INT;
+    DCL result LONG_INT;
+    scale := LONG_INT(b) * 2;
+    result := LONG_INT(a) + scale;
     RETURN (result);
   END AddScaled;
 
-  DCL answer LONG INT;
+  DCL answer LONG_INT;
   answer := AddScaled(3, 4);
-  /* Expected output from entry/test harness: 11 */
+  ASSERT answer = 11;
 END Hello;
