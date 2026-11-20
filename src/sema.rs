@@ -30,6 +30,21 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyResolution {
+    Conversion(IntKind),
+    Procedure,
+}
+
+/// The checker's result: diagnostics plus expression annotations that the
+/// interpreter consumes instead of re-inferring modes.
+#[derive(Debug, Clone)]
+pub struct CheckResult {
+    pub diagnostics: Vec<Diagnostic>,
+    pub types: HashMap<Span, Type>,
+    pub resolutions: HashMap<Span, ApplyResolution>,
+}
+
 pub fn check(program: &Program, profile: WidthProfile) -> Result<(), Error> {
     check_with_externals(program, profile, &[])
 }
@@ -39,8 +54,8 @@ pub fn check_with_externals(
     profile: WidthProfile,
     external: &[program::ExportInfo],
 ) -> Result<(), Error> {
-    let diagnostics = check_all_with_externals(program, profile, external);
-    match diagnostics.into_iter().next() {
+    let result = analyze_with_externals(program, profile, external);
+    match result.diagnostics.into_iter().next() {
         Some(diagnostic) => {
             let span = diagnostic.span.unwrap_or_else(|| {
                 program
@@ -55,8 +70,12 @@ pub fn check_with_externals(
     }
 }
 
+pub fn analyze(program: &Program, profile: WidthProfile) -> CheckResult {
+    analyze_with_externals(program, profile, &[])
+}
+
 pub fn check_all(program: &Program, profile: WidthProfile) -> Vec<Diagnostic> {
-    check_all_with_externals(program, profile, &[])
+    analyze_with_externals(program, profile, &[]).diagnostics
 }
 
 pub fn check_all_with_externals(
@@ -64,10 +83,22 @@ pub fn check_all_with_externals(
     profile: WidthProfile,
     external: &[program::ExportInfo],
 ) -> Vec<Diagnostic> {
+    analyze_with_externals(program, profile, external).diagnostics
+}
+
+pub fn analyze_with_externals(
+    program: &Program,
+    profile: WidthProfile,
+    external: &[program::ExportInfo],
+) -> CheckResult {
     let info = match program::analyze(program) {
         Ok(info) => info,
         Err(error) => {
-            return vec![Diagnostic::new("E0400", Some(error.span), error.message)];
+            return CheckResult {
+                diagnostics: vec![Diagnostic::new("E0400", Some(error.span), error.message)],
+                types: HashMap::new(),
+                resolutions: HashMap::new(),
+            };
         }
     };
     let mut exports = info.exports;
@@ -79,11 +110,15 @@ pub fn check_all_with_externals(
 
     for info in external {
         if exports.contains_key(&info.name) {
-            return vec![Diagnostic::new(
-                "E0400",
-                Some(fallback_span),
-                format!("name `{}` is already exported", info.name),
-            )];
+            return CheckResult {
+                diagnostics: vec![Diagnostic::new(
+                    "E0400",
+                    Some(fallback_span),
+                    format!("name `{}` is already exported", info.name),
+                )],
+                types: HashMap::new(),
+                resolutions: HashMap::new(),
+            };
         }
 
         let kind = match &info.kind {
@@ -110,6 +145,8 @@ pub fn check_all_with_externals(
         current_module: 0,
         labels: Vec::new(),
         diagnostics: Vec::new(),
+        types: HashMap::new(),
+        resolutions: HashMap::new(),
     };
     for (index, module) in program.modules.iter().enumerate() {
         checker.current_module = index;
@@ -123,7 +160,11 @@ pub fn check_all_with_externals(
         }
     }
 
-    checker.diagnostics
+    CheckResult {
+        diagnostics: checker.diagnostics,
+        types: checker.types,
+        resolutions: checker.resolutions,
+    }
 }
 
 fn map_program_error(error: program::Error) -> Error {
@@ -145,6 +186,8 @@ struct Checker {
     current_module: usize,
     labels: Vec<String>,
     diagnostics: Vec<Diagnostic>,
+    types: HashMap<Span, Type>,
+    resolutions: HashMap<Span, ApplyResolution>,
 }
 
 impl Checker {
@@ -672,6 +715,12 @@ impl Checker {
     }
 
     fn check_expr(&mut self, expr: &Expr) -> Result<Type, Error> {
+        let ty = self.check_expr_inner(expr)?;
+        self.types.insert(expr.span(), ty);
+        Ok(ty)
+    }
+
+    fn check_expr_inner(&mut self, expr: &Expr) -> Result<Type, Error> {
         match expr {
             Expr::Integer { value, span, .. } => {
                 let long = IntKind::Long;
@@ -908,12 +957,15 @@ impl Checker {
                     ),
                 ));
             }
+            self.resolutions
+                .insert(span, ApplyResolution::Conversion(kind));
             return Ok(Some(Type::Int(kind)));
         }
 
         let Some(signature) = self.lookup_proc(name) else {
             return Err(Error::new(span, format!("unknown name `{name}`")));
         };
+        self.resolutions.insert(span, ApplyResolution::Procedure);
 
         if signature.params.len() != args.len() {
             return Err(Error::new(
@@ -1087,6 +1139,24 @@ END M;
     #[test]
     fn hello_example_checks() {
         check_source(include_str!("../examples/hello/src/main.ch")).unwrap();
+    }
+
+    #[test]
+    fn records_expression_types_and_apply_resolutions() {
+        let tokens = lexer::tokenize(include_str!("../examples/hello/src/main.ch")).unwrap();
+        let program = parser::parse(&tokens).unwrap();
+        let result = analyze(&program, WidthProfile::default());
+
+        assert!(result.diagnostics.is_empty());
+        assert!(!result.types.is_empty());
+        assert!(result
+            .resolutions
+            .values()
+            .any(|resolution| matches!(resolution, ApplyResolution::Conversion(_))));
+        assert!(result
+            .resolutions
+            .values()
+            .any(|resolution| matches!(resolution, ApplyResolution::Procedure)));
     }
 
     #[test]

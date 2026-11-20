@@ -1,7 +1,8 @@
 use crate::ast::*;
-use crate::lexer::Span;
+use crate::lexer::{SourceId, Span};
 use crate::manifest::WidthProfile;
 use crate::program::{self, Export, ExportKind};
+use crate::sema::{self, ApplyResolution, CheckResult};
 use crate::types::{self, IntKind, Type};
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -32,6 +33,25 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 pub fn run(program: &Program, profile: WidthProfile) -> Result<(), Error> {
+    let check = sema::analyze(program, profile);
+    if let Some(diagnostic) = check.diagnostics.first() {
+        let span = diagnostic.span.unwrap_or_else(|| {
+            program
+                .modules
+                .first()
+                .map(|module| module.span)
+                .unwrap_or(Span::new(SourceId(0), 0, 0))
+        });
+        return Err(Error::new(span, diagnostic.message.clone()));
+    }
+    run_checked(program, profile, &check)
+}
+
+pub fn run_checked(
+    program: &Program,
+    profile: WidthProfile,
+    check: &CheckResult,
+) -> Result<(), Error> {
     let info = program::analyze(program).map_err(|error| Error::new(error.span, error.message))?;
     let mut interpreter = Interpreter {
         profile,
@@ -41,6 +61,8 @@ pub fn run(program: &Program, profile: WidthProfile) -> Result<(), Error> {
         active_module: 0,
         depth: 0,
         exports: info.exports,
+        types: check.types.clone(),
+        resolutions: check.resolutions.clone(),
     };
 
     interpreter.declare_modules(program)?;
@@ -109,6 +131,8 @@ struct Interpreter<'a> {
     active_module: usize,
     depth: usize,
     exports: HashMap<String, Export>,
+    types: HashMap<Span, Type>,
+    resolutions: HashMap<Span, ApplyResolution>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -263,7 +287,14 @@ impl<'a> Interpreter<'a> {
                     } else {
                         let current = self.read_var(name, *target_span)?;
                         let right = self.eval_expr(value)?;
-                        self.apply_binary(binary_for_assign(*op), current, right, *span)?
+                        let target_ty = self.var_type(name, *span)?;
+                        self.apply_binary(
+                            binary_for_assign(*op),
+                            current,
+                            right,
+                            Some(target_ty),
+                            *span,
+                        )?
                     };
 
                     self.assign_var(name, value, *span)?;
@@ -526,7 +557,12 @@ impl<'a> Interpreter<'a> {
                 let value = self.eval_expr(operand)?;
                 match op {
                     UnaryOp::Neg => {
-                        let (value, kind) = self.expect_int(value, *span)?;
+                        let (value, runtime_kind) = self.expect_int(value, *span)?;
+                        let kind = match self.expr_type(*span) {
+                            Some(Type::Int(kind)) => Some(kind),
+                            Some(Type::IntLiteral) => None,
+                            _ => runtime_kind,
+                        };
                         let negated = value
                             .checked_neg()
                             .ok_or_else(|| Error::new(*span, "OVERFLOW in unary `-`"))?;
@@ -562,13 +598,24 @@ impl<'a> Interpreter<'a> {
                 _ => {
                     let left_value = self.eval_expr(left)?;
                     let right_value = self.eval_expr(right)?;
-                    self.apply_binary(*op, left_value, right_value, *span)
+                    self.apply_binary(*op, left_value, right_value, self.expr_type(*span), *span)
                 }
             },
         }
     }
 
     fn eval_apply(&mut self, name: &str, args: &'a [Expr], span: Span) -> Result<Value, Error> {
+        match self.resolutions.get(&span).copied() {
+            Some(ApplyResolution::Conversion(kind)) => {
+                return self.eval_conversion(kind, args, span);
+            }
+            Some(ApplyResolution::Procedure) => {
+                return self.eval_procedure_call(name, args, span);
+            }
+            None => {}
+        }
+
+        // Fallback for hands-built ASTs that were not produced by the checker.
         if let Some(mode) = types::resolve_mode(name) {
             let Type::Int(kind) = mode else {
                 return Err(Error::new(
@@ -576,17 +623,35 @@ impl<'a> Interpreter<'a> {
                     format!("conversion to {} is not supported yet", mode.describe()),
                 ));
             };
-            if args.len() != 1 {
-                return Err(Error::new(
-                    span,
-                    format!("conversion to {} takes exactly one argument", kind.name()),
-                ));
-            }
-            let value = self.eval_expr(&args[0])?;
-            let (value, _) = self.expect_int(value, args[0].span())?;
-            return self.make_int(value, Some(kind), span);
+            return self.eval_conversion(kind, args, span);
         }
 
+        self.eval_procedure_call(name, args, span)
+    }
+
+    fn eval_conversion(
+        &mut self,
+        kind: IntKind,
+        args: &'a [Expr],
+        span: Span,
+    ) -> Result<Value, Error> {
+        if args.len() != 1 {
+            return Err(Error::new(
+                span,
+                format!("conversion to {} takes exactly one argument", kind.name()),
+            ));
+        }
+        let value = self.eval_expr(&args[0])?;
+        let (value, _) = self.expect_int(value, args[0].span())?;
+        self.make_int(value, Some(kind), span)
+    }
+
+    fn eval_procedure_call(
+        &mut self,
+        name: &str,
+        args: &'a [Expr],
+        span: Span,
+    ) -> Result<Value, Error> {
         let Some(proc_ref) = self.lookup_proc(name) else {
             return Err(Error::new(span, format!("unknown name `{name}`")));
         };
@@ -690,11 +755,16 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    fn expr_type(&self, span: Span) -> Option<Type> {
+        self.types.get(&span).copied()
+    }
+
     fn apply_binary(
         &self,
         op: BinaryOp,
         left: Value,
         right: Value,
+        result_type: Option<Type>,
         span: Span,
     ) -> Result<Value, Error> {
         match op {
@@ -731,9 +801,18 @@ impl<'a> Interpreter<'a> {
             | BinaryOp::Mod
             | BinaryOp::Rem
             | BinaryOp::Pow => {
-                let (left, left_kind) = self.expect_int(left, span)?;
-                let (right, right_kind) = self.expect_int(right, span)?;
-                let kind = combine_kinds(left_kind, right_kind, span)?;
+                let (left, _) = self.expect_int(left, span)?;
+                let (right, _) = self.expect_int(right, span)?;
+                let kind = match result_type {
+                    Some(Type::Int(kind)) => Some(kind),
+                    Some(Type::IntLiteral) | None => None,
+                    Some(other) => {
+                        return Err(Error::new(
+                            span,
+                            format!("expected an integer result, found {}", other.describe()),
+                        ));
+                    }
+                };
 
                 let result = match op {
                     BinaryOp::Add => left.checked_add(right),
@@ -861,6 +940,14 @@ impl<'a> Interpreter<'a> {
             },
             Type::IntLiteral => Err(Error::new(span, "internal: cannot declare a literal type")),
         }
+    }
+
+    fn var_type(&self, name: &str, span: Span) -> Result<Type, Error> {
+        let cell = self
+            .find_var_cell(name)
+            .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+        let ty = cell.borrow().ty;
+        Ok(ty)
     }
 
     fn read_var(&self, name: &str, span: Span) -> Result<Value, Error> {

@@ -153,13 +153,13 @@ fn check_impl(target: &Path) -> Result<String, String> {
 fn run_impl(target: &Path) -> Result<(), String> {
     let package = load_package(target)?;
 
-    let diagnostics = sema::check_all_with_externals(
+    let check = sema::analyze_with_externals(
         &package.program,
         package.manifest.build.int_widths,
         &package.external,
     );
-    if !diagnostics.is_empty() {
-        return Err(diagnostics::render(&package.source_map, &diagnostics));
+    if !check.diagnostics.is_empty() {
+        return Err(diagnostics::render(&package.source_map, &check.diagnostics));
     }
 
     if let Some(name) = external_seize(&package.program, &package.external) {
@@ -168,11 +168,13 @@ fn run_impl(target: &Path) -> Result<(), String> {
         ));
     }
 
-    interp::run(&package.program, package.manifest.build.int_widths).map_err(|error| {
-        package
-            .source_map
-            .format_diagnostic("E0500", error.span, &error.message)
-    })
+    interp::run_checked(&package.program, package.manifest.build.int_widths, &check).map_err(
+        |error| {
+            package
+                .source_map
+                .format_diagnostic("E0500", error.span, &error.message)
+        },
+    )
 }
 
 fn external_seize(program: &Program, external: &[program::ExportInfo]) -> Option<String> {
