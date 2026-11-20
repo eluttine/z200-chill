@@ -37,12 +37,19 @@ impl SourceMap {
 
     /// Render a span-qualified diagnostic.
     pub fn format(&self, span: Span, message: &str) -> String {
+        self.format_diagnostic("E0000", span, message)
+    }
+
+    pub fn format_diagnostic(&self, code: &str, span: Span, message: &str) -> String {
         match self.get(span.source) {
             Some(file) => {
                 let (line, column) = lexer::line_col(&file.text, span.start);
-                format!("{}:{line}:{column}: error: {message}", file.path.display())
+                format!(
+                    "{}:{line}:{column}: error[{code}]: {message}",
+                    file.path.display()
+                )
             }
-            None => format!("error: {message}"),
+            None => format!("error[{code}]: {message}"),
         }
     }
 
@@ -53,12 +60,12 @@ impl SourceMap {
                 Some(file) => {
                     let (line, column) = lexer::line_col(&file.text, error.offset);
                     format!(
-                        "{}:{line}:{column}: error: {}",
+                        "{}:{line}:{column}: error[E0100]: {}",
                         file.path.display(),
                         error.message
                     )
                 }
-                None => format!("error: {}", error.message),
+                None => format!("error[E0100]: {}", error.message),
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -75,7 +82,7 @@ mod tests {
         let id = map.add("src/a.ch", "M: MODULE\n".to_owned());
         assert_eq!(
             map.format(Span::new(id, 3, 4), "boom"),
-            "src/a.ch:1:4: error: boom"
+            "src/a.ch:1:4: error[E0000]: boom"
         );
     }
 
@@ -85,6 +92,6 @@ mod tests {
         let id = map.add("a.ch", "/*".to_owned());
         let errors = lexer::tokenize_with_source("/*", id).unwrap_err();
         let text = map.format_lex_errors(&errors);
-        assert!(text.starts_with("a.ch:1:1: error: unterminated bracketed comment"));
+        assert!(text.starts_with("a.ch:1:1: error[E0100]: unterminated bracketed comment"));
     }
 }

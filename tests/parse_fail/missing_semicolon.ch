@@ -1,0 +1,3 @@
+M: MODULE
+  DCL x INT
+END M;

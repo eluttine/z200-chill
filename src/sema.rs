@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::diagnostics::Diagnostic;
 use crate::lexer::{SourceId, Span};
 use crate::manifest::WidthProfile;
 use crate::program::{self, Export, ExportKind};
@@ -38,7 +39,37 @@ pub fn check_with_externals(
     profile: WidthProfile,
     external: &[program::ExportInfo],
 ) -> Result<(), Error> {
-    let info = program::analyze(program).map_err(map_program_error)?;
+    let diagnostics = check_all_with_externals(program, profile, external);
+    match diagnostics.into_iter().next() {
+        Some(diagnostic) => {
+            let span = diagnostic.span.unwrap_or_else(|| {
+                program
+                    .modules
+                    .first()
+                    .map(|module| module.span)
+                    .unwrap_or(Span::new(SourceId(0), 0, 0))
+            });
+            Err(Error::new(span, diagnostic.message))
+        }
+        None => Ok(()),
+    }
+}
+
+pub fn check_all(program: &Program, profile: WidthProfile) -> Vec<Diagnostic> {
+    check_all_with_externals(program, profile, &[])
+}
+
+pub fn check_all_with_externals(
+    program: &Program,
+    profile: WidthProfile,
+    external: &[program::ExportInfo],
+) -> Vec<Diagnostic> {
+    let info = match program::analyze(program) {
+        Ok(info) => info,
+        Err(error) => {
+            return vec![Diagnostic::new("E0400", Some(error.span), error.message)];
+        }
+    };
     let mut exports = info.exports;
     let fallback_span = program
         .modules
@@ -48,10 +79,11 @@ pub fn check_with_externals(
 
     for info in external {
         if exports.contains_key(&info.name) {
-            return Err(Error::new(
-                fallback_span,
+            return vec![Diagnostic::new(
+                "E0400",
+                Some(fallback_span),
                 format!("name `{}` is already exported", info.name),
-            ));
+            )];
         }
 
         let kind = match &info.kind {
@@ -77,16 +109,21 @@ pub fn check_with_externals(
         exports,
         current_module: 0,
         labels: Vec::new(),
+        diagnostics: Vec::new(),
     };
     for (index, module) in program.modules.iter().enumerate() {
         checker.current_module = index;
-        if module.kind == ModuleKind::Spec {
-            checker.check_spec_module(module)?;
+        let result = if module.kind == ModuleKind::Spec {
+            checker.check_spec_module(module)
         } else {
-            checker.check_module(module)?;
+            checker.check_module(module)
+        };
+        if let Err(error) = result {
+            checker.push_diagnostic(error);
         }
     }
-    Ok(())
+
+    checker.diagnostics
 }
 
 fn map_program_error(error: program::Error) -> Error {
@@ -107,9 +144,20 @@ struct Checker {
     exports: HashMap<String, Export>,
     current_module: usize,
     labels: Vec<String>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl Checker {
+    fn push_diagnostic(&mut self, error: Error) {
+        if self.diagnostics.iter().any(|diagnostic| {
+            diagnostic.span == Some(error.span) && diagnostic.message == error.message
+        }) {
+            return;
+        }
+        self.diagnostics
+            .push(Diagnostic::new("E0400", Some(error.span), error.message));
+    }
+
     fn check_module(&mut self, module: &Module) -> Result<(), Error> {
         self.scopes.push(Scope::default());
         let result = self.check_module_body(module);
@@ -225,30 +273,50 @@ impl Checker {
     }
 
     fn check_initializers(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
+        let mut first_error = None;
+
         for declaration in declarations {
             let Declaration::Var(vars) = declaration else {
                 continue;
             };
             for var in vars {
-                let ty = resolve_mode(&var.mode)?;
-                let Some(init) = &var.init else {
-                    continue;
-                };
-                let value_ty = self.check_expr(&init.value)?;
-                self.ensure_assignable(ty, value_ty, init.value.span())?;
-                self.check_constant_range(&init.value, ty)?;
+                let result = (|| -> Result<(), Error> {
+                    let ty = resolve_mode(&var.mode)?;
+                    let Some(init) = &var.init else {
+                        return Ok(());
+                    };
+                    let value_ty = self.check_expr(&init.value)?;
+                    self.ensure_assignable(ty, value_ty, init.value.span())?;
+                    self.check_constant_range(&init.value, ty)
+                })();
+
+                if let Err(error) = result {
+                    self.push_diagnostic(error.clone());
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
             }
         }
-        Ok(())
+
+        first_error.map_or(Ok(()), Err)
     }
 
     fn check_proc_bodies(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
+        let mut first_error = None;
+
         for declaration in declarations {
             if let Declaration::Proc(proc_def) = declaration {
-                self.check_proc(proc_def)?;
+                if let Err(error) = self.check_proc(proc_def) {
+                    self.push_diagnostic(error.clone());
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
             }
         }
-        Ok(())
+
+        first_error.map_or(Ok(()), Err)
     }
 
     fn check_proc(&mut self, proc_def: &ProcDef) -> Result<(), Error> {
@@ -326,10 +394,18 @@ impl Checker {
     }
 
     fn check_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
+        let mut first_error = None;
+
         for action in actions {
-            self.check_action(action)?;
+            if let Err(error) = self.check_action(action) {
+                self.push_diagnostic(error.clone());
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
         }
-        Ok(())
+
+        first_error.map_or(Ok(()), Err)
     }
 
     fn check_action(&mut self, action: &Action) -> Result<(), Error> {
@@ -981,6 +1057,31 @@ mod tests {
         let tokens = lexer::tokenize(source).unwrap();
         let program = parser::parse(&tokens).unwrap();
         check(&program, WidthProfile::default())
+    }
+
+    fn check_all_source(source: &str) -> Vec<Diagnostic> {
+        let tokens = lexer::tokenize(source).unwrap();
+        let program = parser::parse(&tokens).unwrap();
+        check_all(&program, WidthProfile::default())
+    }
+
+    #[test]
+    fn collects_multiple_action_errors() {
+        let diagnostics = check_all_source(
+            r#"
+M: MODULE
+  DCL a SHORT_INT;
+  DCL b LONG_INT;
+  a := b;
+  a := b;
+END M;
+"#,
+        );
+
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.message.contains("cannot assign LONG_INT")));
     }
 
     #[test]

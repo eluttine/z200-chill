@@ -1,4 +1,5 @@
 use crate::ast::Program;
+use crate::diagnostics;
 use crate::grant;
 use crate::interp;
 use crate::lexer;
@@ -87,15 +88,21 @@ fn build(target: &Path) -> i32 {
 fn build_impl(target: &Path) -> Result<PathBuf, String> {
     let package = load_package(target)?;
 
-    sema::check_with_externals(
+    let diagnostics = sema::check_all_with_externals(
         &package.program,
         package.manifest.build.int_widths,
         &package.external,
-    )
-    .map_err(|error| package.source_map.format(error.span, &error.message))?;
+    );
+    if !diagnostics.is_empty() {
+        return Err(diagnostics::render(&package.source_map, &diagnostics));
+    }
 
-    let grant_file = grant::GrantFile::from_package(&package.manifest, &package.program)
-        .map_err(|error| package.source_map.format(error.span, &error.message))?;
+    let grant_file =
+        grant::GrantFile::from_package(&package.manifest, &package.program).map_err(|error| {
+            package
+                .source_map
+                .format_diagnostic("E0600", error.span, &error.message)
+        })?;
     let text = grant_file
         .to_toml()
         .map_err(|error| format!("error: {error}"))?;
@@ -122,12 +129,14 @@ fn build_impl(target: &Path) -> Result<PathBuf, String> {
 fn check_impl(target: &Path) -> Result<String, String> {
     let package = load_package(target)?;
 
-    sema::check_with_externals(
+    let diagnostics = sema::check_all_with_externals(
         &package.program,
         package.manifest.build.int_widths,
         &package.external,
-    )
-    .map_err(|error| package.source_map.format(error.span, &error.message))?;
+    );
+    if !diagnostics.is_empty() {
+        return Err(diagnostics::render(&package.source_map, &diagnostics));
+    }
 
     Ok(format!(
         "checked {} (edition {}, widths {})\n  {}: {} tokens, {} module(s)",
@@ -143,12 +152,14 @@ fn check_impl(target: &Path) -> Result<String, String> {
 fn run_impl(target: &Path) -> Result<(), String> {
     let package = load_package(target)?;
 
-    sema::check_with_externals(
+    let diagnostics = sema::check_all_with_externals(
         &package.program,
         package.manifest.build.int_widths,
         &package.external,
-    )
-    .map_err(|error| package.source_map.format(error.span, &error.message))?;
+    );
+    if !diagnostics.is_empty() {
+        return Err(diagnostics::render(&package.source_map, &diagnostics));
+    }
 
     if !package.external.is_empty() {
         return Err(
@@ -156,8 +167,11 @@ fn run_impl(target: &Path) -> Result<(), String> {
         );
     }
 
-    interp::run(&package.program, package.manifest.build.int_widths)
-        .map_err(|error| package.source_map.format(error.span, &error.message))
+    interp::run(&package.program, package.manifest.build.int_widths).map_err(|error| {
+        package
+            .source_map
+            .format_diagnostic("E0500", error.span, &error.message)
+    })
 }
 
 struct LoadedPackage {
@@ -196,8 +210,8 @@ fn load_package(target: &Path) -> Result<LoadedPackage, String> {
     };
     let token_count = tokens.len();
 
-    let program =
-        parser::parse(&tokens).map_err(|error| source_map.format(error.span, &error.message))?;
+    let program = parser::parse(&tokens)
+        .map_err(|error| source_map.format_diagnostic("E0201", error.span, &error.message))?;
 
     let mut external = Vec::new();
     for (name, path) in &manifest.dependencies {
