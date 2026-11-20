@@ -31,6 +31,7 @@ Prioritize clarity, deterministic behavior, and small, verifiable changes over c
 - Build compiler & CLI (`z200c`): `cargo build`
 - Run unit & integration tests: `cargo test`
 - Run a sample `.ch` program: `cargo run -- run examples/hello`
+- Write a package grant file: `cargo run -- grant examples/spec`
 - Lint / typecheck: `cargo fmt --all --check && cargo clippy --all-targets -- -D warnings`
 
 ## Working Style

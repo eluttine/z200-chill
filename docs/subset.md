@@ -61,9 +61,9 @@ Implemented in `z200c`:
   shared seized locations and procedures;
 - `SPEC MODULE` interfaces paired with body modules, with variable and procedure
   signature matching;
-- `z200c build`, which writes a TOML grant file describing the package interface;
+- `z200c grant`, which writes a TOML grant file describing the package interface;
 - loading dependency grant files from `[dependencies]` for static `SEIZE` resolution in
-  `check` and `build`;
+  `check` and `grant`;
 - `DO FOR` (ascending, descending, with `BY`), `CASE`, and labelled `EXIT`;
 - a tree-walking interpreter, so `z200c run examples/hello` executes the example and
   verifies its `ASSERT`.
@@ -420,7 +420,7 @@ Implemented v0 rules:
   grants are the module's public interface.
 - At runtime, spec grants resolve to the paired body's variables and procedures.
 
-`z200c build` writes the compiled interface to
+`z200c grant` writes the compiled interface to
 `target/z200c/<package>.grt.toml`:
 
 ```toml
@@ -449,9 +449,9 @@ lib = "../lib/target/z200c/lib.grt.toml"
 - Paths are resolved relative to the depending package's directory.
 - The dependency's `edition` and `int_widths` must match the consuming package.
 - Names exported by both the program and a dependency are an error.
-- `z200c check` and `z200c build` resolve `SEIZE` against these external exports.
-- `z200c run` does not link external dependencies yet and rejects packages that declare
-  them.
+- `z200c check` and `z200c grant` resolve `SEIZE` against these external exports.
+- `z200c run` does not link external dependencies yet; it rejects a run only when an
+  external name is actually seized.
 
 ### 7.4 Complete programs (§10.8)
 
@@ -553,8 +553,8 @@ need I/O:
 
 ### 10.4 Grant-file / multi-module model (static model resolved; linking open)
 
-v0 implements `SPEC MODULE` pairing, writes a TOML grant file from `z200c build`, and
-consumes dependency grant files for `SEIZE` resolution in `check` and `build`. The
+v0 implements `SPEC MODULE` pairing, writes a TOML grant file from `z200c grant`, and
+consumes dependency grant files for `SEIZE` resolution in `check` and `grant`. The
 dependency's edition and width profile must match. Linking external dependencies for
 `run`, symbol mangling, and executing dependency code are still open. Z.200 permits
 several piecewise schemes (§10.10); the next step is a linking strategy while rejecting

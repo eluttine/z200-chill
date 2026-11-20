@@ -78,9 +78,9 @@ fn run_control_example_succeeds() {
 }
 
 #[test]
-fn build_writes_grant_file() {
+fn grant_writes_grant_file() {
     let output = z200c()
-        .arg("build")
+        .arg("grant")
         .arg(example("modules"))
         .output()
         .unwrap();
@@ -170,6 +170,67 @@ END Client;
     let run = z200c().arg("run").arg(&dir).output().unwrap();
     assert_eq!(run.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&run.stderr).contains("not linked"));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn run_allows_unused_dependency() {
+    let dir = std::env::temp_dir().join(format!("z200c-unused-dep-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+
+    std::fs::write(
+        dir.join("lib.grt.toml"),
+        r#"
+schema = 1
+package = "lib"
+edition = "z200-11/99"
+int_widths = "16-32-64"
+
+[[exports]]
+name = "unused"
+kind = "variable"
+mode = "INT"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "client"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+int_widths = "16-32-64"
+
+[dependencies]
+lib = "lib.grt.toml"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+Client: MODULE
+  ASSERT TRUE;
+END Client;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("run").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -6,12 +6,12 @@ CHILL was designed for large, long-lived, high-reliability systems (such as tele
 
 ## Project Status
 
-Early development. The `z200c` CLI can currently load and validate `Chill.toml` (edition and integer-width profiles), tokenize and parse the v0 subset, perform mode checking, enforce `GRANT`/`SEIZE` visibility between modules, validate `SPEC MODULE` interfaces against their bodies, interpret a package end to end (including `DO FOR`, `CASE`, and labelled `EXIT`), and emit a TOML grant file with `z200c build`. `check` and `build` can resolve `SEIZE` against dependency grant files; `run` does not link external dependencies yet.
+Early development. The `z200c` CLI can currently load and validate `Chill.toml` (edition and integer-width profiles), tokenize and parse the v0 subset, perform mode checking, enforce `GRANT`/`SEIZE` visibility between modules, validate `SPEC MODULE` interfaces against their bodies, interpret a package end to end (including `DO FOR`, `CASE`, and labelled `EXIT`), and emit a TOML grant file with `z200c grant`. `check` and `grant` can resolve `SEIZE` against dependency grant files; `run` does not link external dependencies yet.
 
 ```sh
 cargo run -- check examples/hello
 cargo run -- run examples/hello
-cargo run -- build examples/spec
+cargo run -- grant examples/spec
 ```
 
 `examples/hello` is the first acceptance test: it computes `11` and verifies it with `ASSERT`, exiting successfully with no output. `examples/modules` demonstrates `GRANT` / `SEIZE`, including a shared seized location, and `examples/spec` demonstrates a `SPEC MODULE` paired with its body.

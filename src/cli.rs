@@ -1,13 +1,14 @@
-use crate::ast::Program;
+use crate::ast::{Declaration, Program, VisibilityKind};
 use crate::diagnostics;
 use crate::grant;
 use crate::interp;
 use crate::lexer;
-use crate::manifest::Manifest;
+use crate::manifest::{Manifest, WidthProfile};
 use crate::parser;
 use crate::program;
 use crate::sema;
 use crate::source::SourceMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -36,9 +37,9 @@ where
             let target = args.next().unwrap_or_else(|| ".".to_owned());
             run_package(Path::new(&target))
         }
-        Some("build") => {
+        Some("grant") | Some("build") => {
             let target = args.next().unwrap_or_else(|| ".".to_owned());
-            build(Path::new(&target))
+            grant_package(Path::new(&target))
         }
         Some(command) => {
             eprintln!("error: unknown command `{command}`");
@@ -72,8 +73,8 @@ fn run_package(target: &Path) -> i32 {
     }
 }
 
-fn build(target: &Path) -> i32 {
-    match build_impl(target) {
+fn grant_package(target: &Path) -> i32 {
+    match grant_impl(target) {
         Ok(path) => {
             println!("wrote {}", path.display());
             0
@@ -85,7 +86,7 @@ fn build(target: &Path) -> i32 {
     }
 }
 
-fn build_impl(target: &Path) -> Result<PathBuf, String> {
+fn grant_impl(target: &Path) -> Result<PathBuf, String> {
     let package = load_package(target)?;
 
     let diagnostics = sema::check_all_with_externals(
@@ -161,10 +162,10 @@ fn run_impl(target: &Path) -> Result<(), String> {
         return Err(diagnostics::render(&package.source_map, &diagnostics));
     }
 
-    if !package.external.is_empty() {
-        return Err(
-            "error: dependencies are not linked for `run` yet; use `check` or `build`".to_owned(),
-        );
+    if let Some(name) = external_seize(&package.program, &package.external) {
+        return Err(format!(
+            "error[E0500]: cannot run `{name}`: external dependencies are not linked yet"
+        ));
     }
 
     interp::run(&package.program, package.manifest.build.int_widths).map_err(|error| {
@@ -172,6 +173,28 @@ fn run_impl(target: &Path) -> Result<(), String> {
             .source_map
             .format_diagnostic("E0500", error.span, &error.message)
     })
+}
+
+fn external_seize(program: &Program, external: &[program::ExportInfo]) -> Option<String> {
+    let names: HashSet<&str> = external.iter().map(|info| info.name.as_str()).collect();
+
+    for module in &program.modules {
+        for declaration in &module.declarations {
+            let Declaration::Visibility(visibility) = declaration else {
+                continue;
+            };
+            if visibility.kind != VisibilityKind::Seize {
+                continue;
+            }
+            for name in &visibility.names {
+                if names.contains(name.name.as_str()) {
+                    return Some(name.name.clone());
+                }
+            }
+        }
+    }
+
+    None
 }
 
 struct LoadedPackage {
@@ -235,11 +258,12 @@ fn load_package(target: &Path) -> Result<LoadedPackage, String> {
                 grant_file.edition, manifest.package.edition
             ));
         }
-        let expected_widths = manifest.build.int_widths.to_string();
-        if grant_file.int_widths != expected_widths {
+        let dependency_widths = WidthProfile::parse(&grant_file.int_widths)
+            .map_err(|error| format!("error[E0600]: dependency `{name}`: {error}"))?;
+        if dependency_widths != manifest.build.int_widths {
             return Err(format!(
-                "error: dependency `{name}` uses int_widths {}, expected {}",
-                grant_file.int_widths, expected_widths
+                "error[E0600]: dependency `{name}` uses int_widths {}, expected {}",
+                dependency_widths, manifest.build.int_widths
             ));
         }
 
@@ -290,7 +314,8 @@ fn print_help() {
 Usage:
   z200c check [path]    Parse and mode-check a package
   z200c run [path]      Execute a package
-  z200c build [path]    Parse, check, and write the package grant file
+  z200c grant [path]    Parse, check, and write the package grant file
+  z200c build [path]    Alias for `grant`
   z200c --version
   z200c --help
 
