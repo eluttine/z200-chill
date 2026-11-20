@@ -33,6 +33,7 @@ pub fn parse(tokens: &[Token]) -> Result<Program, Error> {
         tokens,
         index: 0,
         source,
+        depth: 0,
     }
     .parse_program()
 }
@@ -41,7 +42,10 @@ struct Parser<'a> {
     tokens: &'a [Token],
     index: usize,
     source: SourceId,
+    depth: usize,
 }
+
+const MAX_NESTING_DEPTH: usize = 256;
 
 impl<'a> Parser<'a> {
     fn parse_program(&mut self) -> Result<Program, Error> {
@@ -409,6 +413,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_action(&mut self) -> Result<Action, Error> {
+        self.enter_nesting()?;
+        let result = self.parse_action_inner();
+        self.leave_nesting();
+        result
+    }
+
+    fn parse_action_inner(&mut self) -> Result<Action, Error> {
         if self.at_identifier() && self.kind_at(1) == Some(&TokenKind::Colon) {
             let start = self.current_span();
             let (label, _) = self.expect_identifier()?;
@@ -761,6 +772,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self) -> Result<Expr, Error> {
+        self.enter_nesting()?;
+        let result = self.parse_expr_inner();
+        self.leave_nesting();
+        result
+    }
+
+    fn parse_expr_inner(&mut self) -> Result<Expr, Error> {
         self.parse_binary(1)
     }
 
@@ -786,6 +804,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_unary(&mut self) -> Result<Expr, Error> {
+        self.enter_nesting()?;
+        let result = self.parse_unary_inner();
+        self.leave_nesting();
+        result
+    }
+
+    fn parse_unary_inner(&mut self) -> Result<Expr, Error> {
         let op = match self.kind() {
             Some(TokenKind::Minus) => Some(UnaryOp::Neg),
             Some(TokenKind::Keyword(Keyword::Not)) => Some(UnaryOp::Not),
@@ -946,6 +971,19 @@ impl<'a> Parser<'a> {
             self.index += 1;
         }
         token
+    }
+
+    fn enter_nesting(&mut self) -> Result<(), Error> {
+        self.depth += 1;
+        if self.depth > MAX_NESTING_DEPTH {
+            self.depth -= 1;
+            return Err(self.error_here("nesting too deep"));
+        }
+        Ok(())
+    }
+
+    fn leave_nesting(&mut self) {
+        self.depth -= 1;
     }
 
     fn error_here(&self, message: impl Into<String>) -> Error {
@@ -1358,6 +1396,18 @@ END M;
             &body[0],
             Action::Exit { label: Some(name), .. } if name == "L"
         ));
+    }
+
+    #[test]
+    fn rejects_excessive_nesting() {
+        let source = format!(
+            "M: MODULE\n  ASSERT {}1{} = 1;\nEND M;\n",
+            "(".repeat(MAX_NESTING_DEPTH + 10),
+            ")".repeat(MAX_NESTING_DEPTH + 10)
+        );
+        let tokens = lexer::tokenize(&source).unwrap();
+        let error = parse(&tokens).unwrap_err();
+        assert!(error.message.contains("nesting too deep"));
     }
 
     #[test]
