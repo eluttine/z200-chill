@@ -1,5 +1,6 @@
 use crate::lexer;
 use crate::manifest::Manifest;
+use crate::parser;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -63,13 +64,17 @@ fn check_impl(target: &Path) -> Result<String, String> {
     let tokens = lexer::tokenize(&source)
         .map_err(|errors| format_lex_errors(&entry_path, &source, &errors))?;
 
+    let program =
+        parser::parse(&tokens).map_err(|error| format_parse_error(&entry_path, &source, &error))?;
+
     Ok(format!(
-        "checked {} (edition {}, widths {})\n  {}: {} tokens",
+        "checked {} (edition {}, widths {})\n  {}: {} tokens, {} module(s)",
         manifest.package.name,
         manifest.package.edition,
         manifest.build.int_widths,
         entry_path.display(),
-        tokens.len()
+        tokens.len(),
+        program.modules.len()
     ))
 }
 
@@ -107,6 +112,15 @@ fn format_lex_errors(path: &Path, source: &str, errors: &[lexer::Error]) -> Stri
         ));
     }
     lines.join("\n")
+}
+
+fn format_parse_error(path: &Path, source: &str, error: &parser::Error) -> String {
+    let (line, column) = lexer::line_col(source, error.span.start);
+    format!(
+        "{}:{line}:{column}: error: {}",
+        path.display(),
+        error.message
+    )
 }
 
 fn print_help() {

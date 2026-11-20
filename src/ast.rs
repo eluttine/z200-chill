@@ -1,0 +1,250 @@
+use crate::lexer::Span;
+
+#[derive(Debug, Clone)]
+pub struct Program {
+    pub modules: Vec<Module>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Module {
+    pub name: Option<String>,
+    pub declarations: Vec<Declaration>,
+    pub actions: Vec<Action>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum Declaration {
+    Var(Vec<VarDecl>),
+    Proc(ProcDef),
+}
+
+#[derive(Debug, Clone)]
+pub struct VarDecl {
+    pub name: String,
+    pub mode: ModeRef,
+    pub init: Option<Initialization>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Initialization {
+    pub kind: InitKind,
+    pub value: Expr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitKind {
+    ReachBound,
+    LifetimeBound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModeRef {
+    pub name: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Passing {
+    In,
+    Out,
+    InOut,
+    Loc,
+}
+
+#[derive(Debug, Clone)]
+pub struct Param {
+    pub name: String,
+    pub mode: ModeRef,
+    pub passing: Passing,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcDef {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub result: Option<ModeRef>,
+    pub exceptions: Vec<String>,
+    pub declarations: Vec<Declaration>,
+    pub actions: Vec<Action>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum Action {
+    Assign {
+        target: Expr,
+        op: AssignOp,
+        value: Expr,
+        span: Span,
+    },
+    Assert {
+        condition: Expr,
+        span: Span,
+    },
+    Call {
+        callee: Expr,
+        span: Span,
+    },
+    Return {
+        value: Option<Expr>,
+        span: Span,
+    },
+    Result {
+        value: Expr,
+        span: Span,
+    },
+    If {
+        branches: Vec<Branch>,
+        else_actions: Option<Vec<Action>>,
+        span: Span,
+    },
+    Do {
+        control: DoControl,
+        body: Vec<Action>,
+        span: Span,
+    },
+    Exit {
+        label: Option<String>,
+        span: Span,
+    },
+    Begin {
+        declarations: Vec<Declaration>,
+        actions: Vec<Action>,
+        span: Span,
+    },
+    Empty {
+        span: Span,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct Branch {
+    pub condition: Expr,
+    pub body: Vec<Action>,
+}
+
+#[derive(Debug, Clone)]
+pub enum DoControl {
+    None,
+    While(Expr),
+    ForEver,
+    For {
+        counter: String,
+        start: Expr,
+        end: Expr,
+        step: Option<Expr>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssignOp {
+    Assign,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Concat,
+}
+
+#[derive(Debug, Clone)]
+pub enum Expr {
+    Integer {
+        value: i128,
+        base: u32,
+        span: Span,
+    },
+    Bool {
+        value: bool,
+        span: Span,
+    },
+    Char {
+        value: char,
+        span: Span,
+    },
+    String {
+        value: String,
+        span: Span,
+    },
+    Name {
+        name: String,
+        span: Span,
+    },
+    /// A procedure call or a mode conversion. The mode checker resolves which.
+    Apply {
+        name: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
+    Unary {
+        op: UnaryOp,
+        operand: Box<Expr>,
+        span: Span,
+    },
+    Binary {
+        op: BinaryOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+        span: Span,
+    },
+}
+
+impl Expr {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Integer { span, .. }
+            | Self::Bool { span, .. }
+            | Self::Char { span, .. }
+            | Self::String { span, .. }
+            | Self::Name { span, .. }
+            | Self::Apply { span, .. }
+            | Self::Unary { span, .. }
+            | Self::Binary { span, .. } => *span,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp {
+    Neg,
+    Not,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOp {
+    Or,
+    OrIf,
+    Xor,
+    And,
+    AndIf,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Add,
+    Sub,
+    Concat,
+    Mul,
+    Div,
+    Mod,
+    Rem,
+    Pow,
+}
+
+impl BinaryOp {
+    /// Binding power, low to high, following Z.200 §5.3.3–5.3.9.
+    pub fn precedence(self) -> u8 {
+        match self {
+            Self::Or | Self::OrIf | Self::Xor => 1,
+            Self::And | Self::AndIf => 2,
+            Self::Eq | Self::Ne | Self::Lt | Self::Le | Self::Gt | Self::Ge => 3,
+            Self::Add | Self::Sub | Self::Concat => 4,
+            Self::Mul | Self::Div | Self::Mod | Self::Rem => 5,
+            Self::Pow => 6,
+        }
+    }
+}

@@ -41,6 +41,7 @@ pub enum TokenKind {
     Plus,
     Minus,
     Star,
+    StarStar,
     Slash,
     Concat,
     Arrow,
@@ -207,6 +208,51 @@ define_keywords! {
 impl fmt::Display for Keyword {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+impl fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Identifier(name) => write!(f, "identifier `{name}`"),
+            Self::Integer { value, base } => write!(f, "integer `{value}` (base {base})"),
+            Self::Bool(value) => write!(f, "`{value}`"),
+            Self::Char(value) => write!(f, "character literal `{value}`"),
+            Self::String(_) => f.write_str("string literal"),
+            Self::Keyword(keyword) => write!(f, "`{keyword}`"),
+            Self::Semicolon => f.write_str("`;`"),
+            Self::Comma => f.write_str("`,`"),
+            Self::LParen => f.write_str("`(`"),
+            Self::RParen => f.write_str("`)`"),
+            Self::LBracket => f.write_str("`[`"),
+            Self::RBracket => f.write_str("`]`"),
+            Self::LParenColon => f.write_str("`(:`"),
+            Self::RParenColon => f.write_str("`:)`"),
+            Self::Colon => f.write_str("`:`"),
+            Self::Dot => f.write_str("`.`"),
+            Self::Assign => f.write_str("`:=`"),
+            Self::Eq => f.write_str("`=`"),
+            Self::Ne => f.write_str("`/=`"),
+            Self::Lt => f.write_str("`<`"),
+            Self::Le => f.write_str("`<=`"),
+            Self::Gt => f.write_str("`>`"),
+            Self::Ge => f.write_str("`>=`"),
+            Self::Plus => f.write_str("`+`"),
+            Self::Minus => f.write_str("`-`"),
+            Self::Star => f.write_str("`*`"),
+            Self::StarStar => f.write_str("`**`"),
+            Self::Slash => f.write_str("`/`"),
+            Self::Concat => f.write_str("`//`"),
+            Self::Arrow => f.write_str("`->`"),
+            Self::PlusAssign => f.write_str("`+:=`"),
+            Self::MinusAssign => f.write_str("`-:=`"),
+            Self::StarAssign => f.write_str("`*:=`"),
+            Self::SlashAssign => f.write_str("`/:=`"),
+            Self::ConcatAssign => f.write_str("`//:=`"),
+            Self::Hash => f.write_str("`#`"),
+            Self::Bang => f.write_str("`!`"),
+            Self::Diamond => f.write_str("`<>`"),
+        }
     }
 }
 
@@ -520,6 +566,7 @@ impl<'a> Lexer<'a> {
             ("(:", TokenKind::LParenColon),
             (":)", TokenKind::RParenColon),
             ("//", TokenKind::Concat),
+            ("**", TokenKind::StarStar),
         ] {
             if rest.starts_with(text) {
                 self.pos += text.len();
@@ -680,7 +727,7 @@ mod tests {
     #[test]
     fn multi_character_operators() {
         assert_eq!(
-            kinds(":= <= >= /= <> -> // (: :) +:= //:="),
+            kinds(":= <= >= /= <> -> // (: :) +:= //:= **"),
             vec![
                 TokenKind::Assign,
                 TokenKind::Le,
@@ -693,6 +740,7 @@ mod tests {
                 TokenKind::RParenColon,
                 TokenKind::PlusAssign,
                 TokenKind::ConcatAssign,
+                TokenKind::StarStar,
             ]
         );
     }
