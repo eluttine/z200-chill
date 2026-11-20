@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -112,6 +113,7 @@ impl fmt::Display for WidthProfile {
 pub struct Manifest {
     pub package: Package,
     pub build: Build,
+    pub dependencies: HashMap<String, PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +133,8 @@ pub struct Build {
 struct RawManifest {
     package: RawPackage,
     build: RawBuild,
+    #[serde(default)]
+    dependencies: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,6 +178,19 @@ impl Manifest {
             None => WidthProfile::default(),
         };
 
+        let mut dependencies = HashMap::new();
+        for (name, path) in raw.dependencies {
+            let name = name.trim();
+            let path = path.trim();
+            if name.is_empty() {
+                return Err("dependency name must not be empty".to_owned());
+            }
+            if path.is_empty() {
+                return Err(format!("dependency `{name}` must have a grant-file path"));
+            }
+            dependencies.insert(name.to_owned(), PathBuf::from(path));
+        }
+
         Ok(Self {
             package: Package {
                 name: raw.package.name.trim().to_owned(),
@@ -184,6 +201,7 @@ impl Manifest {
                 entry: PathBuf::from(raw.build.entry.trim()),
                 int_widths,
             },
+            dependencies,
         })
     }
 }
@@ -267,5 +285,22 @@ entry = "src/main.ch"
         let text = MANIFEST.replace("src/main.ch", "");
         let err = Manifest::parse(&text).unwrap_err();
         assert!(err.contains("build.entry"));
+    }
+
+    #[test]
+    fn parses_dependencies() {
+        let text = format!("{MANIFEST}\n[dependencies]\nlib = \"../lib/target/lib.grt.toml\"\n");
+        let manifest = Manifest::parse(&text).unwrap();
+        assert_eq!(
+            manifest.dependencies.get("lib"),
+            Some(&PathBuf::from("../lib/target/lib.grt.toml"))
+        );
+    }
+
+    #[test]
+    fn rejects_empty_dependency_path() {
+        let text = format!("{MANIFEST}\n[dependencies]\nlib = \"\"\n");
+        let err = Manifest::parse(&text).unwrap_err();
+        assert!(err.contains("must have a grant-file path"));
     }
 }

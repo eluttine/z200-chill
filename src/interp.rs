@@ -4,7 +4,7 @@ use crate::manifest::WidthProfile;
 use crate::types::{self, IntKind, Type};
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +44,9 @@ pub fn run(program: &Program, profile: WidthProfile) -> Result<(), Error> {
     interpreter.apply_seizes(program)?;
 
     for (index, module) in program.modules.iter().enumerate() {
+        if module.kind == ModuleKind::Spec {
+            continue;
+        }
         interpreter.active_module = index;
         interpreter.initialize_declarations(&module.declarations)?;
         interpreter.run_module(module)?;
@@ -114,7 +117,9 @@ impl<'a> Interpreter<'a> {
     fn declare_modules(&mut self, program: &'a Program) -> Result<(), Error> {
         for (index, module) in program.modules.iter().enumerate() {
             let mut scope = Scope::default();
-            declare_into_scope(&mut scope, &module.declarations, index)?;
+            if module.kind == ModuleKind::Body {
+                declare_into_scope(&mut scope, &module.declarations, index)?;
+            }
             self.modules.push(scope);
         }
         Ok(())
@@ -125,6 +130,9 @@ impl<'a> Interpreter<'a> {
         let mut imports = Vec::new();
 
         for (current, module) in program.modules.iter().enumerate() {
+            if module.kind == ModuleKind::Spec {
+                continue;
+            }
             for declaration in &module.declarations {
                 let Declaration::Visibility(visibility) = declaration else {
                     continue;
@@ -196,48 +204,88 @@ impl<'a> Interpreter<'a> {
     }
 
     fn build_exports(&self, program: &'a Program) -> Result<HashMap<String, ExportRef>, Error> {
-        let mut exports = HashMap::new();
+        let mut body_by_name = HashMap::new();
+        let mut spec_by_name = HashMap::new();
 
         for (index, module) in program.modules.iter().enumerate() {
-            for declaration in &module.declarations {
-                let Declaration::Visibility(visibility) = declaration else {
-                    continue;
-                };
-                if visibility.kind != VisibilityKind::Grant {
-                    continue;
-                }
-                for name in &visibility.names {
-                    let is_proc = if self.modules[index].procs.contains_key(&name.name) {
-                        true
-                    } else if self.modules[index].vars.contains_key(&name.name) {
-                        false
-                    } else {
-                        return Err(Error::new(
-                            name.span,
-                            format!("cannot GRANT `{}`: not declared in this module", name.name),
-                        ));
-                    };
+            let Some(name) = &module.name else {
+                continue;
+            };
+            let target = match module.kind {
+                ModuleKind::Body => &mut body_by_name,
+                ModuleKind::Spec => &mut spec_by_name,
+            };
+            target.insert(name.clone(), index);
+        }
 
-                    if exports
-                        .insert(
-                            name.name.clone(),
-                            ExportRef {
-                                module: index,
-                                is_proc,
-                            },
-                        )
-                        .is_some()
-                    {
-                        return Err(Error::new(
-                            name.span,
-                            format!("`{}` is granted more than once", name.name),
-                        ));
-                    }
-                }
+        let mut exports = HashMap::new();
+        let mut bodies_with_spec = HashSet::new();
+
+        for (name, spec_index) in &spec_by_name {
+            let Some(body_index) = body_by_name.get(name).copied() else {
+                return Err(Error::new(
+                    program.modules[*spec_index].span,
+                    format!("spec module `{name}` has no body"),
+                ));
+            };
+            bodies_with_spec.insert(body_index);
+            self.add_runtime_grants(&program.modules[*spec_index], body_index, &mut exports)?;
+        }
+
+        for (index, module) in program.modules.iter().enumerate() {
+            if module.kind == ModuleKind::Body && !bodies_with_spec.contains(&index) {
+                self.add_runtime_grants(module, index, &mut exports)?;
             }
         }
 
         Ok(exports)
+    }
+
+    fn add_runtime_grants(
+        &self,
+        module: &'a Module,
+        export_module: usize,
+        exports: &mut HashMap<String, ExportRef>,
+    ) -> Result<(), Error> {
+        for declaration in &module.declarations {
+            let Declaration::Visibility(visibility) = declaration else {
+                continue;
+            };
+            if visibility.kind != VisibilityKind::Grant {
+                continue;
+            }
+
+            for name in &visibility.names {
+                let is_proc = if self.modules[export_module].procs.contains_key(&name.name) {
+                    true
+                } else if self.modules[export_module].vars.contains_key(&name.name) {
+                    false
+                } else {
+                    return Err(Error::new(
+                        name.span,
+                        format!("cannot GRANT `{}`: not declared in the body", name.name),
+                    ));
+                };
+
+                if exports
+                    .insert(
+                        name.name.clone(),
+                        ExportRef {
+                            module: export_module,
+                            is_proc,
+                        },
+                    )
+                    .is_some()
+                {
+                    return Err(Error::new(
+                        name.span,
+                        format!("`{}` is granted more than once", name.name),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn initialize_declarations(&mut self, declarations: &'a [Declaration]) -> Result<(), Error> {
@@ -857,6 +905,7 @@ fn declare_into_scope<'a>(
                     },
                 );
             }
+            Declaration::ProcSignature(_) => {}
             Declaration::Visibility(_) => {}
         }
     }
@@ -983,6 +1032,33 @@ C: MODULE
   SEIZE x;
   ASSERT x = 42;
 END C;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn runs_spec_and_body() {
+        run_source(
+            r#"
+Lib: SPEC MODULE
+  GRANT x, F;
+  DCL x INT;
+  F: PROC () RETURNS (INT) END;
+END Lib;
+
+Lib: MODULE
+  DCL x INT INIT := 41;
+  F: PROC () RETURNS (INT);
+    RETURN (x + 1);
+  END F;
+END Lib;
+
+Client: MODULE
+  SEIZE x, F;
+  ASSERT x = 41;
+  ASSERT F() = 42;
+END Client;
 "#,
         )
         .unwrap();

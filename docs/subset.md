@@ -59,12 +59,18 @@ Implemented in `z200c`:
   `IF`, `DO WHILE` / `DO FOR EVER`, and `BEGIN … END`;
 - `GRANT` / `SEIZE` visibility between modules in a single entry file, including
   shared seized locations and procedures;
+- `SPEC MODULE` interfaces paired with body modules, with variable and procedure
+  signature matching;
+- `z200c build`, which writes a TOML grant file describing the package interface;
+- loading dependency grant files from `[dependencies]` for static `SEIZE` resolution in
+  `check` and `build`;
 - a tree-walking interpreter, so `z200c run examples/hello` executes the example and
   verifies its `ASSERT`.
 
 Not implemented yet (rejected or deferred with a diagnostic):
 
-- separate-compilation grant files, `SPEC` modules, contexts, and remote pieces;
+- linking external dependencies for `run`;
+- contexts and remote pieces;
 - `DO FOR` counters, labelled `EXIT`, and `CASE`;
 - `OUT` / `INOUT` / `LOC` parameter passing;
 - exceptions (`EXCEPTIONS`, `CAUSE`, handlers) and text I/O;
@@ -345,12 +351,12 @@ process. Visibility is static and independent of textual order:
 - A seized procedure executes in its **defining** module's scope; it does not see the
   caller's module or local names.
 - A module cannot seize a name it grants itself.
-- `GRANT ALL`, `FORBID`, `TO`, prefixes, `SPEC` modules, contexts, remote pieces, and
-  on-disk grant files are not implemented yet.
+- `GRANT ALL`, `FORBID`, `TO`, prefixes, contexts, remote pieces, and cross-package
+  grant-file consumption are not implemented yet.
 
 ### 7.3 SPEC modules (§10.10.2)
 
-A spec module declares the static interface of a separately compiled module:
+A spec module declares the static interface of a module body:
 
 ```text
 name: SPEC MODULE
@@ -363,14 +369,51 @@ name: MODULE SPEC          -- alternative spelling in Z.200 (11/99)
 END name;
 ```
 
-For v0 the minimal flow is:
+Implemented v0 rules:
 
-1. compile the spec (and/or the defining module) to produce grant information;
-2. compile each implementation module with `SEIZE` of the names it uses;
-3. mangle internal symbols so modules/packages cannot collide (per `AGENTS.md`).
+- A spec must be named and must have a body module with the same name. Module names
+  must be unique within their kind, so one spec and one body may share a name.
+- A spec body may contain `DCL` declarations, procedure signatures
+  (`P: PROC (...) [RETURNS (...)] END;`), `GRANT`, and `SEIZE`.
+- Spec variables must not have initializers, and spec modules cannot contain actions.
+- The body must declare every spec variable with the same mode and every spec procedure
+  with a matching parameter/result signature. Extra private declarations are allowed.
+- If a spec exists, `GRANT` must appear in the spec rather than the body. The spec's
+  grants are the module's public interface.
+- At runtime, spec grants resolve to the paired body's variables and procedures.
 
-A practical grant-file format (akin to GNU CHILL's `.grt`) is a project decision and
-should be specified separately before multi-file builds are enabled.
+`z200c build` writes the compiled interface to
+`target/z200c/<package>.grt.toml`:
+
+```toml
+schema = 1
+package = "spec"
+edition = "z200-11/99"
+int_widths = "16-32-64"
+
+[[exports]]
+name = "Bump"
+kind = "procedure"
+
+[[exports]]
+name = "value"
+kind = "variable"
+mode = "INT"
+```
+
+A package can consume another package's interface through `[dependencies]`:
+
+```toml
+[dependencies]
+lib = "../lib/target/z200c/lib.grt.toml"
+```
+
+- Paths are resolved relative to the depending package's directory.
+- The dependency's `edition` and `int_widths` must match the consuming package.
+- Names exported by both the program and a dependency are an error.
+- `z200c check` and `z200c build` resolve `SEIZE` against these external exports.
+- `z200c run` does not link external dependencies yet and rejects packages that declare
+  them.
 
 ### 7.4 Complete programs (§10.8)
 
@@ -470,13 +513,14 @@ need I/O:
 - expected exit status: success;
 - unhandled `ASSERTFAIL`/exception: failure.
 
-### 10.4 Grant-file / multi-module model (partially resolved)
+### 10.4 Grant-file / multi-module model (static model resolved; linking open)
 
-v0 implements static `GRANT` / `SEIZE` visibility for modules in a single entry file,
-including shared seized locations and procedures. On-disk grant information and symbol
-mangling for separate compilation are still open. Z.200 permits several piecewise
-schemes (§10.10); the next step is one simple grant-file format while rejecting the
-rest with clear diagnostics.
+v0 implements `SPEC MODULE` pairing, writes a TOML grant file from `z200c build`, and
+consumes dependency grant files for `SEIZE` resolution in `check` and `build`. The
+dependency's edition and width profile must match. Linking external dependencies for
+`run`, symbol mangling, and executing dependency code are still open. Z.200 permits
+several piecewise schemes (§10.10); the next step is a linking strategy while rejecting
+unsupported schemes with clear diagnostics.
 
 ### 10.5 Range-check default (resolved for v0)
 

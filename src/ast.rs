@@ -8,16 +8,33 @@ pub struct Program {
 #[derive(Debug, Clone)]
 pub struct Module {
     pub name: Option<String>,
+    pub kind: ModuleKind,
     pub declarations: Vec<Declaration>,
     pub actions: Vec<Action>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModuleKind {
+    Body,
+    Spec,
 }
 
 #[derive(Debug, Clone)]
 pub enum Declaration {
     Var(Vec<VarDecl>),
     Proc(ProcDef),
+    ProcSignature(ProcSignature),
     Visibility(Visibility),
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcSignature {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub result: Option<ModeRef>,
+    pub exceptions: Vec<String>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

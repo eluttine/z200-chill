@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod cli;
+pub mod grant;
 pub mod interp;
 pub mod lexer;
 pub mod manifest;

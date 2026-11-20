@@ -6,14 +6,15 @@ CHILL was designed for large, long-lived, high-reliability systems (such as tele
 
 ## Project Status
 
-Early development. The `z200c` CLI can currently load and validate `Chill.toml` (edition and integer-width profiles), tokenize and parse the v0 subset, perform mode checking, enforce `GRANT`/`SEIZE` visibility between modules in one entry file, and interpret a package end to end.
+Early development. The `z200c` CLI can currently load and validate `Chill.toml` (edition and integer-width profiles), tokenize and parse the v0 subset, perform mode checking, enforce `GRANT`/`SEIZE` visibility between modules, validate `SPEC MODULE` interfaces against their bodies, interpret a package end to end, and emit a TOML grant file with `z200c build`. `check` and `build` can resolve `SEIZE` against dependency grant files; `run` does not link external dependencies yet.
 
 ```sh
 cargo run -- check examples/hello
 cargo run -- run examples/hello
+cargo run -- build examples/spec
 ```
 
-`examples/hello` is the first acceptance test: it computes `11` and verifies it with `ASSERT`, exiting successfully with no output. `examples/modules` demonstrates `GRANT` / `SEIZE`, including a shared seized location.
+`examples/hello` is the first acceptance test: it computes `11` and verifies it with `ASSERT`, exiting successfully with no output. `examples/modules` demonstrates `GRANT` / `SEIZE`, including a shared seized location, and `examples/spec` demonstrates a `SPEC MODULE` paired with its body.
 
 ## Repository Structure
 
@@ -26,5 +27,6 @@ z200-chill/
 ├── tests/              # CLI integration tests
 ├── examples/
 │   ├── hello/          # Starter CHILL package and manifest example
-│   └── modules/        # GRANT/SEIZE visibility example
+│   ├── modules/        # GRANT/SEIZE visibility example
+│   └── spec/           # SPEC MODULE + body example
 └── docs/               # Subset notes and design docs

@@ -1,4 +1,5 @@
 use crate::ast::Program;
+use crate::grant;
 use crate::interp;
 use crate::lexer::{self, Span};
 use crate::manifest::Manifest;
@@ -33,8 +34,8 @@ where
             run_package(Path::new(&target))
         }
         Some("build") => {
-            eprintln!("error: `build` is not implemented yet; try `z200c run <path>`");
-            2
+            let target = args.next().unwrap_or_else(|| ".".to_owned());
+            build(Path::new(&target))
         }
         Some(command) => {
             eprintln!("error: unknown command `{command}`");
@@ -68,10 +69,77 @@ fn run_package(target: &Path) -> i32 {
     }
 }
 
+fn build(target: &Path) -> i32 {
+    match build_impl(target) {
+        Ok(path) => {
+            println!("wrote {}", path.display());
+            0
+        }
+        Err(message) => {
+            eprintln!("{message}");
+            1
+        }
+    }
+}
+
+fn build_impl(target: &Path) -> Result<PathBuf, String> {
+    let package = load_package(target)?;
+
+    sema::check_with_externals(
+        &package.program,
+        package.manifest.build.int_widths,
+        &package.external,
+    )
+    .map_err(|error| {
+        format_span_error(
+            &package.entry_path,
+            &package.source,
+            error.span,
+            &error.message,
+        )
+    })?;
+
+    let grant_file =
+        grant::GrantFile::from_package(&package.manifest, &package.program).map_err(|error| {
+            format_span_error(
+                &package.entry_path,
+                &package.source,
+                error.span,
+                &error.message,
+            )
+        })?;
+    let text = grant_file
+        .to_toml()
+        .map_err(|error| format!("error: {error}"))?;
+
+    let out_dir = package.package_dir.join("target").join("z200c");
+    std::fs::create_dir_all(&out_dir).map_err(|error| {
+        format!(
+            "error: cannot create output directory {}: {error}",
+            out_dir.display()
+        )
+    })?;
+
+    let out_path = out_dir.join(format!("{}.grt.toml", package.manifest.package.name));
+    std::fs::write(&out_path, text).map_err(|error| {
+        format!(
+            "error: cannot write grant file {}: {error}",
+            out_path.display()
+        )
+    })?;
+
+    Ok(out_path)
+}
+
 fn check_impl(target: &Path) -> Result<String, String> {
     let package = load_package(target)?;
 
-    sema::check(&package.program, package.manifest.build.int_widths).map_err(|error| {
+    sema::check_with_externals(
+        &package.program,
+        package.manifest.build.int_widths,
+        &package.external,
+    )
+    .map_err(|error| {
         format_span_error(
             &package.entry_path,
             &package.source,
@@ -94,7 +162,12 @@ fn check_impl(target: &Path) -> Result<String, String> {
 fn run_impl(target: &Path) -> Result<(), String> {
     let package = load_package(target)?;
 
-    sema::check(&package.program, package.manifest.build.int_widths).map_err(|error| {
+    sema::check_with_externals(
+        &package.program,
+        package.manifest.build.int_widths,
+        &package.external,
+    )
+    .map_err(|error| {
         format_span_error(
             &package.entry_path,
             &package.source,
@@ -102,6 +175,12 @@ fn run_impl(target: &Path) -> Result<(), String> {
             &error.message,
         )
     })?;
+
+    if !package.external.is_empty() {
+        return Err(
+            "error: dependencies are not linked for `run` yet; use `check` or `build`".to_owned(),
+        );
+    }
 
     interp::run(&package.program, package.manifest.build.int_widths).map_err(|error| {
         format_span_error(
@@ -115,17 +194,22 @@ fn run_impl(target: &Path) -> Result<(), String> {
 
 struct LoadedPackage {
     manifest: Manifest,
+    package_dir: PathBuf,
     entry_path: PathBuf,
     source: String,
     token_count: usize,
     program: Program,
+    external: Vec<sema::ExportInfo>,
 }
 
 fn load_package(target: &Path) -> Result<LoadedPackage, String> {
     let manifest_path = resolve_manifest(target)?;
     let manifest = Manifest::load(&manifest_path).map_err(|error| format!("error: {error}"))?;
 
-    let package_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let package_dir = manifest_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     let entry_path = package_dir.join(&manifest.build.entry);
 
     let source = std::fs::read_to_string(&entry_path)
@@ -138,12 +222,51 @@ fn load_package(target: &Path) -> Result<LoadedPackage, String> {
     let program = parser::parse(&tokens)
         .map_err(|error| format_span_error(&entry_path, &source, error.span, &error.message))?;
 
+    let mut external = Vec::new();
+    for (name, path) in &manifest.dependencies {
+        let grant_path = if path.is_absolute() {
+            path.clone()
+        } else {
+            package_dir.join(path)
+        };
+        let text = std::fs::read_to_string(&grant_path).map_err(|error| {
+            format!(
+                "error: cannot read dependency `{name}` grant file {}: {error}",
+                grant_path.display()
+            )
+        })?;
+        let grant_file = grant::GrantFile::from_toml(&text)
+            .map_err(|error| format!("error: {}: {error}", grant_path.display()))?;
+
+        if grant_file.edition != manifest.package.edition.as_str() {
+            return Err(format!(
+                "error: dependency `{name}` uses edition {}, expected {}",
+                grant_file.edition, manifest.package.edition
+            ));
+        }
+        let expected_widths = manifest.build.int_widths.to_string();
+        if grant_file.int_widths != expected_widths {
+            return Err(format!(
+                "error: dependency `{name}` uses int_widths {}, expected {}",
+                grant_file.int_widths, expected_widths
+            ));
+        }
+
+        external.extend(
+            grant_file
+                .to_export_infos()
+                .map_err(|error| format!("error: {}: {error}", grant_path.display()))?,
+        );
+    }
+
     Ok(LoadedPackage {
         manifest,
+        package_dir,
         entry_path,
         source,
         token_count,
         program,
+        external,
     })
 }
 
@@ -194,7 +317,7 @@ fn print_help() {
 Usage:
   z200c check [path]    Parse and mode-check a package
   z200c run [path]      Execute a package
-  z200c build [path]    Build a package (not implemented yet)
+  z200c build [path]    Parse, check, and write the package grant file
   z200c --version
   z200c --help
 

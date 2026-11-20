@@ -56,13 +56,36 @@ impl<'a> Parser<'a> {
             None
         };
 
-        self.expect_keyword(Keyword::Module)?;
-        if self.at_keyword(Keyword::Body) {
+        let kind = if self.at_keyword(Keyword::Spec) {
             self.advance();
+            self.expect_keyword(Keyword::Module)?;
+            ModuleKind::Spec
+        } else {
+            self.expect_keyword(Keyword::Module)?;
+            if self.at_keyword(Keyword::Spec) {
+                self.advance();
+                ModuleKind::Spec
+            } else {
+                if self.at_keyword(Keyword::Body) {
+                    self.advance();
+                }
+                ModuleKind::Body
+            }
+        };
+
+        if kind == ModuleKind::Spec && name.is_none() {
+            return Err(self.error_here("spec module must be named"));
         }
 
-        let declarations = self.parse_declarations(true)?;
-        let actions = self.parse_actions_until(&[Keyword::End])?;
+        let declarations = self.parse_declarations(true, kind == ModuleKind::Spec)?;
+        let actions = if kind == ModuleKind::Spec {
+            if !self.at_keyword(Keyword::End) {
+                return Err(self.error_here("spec module cannot contain actions"));
+            }
+            Vec::new()
+        } else {
+            self.parse_actions_until(&[Keyword::End])?
+        };
         self.expect_keyword(Keyword::End)?;
 
         if let Some(TokenKind::Identifier(trailing)) = self.kind() {
@@ -79,6 +102,7 @@ impl<'a> Parser<'a> {
         let end = self.expect_semicolon()?;
         Ok(Module {
             name,
+            kind,
             declarations,
             actions,
             span: Span {
@@ -88,13 +112,21 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_declarations(&mut self, allow_visibility: bool) -> Result<Vec<Declaration>, Error> {
+    fn parse_declarations(
+        &mut self,
+        allow_visibility: bool,
+        spec: bool,
+    ) -> Result<Vec<Declaration>, Error> {
         let mut declarations = Vec::new();
         loop {
             if self.at_keyword(Keyword::Dcl) {
                 declarations.push(Declaration::Var(self.parse_dcl()?));
             } else if self.at_proc_definition() {
-                declarations.push(Declaration::Proc(self.parse_proc()?));
+                if spec {
+                    declarations.push(Declaration::ProcSignature(self.parse_proc_signature()?));
+                } else {
+                    declarations.push(Declaration::Proc(self.parse_proc()?));
+                }
             } else if self.at_keyword(Keyword::Grant) {
                 if !allow_visibility {
                     return Err(self.error_here("GRANT is only allowed at module level"));
@@ -214,6 +246,70 @@ impl<'a> Parser<'a> {
         let (name, _) = self.expect_identifier()?;
         self.expect_colon()?;
         self.expect_keyword(Keyword::Proc)?;
+        let params = self.parse_formal_params()?;
+        let (result, exceptions) = self.parse_result_and_exceptions()?;
+
+        self.expect_semicolon()?;
+        let declarations = self.parse_declarations(false, false)?;
+        let actions = self.parse_actions_until(&[Keyword::End])?;
+        self.expect_keyword(Keyword::End)?;
+
+        if let Some(TokenKind::Identifier(trailing)) = self.kind() {
+            if trailing != &name {
+                return Err(self.error_here(format!(
+                    "procedure end name `{trailing}` does not match `{name}`"
+                )));
+            }
+            self.advance();
+        }
+
+        let end = self.expect_semicolon()?;
+        Ok(ProcDef {
+            name,
+            params,
+            result,
+            exceptions,
+            declarations,
+            actions,
+            span: Span {
+                start: start.start,
+                end: end.end,
+            },
+        })
+    }
+
+    fn parse_proc_signature(&mut self) -> Result<ProcSignature, Error> {
+        let start = self.current_span();
+        let (name, _) = self.expect_identifier()?;
+        self.expect_colon()?;
+        self.expect_keyword(Keyword::Proc)?;
+        let params = self.parse_formal_params()?;
+        let (result, exceptions) = self.parse_result_and_exceptions()?;
+
+        self.expect_keyword(Keyword::End)?;
+        if let Some(TokenKind::Identifier(trailing)) = self.kind() {
+            if trailing != &name {
+                return Err(self.error_here(format!(
+                    "procedure signature end name `{trailing}` does not match `{name}`"
+                )));
+            }
+            self.advance();
+        }
+        let end = self.expect_semicolon()?;
+
+        Ok(ProcSignature {
+            name,
+            params,
+            result,
+            exceptions,
+            span: Span {
+                start: start.start,
+                end: end.end,
+            },
+        })
+    }
+
+    fn parse_formal_params(&mut self) -> Result<Vec<Param>, Error> {
         self.expect_lparen()?;
 
         let mut params = Vec::new();
@@ -252,6 +348,10 @@ impl<'a> Parser<'a> {
         }
         self.expect_rparen()?;
 
+        Ok(params)
+    }
+
+    fn parse_result_and_exceptions(&mut self) -> Result<(Option<ModeRef>, Vec<String>), Error> {
         let result = if self.at_keyword(Keyword::Returns) {
             self.advance();
             self.expect_lparen()?;
@@ -283,33 +383,7 @@ impl<'a> Parser<'a> {
             self.expect_rparen()?;
         }
 
-        self.expect_semicolon()?;
-        let declarations = self.parse_declarations(false)?;
-        let actions = self.parse_actions_until(&[Keyword::End])?;
-        self.expect_keyword(Keyword::End)?;
-
-        if let Some(TokenKind::Identifier(trailing)) = self.kind() {
-            if trailing != &name {
-                return Err(self.error_here(format!(
-                    "procedure end name `{trailing}` does not match `{name}`"
-                )));
-            }
-            self.advance();
-        }
-
-        let end = self.expect_semicolon()?;
-        Ok(ProcDef {
-            name,
-            params,
-            result,
-            exceptions,
-            declarations,
-            actions,
-            span: Span {
-                start: start.start,
-                end: end.end,
-            },
-        })
+        Ok((result, exceptions))
     }
 
     fn parse_passing(&mut self) -> Result<Passing, Error> {
@@ -518,7 +592,7 @@ impl<'a> Parser<'a> {
     fn parse_begin(&mut self) -> Result<Action, Error> {
         let start = self.current_span();
         self.expect_keyword(Keyword::Begin)?;
-        let declarations = self.parse_declarations(false)?;
+        let declarations = self.parse_declarations(false, false)?;
         let actions = self.parse_actions_until(&[Keyword::End])?;
         self.expect_keyword(Keyword::End)?;
         let end = self.expect_semicolon()?;
@@ -1057,6 +1131,47 @@ END M;
         .unwrap();
         let error = parse(&tokens).unwrap_err();
         assert!(error.message.contains("only allowed at module level"));
+    }
+
+    #[test]
+    fn parses_spec_module_and_body() {
+        let program = parse_source(
+            r#"
+M: SPEC MODULE
+  GRANT F;
+  F: PROC (a INT) RETURNS (INT) END;
+END M;
+
+M: MODULE
+  F: PROC (a INT) RETURNS (INT);
+    RETURN (a);
+  END F;
+END M;
+"#,
+        );
+
+        assert_eq!(program.modules.len(), 2);
+        assert_eq!(program.modules[0].kind, ModuleKind::Spec);
+        assert!(matches!(
+            program.modules[0].declarations[1],
+            Declaration::ProcSignature(_)
+        ));
+        assert_eq!(program.modules[1].kind, ModuleKind::Body);
+    }
+
+    #[test]
+    fn spec_modules_reject_actions() {
+        let tokens = lexer::tokenize(
+            r#"
+M: SPEC MODULE
+  F: PROC () END;
+  ASSERT TRUE;
+END M;
+"#,
+        )
+        .unwrap();
+        let error = parse(&tokens).unwrap_err();
+        assert!(error.message.contains("spec module cannot contain actions"));
     }
 
     #[test]
