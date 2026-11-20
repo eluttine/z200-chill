@@ -1,6 +1,6 @@
 use crate::ast::Program;
 use crate::manifest::Manifest;
-use crate::sema::{self, ExportInfo, ExportInfoKind};
+use crate::program::{self, ExportInfo, ExportInfoKind};
 use crate::types::{self, Type};
 use serde::{Deserialize, Serialize};
 
@@ -37,8 +37,8 @@ pub enum GrantKind {
 }
 
 impl GrantFile {
-    pub fn from_package(manifest: &Manifest, program: &Program) -> Result<Self, sema::Error> {
-        let exports = sema::exports(program)?;
+    pub fn from_package(manifest: &Manifest, program: &Program) -> Result<Self, program::Error> {
+        let exports = program::exports(program)?;
         let mut entries = Vec::with_capacity(exports.len());
 
         for export in exports {

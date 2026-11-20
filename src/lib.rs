@@ -5,6 +5,7 @@ pub mod interp;
 pub mod lexer;
 pub mod manifest;
 pub mod parser;
+pub mod program;
 pub mod sema;
 pub mod source;
 pub mod types;

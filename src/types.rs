@@ -35,6 +35,12 @@ pub enum Type {
     String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcType {
+    pub params: Vec<Type>,
+    pub result: Option<Type>,
+}
+
 impl Type {
     pub fn is_int(self) -> bool {
         matches!(self, Self::Int(_) | Self::IntLiteral)

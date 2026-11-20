@@ -1,10 +1,11 @@
 use crate::ast::*;
 use crate::lexer::Span;
 use crate::manifest::WidthProfile;
+use crate::program::{self, Export, ExportKind};
 use crate::types::{self, IntKind, Type};
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +32,7 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 pub fn run(program: &Program, profile: WidthProfile) -> Result<(), Error> {
+    let info = program::analyze(program).map_err(|error| Error::new(error.span, error.message))?;
     let mut interpreter = Interpreter {
         profile,
         modules: Vec::new(),
@@ -38,6 +40,7 @@ pub fn run(program: &Program, profile: WidthProfile) -> Result<(), Error> {
         call_bases: Vec::new(),
         active_module: 0,
         depth: 0,
+        exports: info.exports,
     };
 
     interpreter.declare_modules(program)?;
@@ -83,12 +86,6 @@ struct Scope<'a> {
     procs: HashMap<String, ProcRef<'a>>,
 }
 
-#[derive(Clone, Copy)]
-struct ExportRef {
-    module: usize,
-    is_proc: bool,
-}
-
 struct Frame {
     result_type: Option<Type>,
     result: Option<Value>,
@@ -111,6 +108,7 @@ struct Interpreter<'a> {
     call_bases: Vec<usize>,
     active_module: usize,
     depth: usize,
+    exports: HashMap<String, Export>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -126,7 +124,6 @@ impl<'a> Interpreter<'a> {
     }
 
     fn apply_seizes(&mut self, program: &'a Program) -> Result<(), Error> {
-        let exports = self.build_exports(program)?;
         let mut imports = Vec::new();
 
         for (current, module) in program.modules.iter().enumerate() {
@@ -141,7 +138,7 @@ impl<'a> Interpreter<'a> {
                     continue;
                 }
                 for name in &visibility.names {
-                    let Some(export) = exports.get(&name.name) else {
+                    let Some(export) = self.exports.get(&name.name) else {
                         return Err(Error::new(
                             name.span,
                             format!("cannot SEIZE `{}`: no module grants it", name.name),
@@ -158,7 +155,7 @@ impl<'a> Interpreter<'a> {
                         name.name.clone(),
                         name.span,
                         export.module,
-                        export.is_proc,
+                        matches!(&export.kind, ExportKind::Proc(_)),
                     ));
                 }
             }
@@ -195,91 +192,6 @@ impl<'a> Interpreter<'a> {
                     return Err(Error::new(
                         span,
                         format!("duplicate declaration of `{name}`"),
-                    ));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn build_exports(&self, program: &'a Program) -> Result<HashMap<String, ExportRef>, Error> {
-        let mut body_by_name = HashMap::new();
-        let mut spec_by_name = HashMap::new();
-
-        for (index, module) in program.modules.iter().enumerate() {
-            let Some(name) = &module.name else {
-                continue;
-            };
-            let target = match module.kind {
-                ModuleKind::Body => &mut body_by_name,
-                ModuleKind::Spec => &mut spec_by_name,
-            };
-            target.insert(name.clone(), index);
-        }
-
-        let mut exports = HashMap::new();
-        let mut bodies_with_spec = HashSet::new();
-
-        for (name, spec_index) in &spec_by_name {
-            let Some(body_index) = body_by_name.get(name).copied() else {
-                return Err(Error::new(
-                    program.modules[*spec_index].span,
-                    format!("spec module `{name}` has no body"),
-                ));
-            };
-            bodies_with_spec.insert(body_index);
-            self.add_runtime_grants(&program.modules[*spec_index], body_index, &mut exports)?;
-        }
-
-        for (index, module) in program.modules.iter().enumerate() {
-            if module.kind == ModuleKind::Body && !bodies_with_spec.contains(&index) {
-                self.add_runtime_grants(module, index, &mut exports)?;
-            }
-        }
-
-        Ok(exports)
-    }
-
-    fn add_runtime_grants(
-        &self,
-        module: &'a Module,
-        export_module: usize,
-        exports: &mut HashMap<String, ExportRef>,
-    ) -> Result<(), Error> {
-        for declaration in &module.declarations {
-            let Declaration::Visibility(visibility) = declaration else {
-                continue;
-            };
-            if visibility.kind != VisibilityKind::Grant {
-                continue;
-            }
-
-            for name in &visibility.names {
-                let is_proc = if self.modules[export_module].procs.contains_key(&name.name) {
-                    true
-                } else if self.modules[export_module].vars.contains_key(&name.name) {
-                    false
-                } else {
-                    return Err(Error::new(
-                        name.span,
-                        format!("cannot GRANT `{}`: not declared in the body", name.name),
-                    ));
-                };
-
-                if exports
-                    .insert(
-                        name.name.clone(),
-                        ExportRef {
-                            module: export_module,
-                            is_proc,
-                        },
-                    )
-                    .is_some()
-                {
-                    return Err(Error::new(
-                        name.span,
-                        format!("`{}` is granted more than once", name.name),
                     ));
                 }
             }

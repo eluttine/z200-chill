@@ -4,6 +4,7 @@ use crate::interp;
 use crate::lexer;
 use crate::manifest::Manifest;
 use crate::parser;
+use crate::program;
 use crate::sema;
 use crate::source::SourceMap;
 use std::ffi::OsStr;
@@ -166,7 +167,7 @@ struct LoadedPackage {
     source_map: SourceMap,
     token_count: usize,
     program: Program,
-    external: Vec<sema::ExportInfo>,
+    external: Vec<program::ExportInfo>,
 }
 
 fn load_package(target: &Path) -> Result<LoadedPackage, String> {
