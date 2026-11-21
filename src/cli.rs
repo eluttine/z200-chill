@@ -310,7 +310,7 @@ impl Loader {
                 .iter()
                 .map(|source| package_dir.join(source))
                 .collect::<Vec<_>>(),
-            None => discover_sources(&package_dir, &manifest.build.entry)?,
+            None => discover_sources(package_dir, &manifest.build.entry)?,
         };
         for source in source_paths {
             self.load_source(&source, package, &manifest.package.name)?;
