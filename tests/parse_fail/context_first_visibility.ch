@@ -1,0 +1,5 @@
+CONTEXT
+  GRANT x;
+FOR
+M: MODULE
+END M;

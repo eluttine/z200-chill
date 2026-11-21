@@ -1,0 +1,15 @@
+A: MODULE
+  GRANT x;
+  DCL x INT INIT := 4;
+END A;
+
+CONTEXT
+  DCL x INT;
+FOR
+CONTEXT
+  SEIZE x;
+FOR
+B: MODULE
+  SEIZE x;
+  ASSERT x = 4;
+END B;

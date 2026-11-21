@@ -1,0 +1,4 @@
+Outer: SPEC MODULE
+  SPEC MODULE
+  END;
+END Outer;

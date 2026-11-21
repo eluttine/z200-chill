@@ -1,0 +1,8 @@
+R: SPEC REGION
+  GRANT x;
+  DCL x BOOL;
+END R;
+
+R: REGION
+  DCL x INT;
+END R;

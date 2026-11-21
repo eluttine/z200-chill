@@ -1,0 +1,3 @@
+R: REGION
+  ASSERT TRUE;
+END R;

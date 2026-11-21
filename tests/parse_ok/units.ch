@@ -1,0 +1,17 @@
+M: MODULE
+  DCL x INT INIT := 1;
+END M;
+
+S: SPEC MODULE
+  GRANT x;
+  DCL x INT;
+END S;
+
+R: REGION
+  DCL y BOOL INIT := TRUE;
+END R;
+
+SR: SPEC REGION
+  GRANT y;
+  DCL y BOOL;
+END SR;

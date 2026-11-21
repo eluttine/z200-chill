@@ -30,9 +30,15 @@ all existing tests pass with no new special cases.
 
 ## 3. Conformance and negative fixtures
 
-- [ ] Build a fixture set from Z.200 examples for the implemented subset.
-- [ ] Add negative fixtures for reach, context, nested-spec, region, and remote errors.
-- [ ] Add CLI golden tests for grant-file output and diagnostics.
+- [x] Build a starter fixture set for the implemented subset (units, contexts,
+      nested specs, remote syntax, nested/block reaches, spec regions, virtual grants).
+- [x] Add negative fixtures for region actions, first-context visibility, unnamed
+      nested specs, nested grant ambiguity, nested `FORBID`, `TO` restrictions, and
+      nested/region interface mismatches.
+- [x] Add CLI structural assertions for grant-file output (`schema = 4`, no
+      `int_widths`/`edition`) and existing diagnostic-code assertions.
+- [ ] Expand fixtures with more direct Z.200 examples and, if useful, full golden
+      snapshots.
 
 ## 4. Decide product direction
 
