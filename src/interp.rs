@@ -15,15 +15,24 @@ pub struct Error {
     pub code: &'static str,
     pub span: Span,
     pub message: String,
+    pub exception: Option<String>,
 }
 
 impl Error {
     pub fn new(span: Span, message: impl Into<String>) -> Self {
         let message = message.into();
+        let exception = if message == "ASSERTFAIL" {
+            Some("ASSERTFAIL".to_owned())
+        } else if message.starts_with("OVERFLOW") {
+            Some("OVERFLOW".to_owned())
+        } else {
+            None
+        };
         Self {
             code: classify(&message),
             span,
             message,
+            exception,
         }
     }
 
@@ -32,6 +41,16 @@ impl Error {
             code,
             span,
             message: message.into(),
+            exception: None,
+        }
+    }
+
+    pub fn raised(name: &str, span: Span) -> Self {
+        Self {
+            code: "E0509",
+            span,
+            message: format!("unhandled exception `{name}`"),
+            exception: Some(name.to_owned()),
         }
     }
 }
@@ -48,6 +67,8 @@ fn classify(message: &str) -> &'static str {
         || message.contains("exponent is too large")
     {
         "E0503"
+    } else if message.contains("unhandled exception") {
+        "E0509"
     } else if message.contains("undefined value") {
         "E0504"
     } else if message.contains("unknown variable") || message.contains("unknown name") {
@@ -637,7 +658,7 @@ impl<'a> Interpreter<'a> {
             result_type: None,
             result: None,
         };
-        match self.exec_stmts(&body, &mut frame)? {
+        match self.exec_with_handler(module.span, &body, &mut frame)? {
             Flow::Normal | Flow::Return | Flow::Exit(None) => Ok(()),
             Flow::Exit(Some(name)) => {
                 if module.name.as_deref() == Some(name.as_str()) {
@@ -649,6 +670,35 @@ impl<'a> Interpreter<'a> {
                     ))
                 }
             }
+        }
+    }
+
+    fn exec_with_handler(
+        &mut self,
+        span: Span,
+        stmts: &[ir::Stmt],
+        frame: &mut Frame,
+    ) -> Result<Flow, Error> {
+        match self.exec_stmts(stmts, frame) {
+            Err(error) if error.exception.is_some() => {
+                let name = error.exception.as_deref().unwrap_or_default();
+                if let Some(handler) = self.bodies.handler(span) {
+                    if let Some(actions) = handler.alternatives.iter().find_map(|alternative| {
+                        alternative
+                            .exceptions
+                            .iter()
+                            .any(|exception| exception == name)
+                            .then_some(&alternative.actions)
+                    }) {
+                        return self.exec_stmts(actions, frame);
+                    }
+                    if let Some(actions) = &handler.else_actions {
+                        return self.exec_stmts(actions, frame);
+                    }
+                }
+                Err(error)
+            }
+            other => other,
         }
     }
 
@@ -786,6 +836,9 @@ impl<'a> Interpreter<'a> {
                     };
                 }
                 ir::Stmt::Empty { .. } => {}
+                ir::Stmt::Cause { name, span } => {
+                    return Err(Error::raised(name, *span));
+                }
                 ir::Stmt::Module {
                     label,
                     declarations,
@@ -888,7 +941,7 @@ impl<'a> Interpreter<'a> {
                 result_type: None,
                 result: None,
             };
-            match self.exec_stmts(actions, &mut frame)? {
+            match self.exec_with_handler(span, actions, &mut frame)? {
                 Flow::Normal | Flow::Exit(None) => Ok(Flow::Normal),
                 Flow::Exit(Some(name)) if label == Some(name.as_str()) => Ok(Flow::Normal),
                 flow => Ok(flow),
@@ -930,7 +983,7 @@ impl<'a> Interpreter<'a> {
                 result_type: None,
                 result: None,
             };
-            match self.exec_stmts(actions, &mut frame)? {
+            match self.exec_with_handler(span, actions, &mut frame)? {
                 Flow::Normal | Flow::Exit(None) => Ok(Flow::Normal),
                 Flow::Exit(Some(name)) if label == Some(name.as_str()) => Ok(Flow::Normal),
                 flow => Ok(flow),
@@ -1580,7 +1633,7 @@ impl<'a> Interpreter<'a> {
             .get(proc_def.span)
             .ok_or_else(|| Error::new(proc_def.span, "internal: missing procedure IR body"))?;
 
-        match self.exec_stmts(&body, &mut frame)? {
+        match self.exec_with_handler(proc_def.span, &body, &mut frame)? {
             Flow::Return | Flow::Normal => {}
             Flow::Exit(_) => {
                 return Err(Error::new(
@@ -3249,6 +3302,94 @@ M: MODULE
   OD;
   ASSERT x = 33;
 END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn module_handler_catches_cause() {
+        run_source(
+            r#"
+M: MODULE
+  DCL x INT INIT := 0;
+  CAUSE boom;
+  x := 1;
+END
+ON (boom):
+  x := 2;
+  ASSERT x = 2;
+END;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn procedure_handler_can_deliver_a_result() {
+        run_source(
+            r#"
+M: MODULE
+  P: PROC () RETURNS (INT);
+    CAUSE fail;
+    RETURN 1;
+  END
+  ON (fail):
+    RESULT 7;
+  END P;
+  ASSERT P() = 7;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn handler_catches_overflow() {
+        run_source(
+            r#"
+M: MODULE
+  DCL a SHORT_INT INIT := 32767;
+  a +:= 1;
+  ASSERT FALSE;
+END
+ON (OVERFLOW):
+  ASSERT TRUE;
+END;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn unhandled_exception_is_reported() {
+        let error = run_source(
+            r#"
+M: MODULE
+  CAUSE boom;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "E0509");
+        assert!(error.message.contains("unhandled exception `boom`"));
+    }
+
+    #[test]
+    fn nested_exception_propagates_to_the_enclosing_module_handler() {
+        run_source(
+            r#"
+M: MODULE
+  DCL x INT INIT := 0;
+  A: MODULE
+    CAUSE boom;
+  END A;
+  x := 1;
+END
+ON (boom):
+  x := 3;
+  ASSERT x = 3;
+END;
 "#,
         )
         .unwrap();

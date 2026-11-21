@@ -73,6 +73,13 @@ expression and statement nodes (`ir::Expr`, `ir::Stmt`) that the interpreter con
 This removes expression-level re-inference and AST action traversal from the interpreter.
 See [ir.md](ir.md).
 
+## 10.13 Exceptions (partial, resolved for now)
+
+`CAUSE`, module/procedure handlers (`ON ... ELSE ... END`), and catching `ASSERTFAIL`
+and `OVERFLOW` are implemented. Unhandled exceptions fail with `E0509`. Action-level
+handlers and static exception-set flow checking (`EXCEPTIONS` lists) are deferred; the
+lists are parsed but not enforced.
+
 ## 10.12 Manifest minimalism (resolved)
 
 `Chill.toml` is a non-normative build artifact. It is kept small: `package.name` is

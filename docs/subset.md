@@ -90,12 +90,14 @@ Implemented in `z200c`:
 
 Not implemented yet (rejected or deferred with a diagnostic):
 
-- linking external dependencies for `run`;
-- contexts and remote pieces;
+- interface-only external dependencies for `run`;
 - multiple `CASE` selectors and non-integer `CASE` labels;
 - `OUT` / `INOUT` / `LOC` parameter passing;
-- exceptions (`EXCEPTIONS`, `CAUSE`, handlers) and text I/O;
-- processes, regions, timers, powersets, references, and generics.
+- action-level handlers (handlers are supported on modules and procedures);
+- exception-set flow checking (`EXCEPTIONS` lists are parsed but not enforced);
+- text I/O;
+- region concurrency/mutual exclusion;
+- processes, timers, powersets, references, and generics.
 
 The interpreter is a bootstrap for validating semantics; native code generation is a
 later milestone.
@@ -338,6 +340,22 @@ OD;
 
 `ASSERT boolean-expression;` raises the `ASSERTFAIL` exception if the expression is
 `FALSE` (§6.10). `CAUSE name;` raises a named exception (§6.12).
+
+Handlers may be appended to a module or procedure:
+
+```text
+END
+ON (exception-list): actions
+   (other-exceptions): actions
+ELSE actions
+END
+```
+
+- A matching `CAUSE` name runs the corresponding alternative; `ELSE` runs when no
+  alternative matches.
+- `ASSERTFAIL` and `OVERFLOW` also behave as catchable exceptions.
+- Unhandled exceptions terminate the program with `E0509`.
+- Action-level handlers and static exception-flow checking are not implemented yet.
 
 ---
 

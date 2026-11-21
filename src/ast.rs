@@ -48,6 +48,21 @@ pub struct Module {
     pub contexts: Vec<Context>,
     pub declarations: Vec<Declaration>,
     pub actions: Vec<Action>,
+    pub handler: Option<Handler>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Handler {
+    pub alternatives: Vec<HandlerAlternative>,
+    pub else_actions: Option<Vec<Action>>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct HandlerAlternative {
+    pub exceptions: Vec<String>,
+    pub actions: Vec<Action>,
     pub span: Span,
 }
 
@@ -231,6 +246,7 @@ pub struct ProcDef {
     pub exceptions: Vec<String>,
     pub declarations: Vec<Declaration>,
     pub actions: Vec<Action>,
+    pub handler: Option<Handler>,
     pub span: Span,
 }
 
@@ -289,6 +305,10 @@ pub enum Action {
         span: Span,
     },
     Empty {
+        span: Span,
+    },
+    Cause {
+        name: String,
         span: Span,
     },
     /// A module used as an action (a nested modulion).
@@ -417,7 +437,8 @@ impl Action {
             | Self::Case { span, .. }
             | Self::Labelled { span, .. }
             | Self::Begin { span, .. }
-            | Self::Empty { span } => *span,
+            | Self::Empty { span }
+            | Self::Cause { span, .. } => *span,
             Self::Module(module) => module.span,
         }
     }

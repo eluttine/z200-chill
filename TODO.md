@@ -70,7 +70,8 @@ all existing tests pass with no new special cases.
 - [ ] Array slices, nested/multidimensional arrays, arrays of structures, and array
       literals.
 - [x] `CHAR` and unbounded `CHARS` modes (`CHARS(n)`, `VARYING`, and `WCHARS` remain).
-- [ ] Exceptions and handlers.
+- [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
+- [ ] Action-level handlers and exception-set flow checking.
 - [ ] Processes, signals, and timers.
 - [ ] Sets/powersets, moreta modes, templates.
 

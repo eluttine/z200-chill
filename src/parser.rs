@@ -338,6 +338,16 @@ impl<'a> Parser<'a> {
             self.parse_actions_until(&[Keyword::End])?
         };
         self.expect_keyword(Keyword::End)?;
+        let handler = if self.at_keyword(Keyword::On) {
+            Some(self.parse_handler()?)
+        } else {
+            None
+        };
+        if kind.is_spec() && handler.is_some() {
+            return Err(
+                self.error_here_code("E0204", "spec module or spec region cannot have a handler")
+            );
+        }
 
         if let Some(TokenKind::Identifier(trailing)) = self.kind() {
             if let Some(expected) = &name {
@@ -360,6 +370,7 @@ impl<'a> Parser<'a> {
             contexts,
             declarations,
             actions,
+            handler,
             span: Span::new(self.source, start.start, end.end),
         })
     }
@@ -694,6 +705,11 @@ impl<'a> Parser<'a> {
         let declarations = self.parse_declarations(false, false)?;
         let actions = self.parse_actions_until(&[Keyword::End])?;
         self.expect_keyword(Keyword::End)?;
+        let handler = if self.at_keyword(Keyword::On) {
+            Some(self.parse_handler()?)
+        } else {
+            None
+        };
 
         if let Some(TokenKind::Identifier(trailing)) = self.kind() {
             if trailing != &name {
@@ -713,6 +729,7 @@ impl<'a> Parser<'a> {
             exceptions,
             declarations,
             actions,
+            handler,
             span: Span::new(self.source, start.start, end.end),
         })
     }
@@ -966,6 +983,7 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Keyword(Keyword::Return)) => self.parse_return(),
             Some(TokenKind::Keyword(Keyword::Result)) => self.parse_result(),
             Some(TokenKind::Keyword(Keyword::Exit)) => self.parse_exit(),
+            Some(TokenKind::Keyword(Keyword::Cause)) => self.parse_cause(),
             Some(TokenKind::Keyword(Keyword::If)) => self.parse_if(),
             Some(TokenKind::Keyword(Keyword::Case)) => self.parse_case(),
             Some(TokenKind::Keyword(Keyword::Do)) => self.parse_do(),
@@ -977,6 +995,81 @@ impl<'a> Parser<'a> {
             }
             _ => self.parse_expression_action(),
         }
+    }
+
+    fn parse_cause(&mut self) -> Result<Action, Error> {
+        let start = self.current_span();
+        self.expect_keyword(Keyword::Cause)?;
+        let (name, _) = self.expect_identifier()?;
+        let end = self.expect_semicolon()?;
+        Ok(Action::Cause {
+            name,
+            span: Span::new(self.source, start.start, end.end),
+        })
+    }
+
+    fn parse_handler(&mut self) -> Result<Handler, Error> {
+        let start = self.current_span();
+        self.expect_keyword(Keyword::On)?;
+
+        let mut alternatives = Vec::new();
+        while self.at_lparen() {
+            let alternative_start = self.current_span();
+            self.advance();
+            let mut exceptions = Vec::new();
+            if !self.at_rparen() {
+                loop {
+                    let (name, _) = self.expect_identifier()?;
+                    exceptions.push(name);
+                    if self.at_comma() {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.expect_rparen()?;
+            self.expect_colon()?;
+            let actions = self.parse_handler_actions()?;
+            alternatives.push(HandlerAlternative {
+                exceptions,
+                actions,
+                span: Span::new(
+                    self.source,
+                    alternative_start.start,
+                    self.handler_actions_end(),
+                ),
+            });
+        }
+
+        let else_actions = if self.at_keyword(Keyword::Else) {
+            self.advance();
+            Some(self.parse_actions_until(&[Keyword::End])?)
+        } else {
+            None
+        };
+        let end = self.expect_keyword(Keyword::End)?;
+        Ok(Handler {
+            alternatives,
+            else_actions,
+            span: Span::new(self.source, start.start, end.end),
+        })
+    }
+
+    fn parse_handler_actions(&mut self) -> Result<Vec<Action>, Error> {
+        let mut actions = Vec::new();
+        while !self.at_end()
+            && !self.at_lparen()
+            && !self.at_keyword(Keyword::Else)
+            && !self.at_keyword(Keyword::End)
+        {
+            actions.push(self.parse_action()?);
+        }
+        Ok(actions)
+    }
+
+    fn handler_actions_end(&self) -> usize {
+        self.current_span().start
     }
 
     fn parse_assert(&mut self) -> Result<Action, Error> {

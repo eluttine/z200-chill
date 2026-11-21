@@ -336,11 +336,36 @@ impl Checker {
         if let Some(name) = &module.name {
             self.labels.push(name.clone());
         }
-        let result = self.check_actions(&module.actions);
+        let result = self.check_actions(&module.actions).and_then(|()| {
+            if let Some(handler) = &module.handler {
+                self.check_handler(handler)
+            } else {
+                Ok(())
+            }
+        });
         if has_module_label {
             self.labels.pop();
         }
         result
+    }
+
+    fn check_handler(&mut self, handler: &Handler) -> Result<(), Error> {
+        let mut names = HashSet::new();
+        for alternative in &handler.alternatives {
+            for exception in &alternative.exceptions {
+                if !names.insert(exception.clone()) {
+                    return Err(Error::new(
+                        alternative.span,
+                        format!("duplicate exception name `{exception}` in handler"),
+                    ));
+                }
+            }
+            self.check_actions(&alternative.actions)?;
+        }
+        if let Some(actions) = &handler.else_actions {
+            self.check_actions(actions)?;
+        }
+        Ok(())
     }
 
     fn check_nested_module(&mut self, module: &Module) -> Result<(), Error> {
@@ -375,7 +400,13 @@ impl Checker {
             if let Some(name) = &module.name {
                 self.labels.push(name.clone());
             }
-            let result = self.check_actions(&module.actions);
+            let result = self.check_actions(&module.actions).and_then(|()| {
+                if let Some(handler) = &module.handler {
+                    self.check_handler(handler)
+                } else {
+                    Ok(())
+                }
+            });
             if has_label {
                 self.labels.pop();
             }
@@ -1081,7 +1112,13 @@ impl Checker {
         };
 
         self.results.push(result_type);
-        let result = self.check_actions(&proc_def.actions);
+        let result = self.check_actions(&proc_def.actions).and_then(|()| {
+            if let Some(handler) = &proc_def.handler {
+                self.check_handler(handler)
+            } else {
+                Ok(())
+            }
+        });
         self.results.pop();
         result
     }
@@ -1467,6 +1504,7 @@ impl Checker {
                 result
             }
             Action::Empty { .. } => Ok(()),
+            Action::Cause { .. } => Ok(()),
             Action::Module(module) => self.check_nested_module(module),
         }
     }
@@ -2951,6 +2989,26 @@ END B;
         .unwrap_err();
         assert!(
             error.message.contains("no matching grant"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn duplicate_exception_names_in_a_handler_are_rejected() {
+        let error = check_source(
+            r#"
+M: MODULE
+  CAUSE boom;
+END
+ON (boom, boom):
+  ASSERT TRUE;
+END;
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("duplicate exception"),
             "{}",
             error.message
         );

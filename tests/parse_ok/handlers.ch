@@ -1,0 +1,14 @@
+M: MODULE
+  P: PROC () RETURNS (INT) EXCEPTIONS (fail);
+    CAUSE fail;
+    RETURN 1;
+  END
+  ON (fail):
+    RESULT 7;
+  END P;
+END
+ON (ASSERTFAIL, OVERFLOW):
+  ASSERT TRUE;
+ELSE
+  ASSERT TRUE;
+END;

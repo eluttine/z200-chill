@@ -546,6 +546,7 @@ impl Loader {
                 contexts,
                 declarations: vec![declaration],
                 actions: Vec::new(),
+                handler: None,
                 span: remote.span,
             }])
         })();

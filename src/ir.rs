@@ -183,6 +183,10 @@ pub enum Stmt {
     Empty {
         span: Span,
     },
+    Cause {
+        name: String,
+        span: Span,
+    },
     Module {
         label: Option<String>,
         declarations: Vec<Declaration>,
@@ -218,9 +222,22 @@ pub enum DoControlIr {
     },
 }
 
+#[derive(Debug)]
+pub struct HandlerAlternativeIr {
+    pub exceptions: Vec<String>,
+    pub actions: Vec<Stmt>,
+}
+
+#[derive(Debug)]
+pub struct HandlerIr {
+    pub alternatives: Vec<HandlerAlternativeIr>,
+    pub else_actions: Option<Vec<Stmt>>,
+}
+
 #[derive(Debug, Default)]
 pub struct BodyTable {
     bodies: HashMap<Span, Rc<Vec<Stmt>>>,
+    handlers: HashMap<Span, Rc<HandlerIr>>,
 }
 
 impl BodyTable {
@@ -230,6 +247,14 @@ impl BodyTable {
 
     fn insert(&mut self, span: Span, body: Vec<Stmt>) {
         self.bodies.insert(span, Rc::new(body));
+    }
+
+    pub fn handler(&self, span: Span) -> Option<Rc<HandlerIr>> {
+        self.handlers.get(&span).cloned()
+    }
+
+    fn insert_handler(&mut self, span: Span, handler: HandlerIr) {
+        self.handlers.insert(span, Rc::new(handler));
     }
 }
 
@@ -297,6 +322,10 @@ impl Lowerer<'_> {
         self.lower_declarations(&module.declarations)?;
         let actions = self.lower_actions(&module.actions)?;
         self.bodies.insert(module.span, actions);
+        if let Some(handler) = &module.handler {
+            let handler = self.lower_handler(handler)?;
+            self.bodies.insert_handler(module.span, handler);
+        }
         Ok(())
     }
 
@@ -314,6 +343,10 @@ impl Lowerer<'_> {
                     self.lower_declarations(&proc_def.declarations)?;
                     let actions = self.lower_actions(&proc_def.actions)?;
                     self.bodies.insert(proc_def.span, actions);
+                    if let Some(handler) = &proc_def.handler {
+                        let handler = self.lower_handler(handler)?;
+                        self.bodies.insert_handler(proc_def.span, handler);
+                    }
                 }
                 Declaration::ProcSignature(_)
                 | Declaration::Visibility(_)
@@ -467,8 +500,16 @@ impl Lowerer<'_> {
                 span: *span,
             }),
             Action::Empty { span } => Ok(Stmt::Empty { span: *span }),
+            Action::Cause { name, span } => Ok(Stmt::Cause {
+                name: name.clone(),
+                span: *span,
+            }),
             Action::Module(module) => {
                 self.lower_declarations(&module.declarations)?;
+                if let Some(handler) = &module.handler {
+                    let handler = self.lower_handler(handler)?;
+                    self.bodies.insert_handler(module.span, handler);
+                }
                 Ok(Stmt::Module {
                     label: module.name.clone(),
                     declarations: module.declarations.clone(),
@@ -477,6 +518,24 @@ impl Lowerer<'_> {
                 })
             }
         }
+    }
+
+    fn lower_handler(&mut self, handler: &crate::ast::Handler) -> Result<HandlerIr, Error> {
+        let mut alternatives = Vec::with_capacity(handler.alternatives.len());
+        for alternative in &handler.alternatives {
+            alternatives.push(HandlerAlternativeIr {
+                exceptions: alternative.exceptions.clone(),
+                actions: self.lower_actions(&alternative.actions)?,
+            });
+        }
+        let else_actions = match &handler.else_actions {
+            Some(actions) => Some(self.lower_actions(actions)?),
+            None => None,
+        };
+        Ok(HandlerIr {
+            alternatives,
+            else_actions,
+        })
     }
 
     fn lower_target(&mut self, target: &AstExpr) -> Result<AssignTarget, Error> {
