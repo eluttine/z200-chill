@@ -26,3 +26,205 @@ pub fn lookup(name: &str) -> Option<Builtin> {
         _ => None,
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConversionCode {
+    Binary,
+    Octal,
+    Hex,
+    Default,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Conversion {
+    pub code: ConversionCode,
+    pub width: usize,
+    pub left: bool,
+    pub overflow: bool,
+    pub pad: char,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditingCode {
+    Space,
+    SkipRight,
+    SkipLeft,
+    Tab,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Editing {
+    pub code: EditingCode,
+    pub width: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormatOp {
+    Text(String),
+    Convert(Conversion),
+    Edit(Editing),
+}
+
+/// Parse the supported subset of a Z.200 format control string.
+pub fn parse_format(text: &str) -> Result<Vec<FormatOp>, String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut index = 0;
+    let mut ops = Vec::new();
+    let mut literal = String::new();
+
+    let flush = |literal: &mut String, ops: &mut Vec<FormatOp>| {
+        if !literal.is_empty() {
+            ops.push(FormatOp::Text(std::mem::take(literal)));
+        }
+    };
+
+    while index < chars.len() {
+        if chars[index] != '%' {
+            literal.push(chars[index]);
+            index += 1;
+            continue;
+        }
+        flush(&mut literal, &mut ops);
+        index += 1;
+        if index >= chars.len() {
+            return Err("trailing `%` in format text".to_owned());
+        }
+        if chars[index] == '%' {
+            literal.push('%');
+            index += 1;
+            continue;
+        }
+        let repetition_start = index;
+        while index < chars.len() && chars[index].is_ascii_digit() {
+            index += 1;
+        }
+        let repetition = if index == repetition_start {
+            1
+        } else {
+            chars[repetition_start..index]
+                .iter()
+                .collect::<String>()
+                .parse::<usize>()
+                .map_err(|_| "invalid repetition factor in format text".to_owned())?
+        };
+        if index >= chars.len() {
+            return Err("missing format clause after `%`".to_owned());
+        }
+        let code = chars[index];
+        index += 1;
+        match code {
+            'B' | 'O' | 'H' | 'C' | 'F' => {
+                let code = match code {
+                    'B' => ConversionCode::Binary,
+                    'O' => ConversionCode::Octal,
+                    'H' => ConversionCode::Hex,
+                    'C' => ConversionCode::Default,
+                    _ => return Err("scientific `%F` conversion is not implemented yet".to_owned()),
+                };
+                let mut left = false;
+                let mut overflow = false;
+                let mut pad = ' ';
+                loop {
+                    if index >= chars.len() {
+                        break;
+                    }
+                    match chars[index] {
+                        'L' => {
+                            left = true;
+                            index += 1;
+                        }
+                        'E' => {
+                            overflow = true;
+                            index += 1;
+                        }
+                        'P' => {
+                            index += 1;
+                            let Some(character) = chars.get(index) else {
+                                return Err("`%P` requires a padding character".to_owned());
+                            };
+                            pad = *character;
+                            index += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                if index < chars.len() && chars[index] == 'V' {
+                    return Err("variable format widths are not implemented yet".to_owned());
+                }
+                let width_start = index;
+                while index < chars.len() && chars[index].is_ascii_digit() {
+                    index += 1;
+                }
+                let width = if index == width_start {
+                    0
+                } else {
+                    chars[width_start..index]
+                        .iter()
+                        .collect::<String>()
+                        .parse::<usize>()
+                        .map_err(|_| "invalid format width".to_owned())?
+                };
+                if index + 1 < chars.len()
+                    && matches!(chars[index], '.' | ':')
+                    && chars[index + 1].is_ascii_digit()
+                {
+                    return Err(
+                        "fractional and exponent format widths are not implemented yet".to_owned(),
+                    );
+                }
+                let conversion = Conversion {
+                    code,
+                    width,
+                    left,
+                    overflow,
+                    pad,
+                };
+                for _ in 0..repetition {
+                    ops.push(FormatOp::Convert(conversion.clone()));
+                }
+                continue;
+            }
+            'X' | '>' | '<' | 'T' => {
+                let code = match code {
+                    'X' => EditingCode::Space,
+                    '>' => EditingCode::SkipRight,
+                    '<' => EditingCode::SkipLeft,
+                    _ => EditingCode::Tab,
+                };
+                let width_start = index;
+                while index < chars.len() && chars[index].is_ascii_digit() {
+                    index += 1;
+                }
+                let width = if index == width_start {
+                    if matches!(code, EditingCode::Tab) {
+                        0
+                    } else {
+                        1
+                    }
+                } else {
+                    chars[width_start..index]
+                        .iter()
+                        .collect::<String>()
+                        .parse::<usize>()
+                        .map_err(|_| "invalid format width".to_owned())?
+                };
+                let editing = Editing { code, width };
+                for _ in 0..repetition {
+                    ops.push(FormatOp::Edit(editing.clone()));
+                }
+                continue;
+            }
+            '/' | '-' | '+' | '?' | '!' | '=' => {
+                return Err("I/O control format clauses are not implemented yet".to_owned());
+            }
+            '(' => {
+                return Err("parenthesized format clauses are not implemented yet".to_owned());
+            }
+            other => {
+                return Err(format!("unknown format code `%{other}`"));
+            }
+        }
+    }
+    flush(&mut literal, &mut ops);
+    Ok(ops)
+}

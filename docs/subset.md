@@ -438,8 +438,20 @@ text**:
   the index is beyond the current length.
 - `READTEXT(text, format)` / `READTEXT(text, index, format)` check that the text matches
   the literal format and raise the `TEXTFAIL` exception otherwise.
-- Format text is currently literal; `%` conversion/editing codes, io lists, and
-  associations are not implemented yet.
+- Format text must be a literal in the current subset.
+- Supported format elements:
+  - conversions `%B` (binary), `%O` (octal), `%H` (hexadecimal), and `%C` (default);
+  - conversion qualifiers `L` (left justification), `E` (overflow `*`), and
+    `P<char>` (padding character);
+  - fixed clause widths such as `%C5`, and repetition factors such as `%3C`;
+  - editing clauses `%X` (space), `%>` (skip right), `%<` (skip left), and `%T`
+    (tabulate), with optional widths;
+  - `%%` for a literal percent and ordinary format text;
+  - io lists after the format argument, one value/location per conversion.
+- `READTEXT` io list elements are locations; `WRITETEXT` io list elements are values.
+- Not implemented yet: variable widths (`V`), fractional/exponent widths, `%F`
+  scientific conversion, parenthesized clauses, I/O control clauses (`%/`, `%+`,
+  etc.), and associations/access modes.
 - Text locations must have a varying string mode (`CHARS` or `CHARS(n) VARYING`).
 
 ### 5.6 Text modes

@@ -1500,14 +1500,11 @@ impl<'a> Interpreter<'a> {
                 kind,
                 target,
                 index,
-                format,
+                ops,
+                io,
                 span,
             } => {
-                let format_value = self.eval_ir(format)?;
-                let Value::String(format) = format_value else {
-                    return Err(Error::new(*span, "format text must be CHARS"));
-                };
-                let index = match index {
+                let mut cursor = match index {
                     Some(index) => {
                         let value = self.eval_ir(index)?;
                         let (index, _) = self.expect_int(value, index.span())?;
@@ -1515,53 +1512,83 @@ impl<'a> Interpreter<'a> {
                     }
                     None => 0,
                 };
-                if index < 0 {
-                    return Err(Error::exception(
-                        "TEXTFAIL",
-                        *span,
-                        "TEXTFAIL: negative text index",
-                    ));
+                if cursor < 0 {
+                    return Err(textfail(*span, "negative text index"));
                 }
                 let cell = self
                     .find_var_cell(target)
                     .ok_or_else(|| Error::new(*span, format!("unknown variable `{target}`")))?;
-                let mut var = cell.borrow_mut();
-                let Value::String(text) = &mut var.value else {
-                    return Err(Error::new(*span, "text location must be CHARS"));
+                let source = match &cell.borrow().value {
+                    Value::String(text) => text.clone(),
+                    _ => return Err(Error::new(*span, "text location must be CHARS")),
                 };
-                let mut chars: Vec<char> = text.chars().collect();
-                let offset = index as usize;
+                let mut chars: Vec<char> = source.chars().collect();
+                let mut io_index = 0;
                 match kind {
                     crate::builtins::TextIo::Write => {
-                        while chars.len() < offset {
-                            chars.push(' ');
-                        }
-                        for (position, ch) in format.chars().enumerate() {
-                            let position = offset + position;
-                            if position < chars.len() {
-                                chars[position] = ch;
-                            } else {
-                                chars.push(ch);
+                        for op in ops {
+                            match op {
+                                crate::builtins::FormatOp::Text(text) => {
+                                    write_text_at(&mut chars, &mut cursor, text, *span)?;
+                                }
+                                crate::builtins::FormatOp::Convert(conversion) => {
+                                    let Some(crate::ir::TextIoArg::Value(argument)) =
+                                        io.get(io_index)
+                                    else {
+                                        return Err(textfail(*span, "missing io list value"));
+                                    };
+                                    io_index += 1;
+                                    let value = self.eval_ir(argument)?;
+                                    let representation = format_value(&value, conversion, *span)?;
+                                    write_text_at(&mut chars, &mut cursor, &representation, *span)?;
+                                }
+                                crate::builtins::FormatOp::Edit(editing) => {
+                                    apply_editing_write(&mut chars, &mut cursor, editing, *span)?;
+                                }
                             }
                         }
+                        let mut var = cell.borrow_mut();
+                        let Value::String(text) = &mut var.value else {
+                            return Err(Error::new(*span, "text location must be CHARS"));
+                        };
                         *text = chars.into_iter().collect();
-                        Ok(Value::Undefined)
                     }
                     crate::builtins::TextIo::Read => {
-                        let matches = format
-                            .chars()
-                            .enumerate()
-                            .all(|(position, ch)| chars.get(offset + position) == Some(&ch));
-                        if !matches {
-                            return Err(Error::exception(
-                                "TEXTFAIL",
-                                *span,
-                                "TEXTFAIL: text does not match the format",
-                            ));
+                        for op in ops {
+                            match op {
+                                crate::builtins::FormatOp::Text(text) => {
+                                    read_text_exact(&chars, &mut cursor, text, *span)?;
+                                }
+                                crate::builtins::FormatOp::Convert(conversion) => {
+                                    let Some(crate::ir::TextIoArg::Location(name)) =
+                                        io.get(io_index)
+                                    else {
+                                        return Err(textfail(*span, "missing io list location"));
+                                    };
+                                    io_index += 1;
+                                    let target_ty = self
+                                        .find_var_cell(name)
+                                        .map(|cell| cell.borrow().ty)
+                                        .ok_or_else(|| {
+                                            Error::new(*span, format!("unknown variable `{name}`"))
+                                        })?;
+                                    let value = read_conversion(
+                                        &chars,
+                                        &mut cursor,
+                                        conversion,
+                                        target_ty,
+                                        *span,
+                                    )?;
+                                    self.assign_var(name, value, *span)?;
+                                }
+                                crate::builtins::FormatOp::Edit(editing) => {
+                                    apply_editing_read(&chars, &mut cursor, editing, *span)?;
+                                }
+                            }
                         }
-                        Ok(Value::Undefined)
                     }
                 }
+                Ok(Value::Undefined)
             }
             ir::Expr::ArrayLiteral { values, array, .. } => {
                 let element = array.element.ty();
@@ -2775,6 +2802,344 @@ fn resolve_mode_with(mode: &ModeRef, mode_names: &HashMap<String, Type>) -> Resu
             format!("unknown or unsupported mode `{}`", mode.name),
         )
     })
+}
+
+fn textfail(span: Span, message: &str) -> Error {
+    Error::exception("TEXTFAIL", span, format!("TEXTFAIL: {message}"))
+}
+
+fn write_text_at(
+    chars: &mut Vec<char>,
+    cursor: &mut i128,
+    text: &str,
+    span: Span,
+) -> Result<(), Error> {
+    if *cursor < 0 {
+        return Err(textfail(span, "negative text index"));
+    }
+    let mut position = *cursor as usize;
+    while chars.len() < position {
+        chars.push(' ');
+    }
+    for ch in text.chars() {
+        if position < chars.len() {
+            chars[position] = ch;
+        } else {
+            chars.push(ch);
+        }
+        position += 1;
+    }
+    *cursor = position as i128;
+    Ok(())
+}
+
+fn pad_to(chars: &mut Vec<char>, cursor: usize) {
+    while chars.len() < cursor {
+        chars.push(' ');
+    }
+}
+
+fn apply_editing_write(
+    chars: &mut Vec<char>,
+    cursor: &mut i128,
+    editing: &crate::builtins::Editing,
+    span: Span,
+) -> Result<(), Error> {
+    match editing.code {
+        crate::builtins::EditingCode::Space => {
+            write_text_at(chars, cursor, &" ".repeat(editing.width), span)
+        }
+        crate::builtins::EditingCode::SkipRight => {
+            *cursor += editing.width as i128;
+            pad_to(chars, *cursor as usize);
+            Ok(())
+        }
+        crate::builtins::EditingCode::SkipLeft => {
+            *cursor -= editing.width as i128;
+            if *cursor < 0 {
+                return Err(textfail(span, "text index moved before the text"));
+            }
+            Ok(())
+        }
+        crate::builtins::EditingCode::Tab => {
+            *cursor = editing.width as i128;
+            pad_to(chars, *cursor as usize);
+            Ok(())
+        }
+    }
+}
+
+fn apply_editing_read(
+    chars: &[char],
+    cursor: &mut i128,
+    editing: &crate::builtins::Editing,
+    span: Span,
+) -> Result<(), Error> {
+    match editing.code {
+        crate::builtins::EditingCode::Space => {
+            let start = *cursor as usize;
+            let end = start.saturating_add(editing.width);
+            if end > chars.len() || !chars[start..end].iter().all(|ch| matches!(ch, ' ' | '\t')) {
+                return Err(textfail(span, "expected space characters"));
+            }
+            *cursor = end as i128;
+            Ok(())
+        }
+        crate::builtins::EditingCode::SkipRight => {
+            *cursor += editing.width as i128;
+            if *cursor as usize > chars.len() {
+                return Err(textfail(span, "text index moved past the text"));
+            }
+            Ok(())
+        }
+        crate::builtins::EditingCode::SkipLeft => {
+            *cursor -= editing.width as i128;
+            if *cursor < 0 {
+                return Err(textfail(span, "text index moved before the text"));
+            }
+            Ok(())
+        }
+        crate::builtins::EditingCode::Tab => {
+            *cursor = editing.width as i128;
+            if *cursor as usize > chars.len() {
+                return Err(textfail(span, "text index moved past the text"));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn format_value(
+    value: &Value,
+    conversion: &crate::builtins::Conversion,
+    span: Span,
+) -> Result<String, Error> {
+    let representation = match (conversion.code.clone(), value) {
+        (crate::builtins::ConversionCode::Default, Value::Int { value, .. }) => value.to_string(),
+        (crate::builtins::ConversionCode::Binary, Value::Int { value, .. }) => {
+            format_integer_base(*value, 2)
+        }
+        (crate::builtins::ConversionCode::Octal, Value::Int { value, .. }) => {
+            format_integer_base(*value, 8)
+        }
+        (crate::builtins::ConversionCode::Hex, Value::Int { value, .. }) => {
+            format_integer_base(*value, 16)
+        }
+        (crate::builtins::ConversionCode::Default, Value::Bool(value)) => {
+            if *value { "TRUE" } else { "FALSE" }.to_owned()
+        }
+        (crate::builtins::ConversionCode::Default, Value::Char(value)) => value.to_string(),
+        (crate::builtins::ConversionCode::Default, Value::String(value)) => value.clone(),
+        _ => {
+            return Err(Error::new(
+                span,
+                "format conversion is not compatible with the value",
+            ));
+        }
+    };
+    Ok(fit_width(representation, conversion))
+}
+
+fn format_integer_base(value: i128, base: u32) -> String {
+    let sign = if value < 0 { "-" } else { "" };
+    let magnitude = value.unsigned_abs();
+    let digits = match base {
+        2 => format!("{magnitude:b}"),
+        8 => format!("{magnitude:o}"),
+        _ => format!("{magnitude:x}"),
+    };
+    format!("{sign}{digits}")
+}
+
+fn fit_width(mut representation: String, conversion: &crate::builtins::Conversion) -> String {
+    if conversion.width == 0 {
+        return representation;
+    }
+    let length = representation.chars().count();
+    if length > conversion.width {
+        if conversion.overflow {
+            return "*".repeat(conversion.width);
+        }
+        let truncated: String = if conversion.left {
+            representation.chars().take(conversion.width).collect()
+        } else {
+            representation
+                .chars()
+                .skip(length - conversion.width)
+                .collect()
+        };
+        return truncated;
+    }
+    let padding = conversion.width - length;
+    if conversion.left {
+        representation.extend(std::iter::repeat_n(conversion.pad, padding));
+        representation
+    } else {
+        let mut result: String = std::iter::repeat_n(conversion.pad, padding).collect();
+        result.push_str(&representation);
+        result
+    }
+}
+
+fn read_text_exact(chars: &[char], cursor: &mut i128, text: &str, span: Span) -> Result<(), Error> {
+    let start = *cursor as usize;
+    let expected: Vec<char> = text.chars().collect();
+    if start.saturating_add(expected.len()) > chars.len()
+        || chars[start..start + expected.len()] != expected[..]
+    {
+        return Err(textfail(span, "text does not match the format"));
+    }
+    *cursor += expected.len() as i128;
+    Ok(())
+}
+
+fn read_conversion(
+    chars: &[char],
+    cursor: &mut i128,
+    conversion: &crate::builtins::Conversion,
+    target: Type,
+    span: Span,
+) -> Result<Value, Error> {
+    let start = *cursor as usize;
+    if start > chars.len() {
+        return Err(textfail(span, "text index is past the text"));
+    }
+    if conversion.width > 0 {
+        let end = start.saturating_add(conversion.width);
+        if end > chars.len() {
+            return Err(textfail(span, "text slice is out of bounds"));
+        }
+        let field: String = chars[start..end].iter().collect();
+        *cursor = end as i128;
+        let value = if is_string_type_for_io(target) {
+            Value::String(field)
+        } else {
+            let trimmed = if conversion.left {
+                field.trim_end_matches(conversion.pad)
+            } else {
+                field.trim_start_matches(conversion.pad)
+            };
+            parse_external(trimmed, conversion, target, span)?
+        };
+        return Ok(value);
+    }
+
+    let value = match target {
+        Type::Bool => {
+            let available: String = chars[start..].iter().collect();
+            let text = available.trim_start_matches([' ', '\t']);
+            let skipped = available.len() - text.len();
+            *cursor = (start + skipped) as i128;
+            let upper = text.to_ascii_uppercase();
+            if upper.starts_with("TRUE") {
+                *cursor += 4;
+                Value::Bool(true)
+            } else if upper.starts_with("FALSE") {
+                *cursor += 5;
+                Value::Bool(false)
+            } else {
+                return Err(textfail(span, "expected TRUE or FALSE"));
+            }
+        }
+        Type::Char => {
+            let Some(ch) = chars.get(start) else {
+                return Err(textfail(span, "expected a character"));
+            };
+            *cursor = (start + 1) as i128;
+            Value::Char(*ch)
+        }
+        Type::String | Type::BoundedString { .. } => {
+            let text: String = chars[start..].iter().collect();
+            *cursor = chars.len() as i128;
+            Value::String(text)
+        }
+        Type::Int(_) | Type::IntLiteral => {
+            let mut end = start;
+            while end < chars.len() && matches!(chars[end], ' ' | '\t') {
+                end += 1;
+            }
+            let mut token = String::new();
+            if end < chars.len() && matches!(chars[end], '+' | '-') {
+                token.push(chars[end]);
+                end += 1;
+            }
+            while end < chars.len() && is_digit_for(chars[end], &conversion.code) {
+                token.push(chars[end]);
+                end += 1;
+            }
+            *cursor = end as i128;
+            parse_external(&token, conversion, target, span)?
+        }
+        _ => {
+            return Err(Error::new(
+                span,
+                "format conversion is not compatible with the target mode",
+            ));
+        }
+    };
+    Ok(value)
+}
+
+fn is_string_type_for_io(ty: Type) -> bool {
+    matches!(ty, Type::String | Type::BoundedString { .. })
+}
+
+fn is_digit_for(ch: char, code: &crate::builtins::ConversionCode) -> bool {
+    match code {
+        crate::builtins::ConversionCode::Binary => matches!(ch, '0' | '1'),
+        crate::builtins::ConversionCode::Octal => ('0'..='7').contains(&ch),
+        crate::builtins::ConversionCode::Hex => ch.is_ascii_hexdigit(),
+        crate::builtins::ConversionCode::Default => ch.is_ascii_digit(),
+    }
+}
+
+fn parse_external(
+    text: &str,
+    conversion: &crate::builtins::Conversion,
+    target: Type,
+    span: Span,
+) -> Result<Value, Error> {
+    match target {
+        Type::Int(kind) => {
+            let (negative, digits) = if let Some(rest) = text.strip_prefix('-') {
+                (true, rest)
+            } else if let Some(rest) = text.strip_prefix('+') {
+                (false, rest)
+            } else {
+                (false, text)
+            };
+            let base = match conversion.code {
+                crate::builtins::ConversionCode::Binary => 2,
+                crate::builtins::ConversionCode::Octal => 8,
+                crate::builtins::ConversionCode::Hex => 16,
+                crate::builtins::ConversionCode::Default => 10,
+            };
+            let magnitude = i128::from_str_radix(digits, base)
+                .map_err(|_| textfail(span, "invalid integer in text"))?;
+            let value = if negative { -magnitude } else { magnitude };
+            Ok(Value::Int {
+                value,
+                kind: Some(kind),
+            })
+        }
+        Type::Bool => match text.to_ascii_uppercase().as_str() {
+            "TRUE" => Ok(Value::Bool(true)),
+            "FALSE" => Ok(Value::Bool(false)),
+            _ => Err(textfail(span, "expected TRUE or FALSE")),
+        },
+        Type::Char => {
+            let mut chars = text.chars();
+            let Some(ch) = chars.next() else {
+                return Err(textfail(span, "expected a character"));
+            };
+            if chars.next().is_some() {
+                return Err(textfail(span, "expected one character"));
+            }
+            Ok(Value::Char(ch))
+        }
+        Type::String | Type::BoundedString { .. } => Ok(Value::String(text.to_owned())),
+        _ => Err(Error::new(span, "unsupported text conversion target")),
+    }
 }
 
 fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {

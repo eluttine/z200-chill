@@ -107,7 +107,11 @@ all existing tests pass with no new special cases.
 - [x] `READTEXT`/`WRITETEXT` for `CHARS` locations with literal format text.
 - [x] Bounded text modes (`CHARS(n)` and `CHARS(n) VARYING`), including arrays of
       bounded strings.
-- [ ] Associations/access modes, format conversion/editing codes, and io lists.
+- [x] `READTEXT`/`WRITETEXT` format conversion and editing codes with io lists
+      (`%B`, `%O`, `%H`, `%C`, widths, `L`/`E`/`P` qualifiers, repetition, `X`, `>`,
+      `<`, `T`, and `%%`).
+- [ ] Associations/access modes and the remaining format features (variable widths,
+      fractional/exponent widths, parenthesized clauses, and I/O control clauses).
 - [ ] Processes, signals, and timers.
 - [ ] Sets/powersets, moreta modes, templates.
 

@@ -10,6 +10,12 @@ use std::rc::Rc;
 pub type Node = Rc<Expr>;
 
 #[derive(Debug)]
+pub enum TextIoArg {
+    Value(Node),
+    Location(String),
+}
+
+#[derive(Debug)]
 pub enum Expr {
     Integer {
         value: i128,
@@ -85,7 +91,8 @@ pub enum Expr {
         kind: crate::builtins::TextIo,
         target: String,
         index: Option<Node>,
-        format: Node,
+        ops: Vec<crate::builtins::FormatOp>,
+        io: Vec<TextIoArg>,
         span: Span,
     },
     ArrayLiteral {
@@ -752,8 +759,13 @@ impl Lowerer<'_> {
     fn lower_expr(&mut self, expr: &AstExpr) -> Result<Node, Error> {
         let span = expr.span();
 
-        if let AstExpr::Apply { name, args, .. } = expr {
-            let args = args
+        if let AstExpr::Apply {
+            name,
+            args: ast_args,
+            ..
+        } = expr
+        {
+            let args = ast_args
                 .iter()
                 .map(|arg| self.lower_expr(arg))
                 .collect::<Result<Vec<_>, _>>()?;
@@ -780,28 +792,51 @@ impl Lowerer<'_> {
                     ty,
                     span,
                 }),
-                Some(ApplyResolution::TextIo(kind)) => {
-                    let (target, index, format) = match args.as_slice() {
-                        [target, format] => (target, None, format),
-                        [target, index, format] => (target, Some(index), format),
-                        _ => {
-                            return Err(Error::new(span, "internal: text I/O has the wrong arity"));
-                        }
-                    };
-                    let Expr::Name {
+                Some(ApplyResolution::TextIo {
+                    kind,
+                    format,
+                    indexed,
+                }) => {
+                    let AstExpr::Name {
                         name: target_name, ..
-                    } = target.as_ref()
+                    } = &ast_args[0]
                     else {
                         return Err(Error::new(
-                            target.span(),
+                            ast_args[0].span(),
                             "internal: text argument is not a location",
                         ));
+                    };
+                    let mut lowered = args.into_iter();
+                    let _target = lowered.next();
+                    let index = if *indexed { lowered.next() } else { None };
+                    let _format = lowered.next();
+                    let io_values: Vec<Node> = lowered.collect();
+                    let io = match kind {
+                        crate::builtins::TextIo::Read => {
+                            let io_start = if *indexed { 3 } else { 2 };
+                            ast_args[io_start..]
+                                .iter()
+                                .map(|arg| {
+                                    let AstExpr::Name { name, .. } = arg else {
+                                        return Err(Error::new(
+                                            arg.span(),
+                                            "internal: READTEXT io argument is not a location",
+                                        ));
+                                    };
+                                    Ok(TextIoArg::Location(name.clone()))
+                                })
+                                .collect::<Result<Vec<_>, _>>()?
+                        }
+                        crate::builtins::TextIo::Write => {
+                            io_values.into_iter().map(TextIoArg::Value).collect()
+                        }
                     };
                     Rc::new(Expr::TextIo {
                         kind: *kind,
                         target: target_name.clone(),
-                        index: index.cloned(),
-                        format: format.clone(),
+                        index,
+                        ops: format.clone(),
+                        io,
                         span,
                     })
                 }

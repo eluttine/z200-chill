@@ -1,0 +1,4 @@
+M: MODULE
+  DCL s CHARS;
+  WRITETEXT(s, "%C", 1, 2);
+END M;

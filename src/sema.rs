@@ -78,13 +78,17 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyResolution {
     Conversion(IntKind),
     Procedure,
     ArrayIndex(Type),
     Builtin(crate::builtins::Builtin),
-    TextIo(crate::builtins::TextIo),
+    TextIo {
+        kind: crate::builtins::TextIo,
+        format: Vec<crate::builtins::FormatOp>,
+        indexed: bool,
+    },
 }
 
 /// The checker's result: diagnostics plus expression annotations that the
@@ -2010,16 +2014,9 @@ impl Checker {
             "READTEXT" => Some(crate::builtins::TextIo::Read),
             _ => None,
         } {
-            let (target, index, format) = match args {
-                [target, format] => (target, None, format),
-                [target, index, format] => (target, Some(index), format),
-                _ => {
-                    return Err(Error::new(
-                        span,
-                        format!("`{name}` takes a text location, an optional index, and a format"),
-                    ));
-                }
-            };
+            let (target, rest) = args
+                .split_first()
+                .ok_or_else(|| Error::new(span, format!("`{name}` requires a text argument")))?;
             let Expr::Name {
                 name: target_name,
                 span: target_span,
@@ -2040,6 +2037,29 @@ impl Checker {
                     ),
                 ));
             }
+            let indexed = if rest.len() >= 2 {
+                let second_ty = self.check_expr(&rest[0])?;
+                second_ty.is_int()
+            } else {
+                false
+            };
+            let (index, format, io_args) = if indexed {
+                if rest.len() < 2 {
+                    return Err(Error::new(
+                        span,
+                        format!("`{name}` requires a format after the text index"),
+                    ));
+                }
+                (Some(&rest[0]), &rest[1], &rest[2..])
+            } else {
+                let Some(format) = rest.first() else {
+                    return Err(Error::new(
+                        span,
+                        format!("`{name}` requires a format argument"),
+                    ));
+                };
+                (None, format, &rest[1..])
+            };
             if let Some(index) = index {
                 let index_ty = self.check_expr(index)?;
                 if !index_ty.is_int() {
@@ -2059,7 +2079,64 @@ impl Checker {
                     format!("format text must be CHARS, found {}", format_ty.describe()),
                 ));
             }
-            self.resolutions.insert(span, ApplyResolution::TextIo(kind));
+            let Expr::String { value, .. } = format else {
+                return Err(Error::new(
+                    format.span(),
+                    "format text must be a literal in the current subset",
+                ));
+            };
+            let ops = crate::builtins::parse_format(value)
+                .map_err(|message| Error::new(format.span(), message))?;
+            let conversions: Vec<&crate::builtins::Conversion> = ops
+                .iter()
+                .filter_map(|op| match op {
+                    crate::builtins::FormatOp::Convert(conversion) => Some(conversion),
+                    _ => None,
+                })
+                .collect();
+            if conversions.len() != io_args.len() {
+                return Err(Error::new(
+                    span,
+                    format!(
+                        "`{name}` has {} conversion(s) but {} io list argument(s)",
+                        conversions.len(),
+                        io_args.len()
+                    ),
+                ));
+            }
+            for (conversion, argument) in conversions.iter().zip(io_args) {
+                if matches!(kind, crate::builtins::TextIo::Read)
+                    && !matches!(argument, Expr::Name { .. })
+                {
+                    return Err(Error::new(
+                        argument.span(),
+                        "READTEXT io list arguments must be locations",
+                    ));
+                }
+                let ty = self.check_expr(argument)?;
+                let valid = match conversion.code {
+                    crate::builtins::ConversionCode::Binary
+                    | crate::builtins::ConversionCode::Octal
+                    | crate::builtins::ConversionCode::Hex => ty.is_int(),
+                    crate::builtins::ConversionCode::Default => {
+                        ty.is_int() || matches!(ty, Type::Bool | Type::Char) || is_string_type(ty)
+                    }
+                };
+                if !valid {
+                    return Err(Error::new(
+                        argument.span(),
+                        format!("format conversion is not compatible with {}", ty.describe()),
+                    ));
+                }
+            }
+            self.resolutions.insert(
+                span,
+                ApplyResolution::TextIo {
+                    kind,
+                    format: ops,
+                    indexed: index.is_some(),
+                },
+            );
             return Ok(None);
         }
 
