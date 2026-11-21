@@ -26,6 +26,8 @@ land as a small, green change.
 - [x] Nested `GRANT` validation (duplicate/unknown names, unsupported old prefixes) and
       `FORBID` application moved into reach-tree construction; removed the checker's
       `collect_module_grants` and the interpreter's runtime grant registration.
+- [x] Interpreter hoisting uses one tree-driven path for module bodies and block reaches;
+      removed IR statement scanning for module declarations.
 
 Acceptance for completion: no duplicate reach-matching or reach-building logic remains;
 all existing tests pass with no new special cases.

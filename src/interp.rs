@@ -379,8 +379,7 @@ impl<'a> Interpreter<'a> {
     fn hoist_top_module(&mut self, module: &'a Module, index: usize) -> Result<(), Error> {
         let mut parent = std::mem::take(&mut self.modules[index]);
         let mode_names = self.module_modes[index].clone();
-        let modes = Rc::clone(&self.modes);
-        self.hoist_children(module.span, &mut parent, index, &mode_names, &modes)?;
+        self.hoist_children(module.span, &mut parent, index, &mode_names)?;
         self.modules[index] = parent;
         Ok(())
     }
@@ -391,7 +390,22 @@ impl<'a> Interpreter<'a> {
         parent: &mut Scope<'a>,
         top: usize,
         mode_names: &HashMap<String, Type>,
-        modes: &crate::modes::ModeTable,
+    ) -> Result<(), Error> {
+        self.hoist_reach_children(span, parent, top, mode_names, false)?;
+        self.seed_reach_exports(span, parent);
+        Ok(())
+    }
+
+    /// Hoist the modules that belong to `span`'s reach. Module bodies only hoist
+    /// directly-enclosed modules; block reaches also hoist modules declared in the
+    /// block. Names are always resolved against the live mode table.
+    fn hoist_reach_children(
+        &mut self,
+        span: Span,
+        parent: &mut Scope<'a>,
+        top: usize,
+        mode_names: &HashMap<String, Type>,
+        include_block_children: bool,
     ) -> Result<(), Error> {
         let Some(node) = self.reaches.get(span) else {
             return Ok(());
@@ -401,18 +415,19 @@ impl<'a> Interpreter<'a> {
             let Some(child_node) = self.reaches.nodes.get(child_id) else {
                 continue;
             };
-            if !child_node.hoisted {
+            if !child_node.hoisted && !include_block_children {
                 continue;
             }
             let child_span = child_node.span;
-            let child_modes = child_node.interface.modes.clone();
             let Some(child) = self.modules_by_span.get(&child_span).copied() else {
                 continue;
             };
+            let child_modes = child_node.interface.modes.clone();
 
             let mut resolution_modes = child_modes.clone();
             resolution_modes.extend(parent.modes.clone());
             resolution_modes.extend(mode_names.clone());
+            let modes = Rc::clone(&self.modes);
             let mut scope = Scope {
                 modes: child_modes,
                 key: Some(child_span),
@@ -423,13 +438,12 @@ impl<'a> Interpreter<'a> {
                 &child.declarations,
                 top,
                 &resolution_modes,
-                modes,
+                &modes,
                 Some(child_span),
             )?;
-            self.hoist_children(child_span, &mut scope, top, mode_names, modes)?;
+            self.hoist_children(child_span, &mut scope, top, mode_names)?;
             self.nested_scopes.insert(child_span, scope);
         }
-        self.seed_reach_exports(span, parent);
         Ok(())
     }
 
@@ -904,7 +918,7 @@ impl<'a> Interpreter<'a> {
                         self.initialize_declarations(declarations)?;
                         let mut scope = self.locals.pop().expect("begin scope");
                         let mode_names = self.module_modes[self.active_module].clone();
-                        self.hoist_ir_children(actions, &mut scope, &mode_names)?;
+                        self.hoist_block_children(*span, &mut scope, &mode_names)?;
                         self.seed_reach_exports(*span, &mut scope);
                         self.locals.push(scope);
                         self.exec_stmts(actions, frame)
@@ -940,7 +954,7 @@ impl<'a> Interpreter<'a> {
     ) -> Result<Flow, Error> {
         let mut scope = Scope::default();
         let mode_names = self.module_modes[self.active_module].clone();
-        self.hoist_ir_children(stmts, &mut scope, &mode_names)?;
+        self.hoist_block_children(span, &mut scope, &mode_names)?;
         self.seed_reach_exports(span, &mut scope);
         self.locals.push(scope);
         let result = self.exec_stmts(stmts, frame);
@@ -948,45 +962,14 @@ impl<'a> Interpreter<'a> {
         result
     }
 
-    fn hoist_ir_children(
+    fn hoist_block_children(
         &mut self,
-        stmts: &[ir::Stmt],
+        span: Span,
         parent: &mut Scope<'a>,
         base_modes: &HashMap<String, Type>,
     ) -> Result<(), Error> {
-        for stmt in stmts {
-            let ir::Stmt::Module { span, .. } = stmt else {
-                continue;
-            };
-            let Some(module) = self.modules_by_span.get(span).copied() else {
-                continue;
-            };
-            let modes = Rc::clone(&self.modes);
-            let top = self.active_module;
-            let mut child_modes = parent.modes.clone();
-            child_modes.extend(base_modes.clone());
-            let mut scope = Scope {
-                modes: self
-                    .reaches
-                    .get(*span)
-                    .map(|node| node.interface.modes.clone())
-                    .unwrap_or_default(),
-                key: Some(*span),
-                ..Scope::default()
-            };
-            child_modes.extend(scope.modes.clone());
-            declare_into_scope(
-                &mut scope,
-                &module.declarations,
-                top,
-                &child_modes,
-                &modes,
-                Some(*span),
-            )?;
-            self.hoist_children(module.span, &mut scope, top, base_modes, &modes)?;
-            self.nested_scopes.insert(*span, scope);
-        }
-        Ok(())
+        let top = self.active_module;
+        self.hoist_reach_children(span, parent, top, base_modes, true)
     }
 
     fn exec_nested_module(
@@ -1393,7 +1376,7 @@ impl<'a> Interpreter<'a> {
                     {
                         let mut scope = self.locals.pop().expect("loop counter scope");
                         let mode_names = self.module_modes[self.active_module].clone();
-                        self.hoist_ir_children(body, &mut scope, &mode_names)?;
+                        self.hoist_block_children(span, &mut scope, &mode_names)?;
                         self.seed_reach_exports(span, &mut scope);
                         self.locals.push(scope);
                     }

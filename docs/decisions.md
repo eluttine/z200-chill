@@ -87,7 +87,9 @@ Block reaches (`BEGIN`/`IF`/`DO`/`CASE`) are tree nodes keyed by block/branch/
 alternative spans; checker and interpreter block scopes are seeded from them instead of
 rescanning child modules. Nested `GRANT` validation and `FORBID` application happen once
 while building the tree, so the checker no longer collects nested grant sets and the
-interpreter no longer registers grants at module execution time.
+interpreter no longer registers grants at module execution time. The interpreter hoists
+both module-body and block modules from the same tree-driven routine; it no longer scans
+IR statements to find nested module declarations.
 
 ## 10.14 Text I/O (implementation-defined, resolved for now)
 
