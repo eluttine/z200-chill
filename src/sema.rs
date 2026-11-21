@@ -1004,6 +1004,16 @@ impl Checker {
             .find_map(|scope| scope.procs.get(name).cloned())
     }
 
+    fn check_block(&mut self, actions: &[Action]) -> Result<(), Error> {
+        self.scopes.push(Scope::default());
+        let result = (|| {
+            self.preload_child_grants(actions)?;
+            self.check_actions(actions)
+        })();
+        self.scopes.pop();
+        result
+    }
+
     fn check_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
         let mut first_error = None;
 
@@ -1073,10 +1083,10 @@ impl Checker {
                             format!("IF condition must be BOOL, found {}", ty.describe()),
                         ));
                     }
-                    self.check_actions(&branch.body)?;
+                    self.check_block(&branch.body)?;
                 }
                 if let Some(actions) = else_actions {
-                    self.check_actions(actions)?;
+                    self.check_block(actions)?;
                 }
                 Ok(())
             }
@@ -1137,13 +1147,14 @@ impl Checker {
                                 .expect("scope stack is never empty")
                                 .readonly
                                 .insert(counter.clone());
+                            self.preload_child_grants(body)?;
                             self.check_actions(body)
                         })();
                         self.scopes.pop();
                         return result;
                     }
                 }
-                self.check_actions(body)
+                self.check_block(body)
             }
             Action::Exit {
                 label: Some(name),
@@ -1182,11 +1193,11 @@ impl Checker {
                             CaseLabel::Else | CaseLabel::Any => {}
                         }
                     }
-                    self.check_actions(&alternative.body)?;
+                    self.check_block(&alternative.body)?;
                 }
 
                 if let Some(actions) = else_actions {
-                    self.check_actions(actions)?;
+                    self.check_block(actions)?;
                 }
                 Ok(())
             }
@@ -1213,6 +1224,7 @@ impl Checker {
                     reject_nested_procs(declarations)?;
                     self.check_initializers(declarations)?;
                     self.check_proc_bodies(declarations)?;
+                    self.preload_child_grants(actions)?;
                     self.check_actions(actions)
                 })();
                 self.scopes.pop();
@@ -2124,6 +2136,68 @@ END M;
         )
         .unwrap_err();
         assert!(error.message.contains("has mode BOOL"), "{}", error.message);
+    }
+
+    #[test]
+    fn modules_inside_a_begin_share_the_block_reach() {
+        check_source(
+            r#"
+M: MODULE
+  BEGIN
+    A: MODULE
+      GRANT x;
+      DCL x INT INIT := 1;
+    END A;
+    B: MODULE
+      SEIZE x;
+      ASSERT x = 1;
+    END B;
+  END;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn modules_inside_an_if_branch_share_the_branch_reach() {
+        check_source(
+            r#"
+M: MODULE
+  DCL flag BOOL INIT := TRUE;
+  IF flag THEN
+    A: MODULE
+      GRANT x;
+      DCL x INT INIT := 1;
+    END A;
+    B: MODULE
+      SEIZE x;
+      ASSERT x = 1;
+    END B;
+  FI;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn block_grants_do_not_escape_the_block() {
+        let error = check_source(
+            r#"
+M: MODULE
+  SEIZE x;
+  BEGIN
+    A: MODULE
+      GRANT x;
+      DCL x INT INIT := 1;
+    END A;
+  END;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("SEIZE"), "{}", error.message);
     }
 
     #[test]

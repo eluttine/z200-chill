@@ -635,11 +635,11 @@ impl<'a> Interpreter<'a> {
                     for branch in branches {
                         let condition = self.eval_ir(&branch.condition)?;
                         if self.as_bool(condition, branch.condition.span())? {
-                            return self.exec_stmts(&branch.body, frame);
+                            return self.exec_block(&branch.body, frame);
                         }
                     }
                     if let Some(actions) = else_actions {
-                        return self.exec_stmts(actions, frame);
+                        return self.exec_block(actions, frame);
                     }
                 }
                 ir::Stmt::Do {
@@ -671,12 +671,12 @@ impl<'a> Interpreter<'a> {
                             other => explicit_label_matches(*other, value),
                         });
                         if matches {
-                            return self.exec_stmts(&alternative.body, frame);
+                            return self.exec_block(&alternative.body, frame);
                         }
                     }
 
                     if let Some(actions) = else_actions {
-                        return self.exec_stmts(actions, frame);
+                        return self.exec_block(actions, frame);
                     }
                 }
                 ir::Stmt::Labelled { label, action, .. } => {
@@ -694,6 +694,10 @@ impl<'a> Interpreter<'a> {
                     let result = (|| {
                         self.declare_local_vars(declarations)?;
                         self.initialize_declarations(declarations)?;
+                        let mut scope = self.locals.pop().expect("begin scope");
+                        let mode_names = self.module_modes[self.active_module].clone();
+                        self.hoist_ir_children(actions, &mut scope, &mode_names)?;
+                        self.locals.push(scope);
                         self.exec_stmts(actions, frame)
                     })();
                     self.locals.pop();
@@ -714,6 +718,43 @@ impl<'a> Interpreter<'a> {
             }
         }
         Ok(Flow::Normal)
+    }
+
+    fn exec_block(&mut self, stmts: &[ir::Stmt], frame: &mut Frame) -> Result<Flow, Error> {
+        let mut scope = Scope::default();
+        let mode_names = self.module_modes[self.active_module].clone();
+        self.hoist_ir_children(stmts, &mut scope, &mode_names)?;
+        self.locals.push(scope);
+        let result = self.exec_stmts(stmts, frame);
+        self.locals.pop();
+        result
+    }
+
+    fn hoist_ir_children(
+        &mut self,
+        stmts: &[ir::Stmt],
+        parent: &mut Scope<'a>,
+        base_modes: &HashMap<String, Type>,
+    ) -> Result<(), Error> {
+        for stmt in stmts {
+            let ir::Stmt::Module {
+                span,
+                declarations,
+                actions,
+                ..
+            } = stmt
+            else {
+                continue;
+            };
+            let mut child_modes = parent.modes.clone();
+            child_modes.extend(base_modes.clone());
+            let mut scope = Scope::default();
+            declare_ir_vars(&mut scope, declarations, &child_modes, &self.modes)?;
+            self.hoist_ir_children(actions, &mut scope, base_modes)?;
+            register_hoisted_grants_ir(declarations, &scope, parent)?;
+            self.nested_scopes.insert(*span, scope);
+        }
+        Ok(())
     }
 
     fn exec_nested_module(
@@ -993,7 +1034,7 @@ impl<'a> Interpreter<'a> {
         span: Span,
     ) -> Result<Flow, Error> {
         match control {
-            ir::DoControlIr::None => match self.exec_stmts(body, frame)? {
+            ir::DoControlIr::None => match self.exec_block(body, frame)? {
                 Flow::Exit(None) => Ok(Flow::Normal),
                 flow => Ok(flow),
             },
@@ -1003,7 +1044,7 @@ impl<'a> Interpreter<'a> {
                     if !self.as_bool(value, condition.span())? {
                         break;
                     }
-                    match self.exec_stmts(body, frame)? {
+                    match self.exec_block(body, frame)? {
                         Flow::Normal => {}
                         Flow::Exit(None) => break,
                         flow => return Ok(flow),
@@ -1013,7 +1054,7 @@ impl<'a> Interpreter<'a> {
             }
             ir::DoControlIr::ForEver => {
                 loop {
-                    match self.exec_stmts(body, frame)? {
+                    match self.exec_block(body, frame)? {
                         Flow::Normal => {}
                         Flow::Exit(None) => break,
                         flow => return Ok(flow),
@@ -1073,6 +1114,13 @@ impl<'a> Interpreter<'a> {
                                 },
                             })),
                         );
+                    }
+
+                    {
+                        let mut scope = self.locals.pop().expect("loop counter scope");
+                        let mode_names = self.module_modes[self.active_module].clone();
+                        self.hoist_ir_children(body, &mut scope, &mode_names)?;
+                        self.locals.push(scope);
                     }
 
                     let mut current = start_value;
@@ -1700,8 +1748,57 @@ fn declare_into_scope<'a>(
     Ok(())
 }
 
+fn declare_ir_vars(
+    scope: &mut Scope<'_>,
+    declarations: &[Declaration],
+    mode_names: &HashMap<String, Type>,
+    modes: &crate::modes::ModeTable,
+) -> Result<(), Error> {
+    for declaration in declarations {
+        let Declaration::Var(list) = declaration else {
+            continue;
+        };
+        for var in list {
+            let ty = resolve_mode_with(&var.mode, mode_names)?;
+            if scope.vars.contains_key(&var.name)
+                || scope.procs.contains_key(&var.name)
+                || scope.modes.contains_key(&var.name)
+            {
+                return Err(Error::new(
+                    var.span,
+                    format!("duplicate declaration of `{}`", var.name),
+                ));
+            }
+            scope.vars.insert(
+                var.name.clone(),
+                Rc::new(RefCell::new(Var {
+                    ty,
+                    value: default_value(modes, ty),
+                })),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn register_hoisted_grants<'a>(
     module: &Module,
+    scope: &Scope<'a>,
+    parent: &mut Scope<'a>,
+) -> Result<(), Error> {
+    register_grants(&module.declarations, scope, parent)
+}
+
+fn register_hoisted_grants_ir<'a>(
+    declarations: &[Declaration],
+    scope: &Scope<'a>,
+    parent: &mut Scope<'a>,
+) -> Result<(), Error> {
+    register_grants(declarations, scope, parent)
+}
+
+fn register_grants<'a>(
+    declarations: &[Declaration],
     scope: &Scope<'a>,
     parent: &mut Scope<'a>,
 ) -> Result<(), Error> {
@@ -1714,7 +1811,7 @@ fn register_hoisted_grants<'a>(
         }
     }
 
-    for declaration in &module.declarations {
+    for declaration in declarations {
         let Declaration::Visibility(visibility) = declaration else {
             continue;
         };
@@ -2094,6 +2191,94 @@ M: MODULE
     END B;
     ASSERT x = 2;
   END A;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn modules_inside_a_begin_share_the_block_reach() {
+        run_source(
+            r#"
+M: MODULE
+  BEGIN
+    A: MODULE
+      GRANT x;
+      DCL x INT INIT := 1;
+    END A;
+    B: MODULE
+      SEIZE x;
+      ASSERT x = 1;
+    END B;
+  END;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn modules_inside_a_do_loop_share_the_body_reach() {
+        run_source(
+            r#"
+M: MODULE
+  DO FOR i := 1 TO 1;
+    A: MODULE
+      GRANT x;
+      DCL x INT INIT := 1;
+    END A;
+    B: MODULE
+      SEIZE x;
+      ASSERT x = 1;
+    END B;
+  OD;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn modules_inside_a_case_alternative_share_its_reach() {
+        run_source(
+            r#"
+M: MODULE
+  DCL k INT INIT := 1;
+  CASE k OF
+    (1):
+      A: MODULE
+        GRANT x;
+        DCL x INT INIT := 1;
+      END A;
+      B: MODULE
+        SEIZE x;
+        ASSERT x = 1;
+      END B;
+    (ELSE): ;
+  ESAC;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn modules_inside_an_if_branch_share_the_branch_reach() {
+        run_source(
+            r#"
+M: MODULE
+  DCL flag BOOL INIT := TRUE;
+  IF flag THEN
+    A: MODULE
+      GRANT x;
+      DCL x INT INIT := 1;
+    END A;
+    B: MODULE
+      SEIZE x;
+      ASSERT x = 1;
+    END B;
+  FI;
 END M;
 "#,
         )

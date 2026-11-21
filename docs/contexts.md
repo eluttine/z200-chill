@@ -118,9 +118,14 @@ their locations exist and their grants are registered before the module body exe
 The modules themselves still initialize and run when their action is executed, so
 `SEIZE` and re-grants are order-independent at runtime.
 
-Grants are preloaded from modules directly in a module body. Modules inside action
-blocks (`BEGIN`, `IF`, `DO`) use that block's reach, but static preloading and hoisting
-for those block reaches are not implemented yet.
+Action blocks get their own reach:
+
+- `BEGIN` creates a block reach containing its declarations.
+- Each `IF` branch, `CASE` alternative, and `DO` body is a block reach.
+- Modules inside a block grant into that block reach; siblings in the same block can
+  `SEIZE`, and the grants do not escape the block.
+- Child grants are preloaded and hoisted when the block is entered, so block-reach
+  visibility is also order-independent at runtime.
 
 Not implemented yet:
 
@@ -128,7 +133,7 @@ Not implemented yet:
   parent);
 - prefix clauses, `TO`, or `FORBID` in a nested `GRANT`;
 - prefix clauses or qualified names in a nested `SEIZE`;
-- static preloading/hoisting for modules inside `BEGIN`/`IF`/`DO` action blocks;
+- procedure and mode definitions inside nested modules;
 - nested spec modules and regions.
 
 ## Why the full feature needs more
@@ -152,9 +157,8 @@ Done: `Action::Module`, parser/AST support, nested execution, parent-reach `SEIZ
 grants entering the parent reach, parent re-grants, direct use of child grants, and
 hoisting of direct nested module declarations.
 
-Still to do: block-reach preloading/hoisting for `BEGIN`/`IF`/`DO`, nested
-procedures/modes, nested spec modules/regions, and the remaining nested `GRANT`
-clauses.
+Still to do: nested procedures/modes, nested spec modules/regions, and the remaining
+nested `GRANT` clauses.
 
 ### Stage 2 — finish quasi declarations
 
