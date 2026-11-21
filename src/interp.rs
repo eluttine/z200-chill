@@ -2796,6 +2796,30 @@ END M;
     }
 
     #[test]
+    fn context_visibility_has_no_runtime_effect() {
+        run_source(
+            r#"
+A: MODULE
+  GRANT x;
+  DCL x INT INIT := 4;
+END A;
+
+CONTEXT
+  DCL x INT;
+FOR
+CONTEXT
+  SEIZE x;
+FOR
+B: MODULE
+  SEIZE x;
+  ASSERT x = 4;
+END B;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn contexts_have_no_runtime_effect() {
         run_source(
             r#"

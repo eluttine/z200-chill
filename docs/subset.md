@@ -64,7 +64,8 @@ Implemented in `z200c`:
 - `SPEC MODULE` interfaces paired with body modules, with variable and procedure
   signature matching;
 - `CONTEXT ... FOR` lists on top-level and nested body modules, with quasi
-  variable/procedure declarations checked against the enclosing reach;
+  variable/procedure declarations checked against the enclosing reach; later contexts
+  may `SEIZE` earlier context declarations or `GRANT` their own;
 - nested body modules executed as actions, with `SEIZE` from the immediate parent
   reach and `GRANT` of their own, child, or grandchild variable declarations into that
   reach; siblings and parents can seize/re-grant those grants, action blocks (`BEGIN`,

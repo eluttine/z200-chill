@@ -65,9 +65,12 @@ END Client;
   - the declared mode or procedure signature must match the grant,
   - unprefixed grants only (a context simple name denotes an unprefixed name string).
 - Contexts have no runtime effect; they are static assertions about the enclosing reach.
-- Multiple context lists are parsed in order, but visibility statements (`GRANT`/`SEIZE`)
-  in a context are rejected for now. The standard forbids them in a context with no
-  directly enclosing group; the rest needs nested context reaches.
+- Context lists are processed in order. The first context has no directly enclosing
+  group, so it may not contain visibility statements (per §10.10.2). Later contexts may
+  `SEIZE` names declared in earlier contexts and `GRANT` names declared in the same
+  context; these are static checks with no runtime effect.
+- Advanced clauses (`PREFIXED`/`TO`/`FORBID`) in context visibility are not
+  implemented yet.
 - Mode definitions in contexts are rejected for now; declarations may use the built-in
   scalar modes.
 - Contexts work on top-level modules and on **nested body modules**.
@@ -157,8 +160,8 @@ Done: `Action::Module`, parser/AST support, nested execution, parent-reach `SEIZ
 grants entering the parent reach, parent re-grants, direct use of child grants, and
 hoisting of direct nested module declarations.
 
-Still to do: context visibility statements, nested spec modules/regions, and remote
-pieces.
+Still to do: advanced context visibility clauses, nested spec modules/regions, and
+remote pieces.
 
 ### Stage 2 — finish quasi declarations
 

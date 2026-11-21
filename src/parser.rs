@@ -79,11 +79,13 @@ impl<'a> Parser<'a> {
             for declaration in &declarations {
                 match declaration {
                     Declaration::Visibility(visibility) => {
-                        return Err(Error::coded(
-                            "E0205",
-                            visibility.span,
-                            "GRANT/SEIZE in a context is not implemented yet",
-                        ));
+                        if contexts.is_empty() {
+                            return Err(Error::coded(
+                                "E0205",
+                                visibility.span,
+                                "a context with no enclosing context cannot contain visibility statements",
+                            ));
+                        }
                     }
                     Declaration::Var(vars) => {
                         if let Some(var) = vars.iter().find(|var| var.init.is_some()) {
@@ -1839,6 +1841,26 @@ END M;
         let module = &program.modules[0];
         assert_eq!(module.contexts.len(), 1);
         assert_eq!(module.contexts[0].declarations.len(), 2);
+    }
+
+    #[test]
+    fn parses_context_visibility_in_later_contexts() {
+        let program = parse_source(
+            r#"
+CONTEXT
+  DCL x INT;
+FOR
+CONTEXT
+  SEIZE x;
+  GRANT x;
+FOR
+M: MODULE
+END M;
+"#,
+        );
+        let module = &program.modules[0];
+        assert_eq!(module.contexts.len(), 2);
+        assert_eq!(module.contexts[1].declarations.len(), 2);
     }
 
     #[test]

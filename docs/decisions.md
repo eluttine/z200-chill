@@ -95,8 +95,8 @@ appear in the package interface and grant files. Block reaches are modelled for
 can seize, entries are preloaded/hoisted at block entry, and grants do not escape.
 Nested modules can define and grant modes and procedures; their grants can be
 re-granted outward. Nested `GRANT` supports `PREFIXED`, `TO`, and `FORBID`. Still open: re-granting an
-advanced nested grant upward, context visibility statements, remote pieces, and nested
-spec modules/regions.
+advanced nested grant upward, advanced context visibility clauses, remote pieces, and
+nested spec modules/regions.
 See [contexts.md](contexts.md).
 
 ---

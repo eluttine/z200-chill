@@ -590,18 +590,20 @@ impl Checker {
     }
 
     fn check_nested_contexts(&self, module: &Module, parent: &Scope) -> Result<(), Error> {
-        let mut names = HashSet::new();
-        for context in &module.contexts {
+        let mut declared_names = HashSet::new();
+        for (context_index, context) in module.contexts.iter().enumerate() {
+            let mut current_names = HashSet::new();
             for declaration in &context.declarations {
                 match declaration {
                     Declaration::Var(list) => {
                         for var in list {
-                            if !names.insert(var.name.clone()) {
+                            if !declared_names.insert(var.name.clone()) {
                                 return Err(Error::new(
                                     var.span,
                                     format!("duplicate context declaration `{}`", var.name),
                                 ));
                             }
+                            current_names.insert(var.name.clone());
                             let declared = self.resolve_mode(&var.mode)?;
                             let parent_ty = parent.vars.get(&var.name).copied().or_else(|| {
                                 parent.exports.get(&var.name).and_then(|exports| {
@@ -641,12 +643,13 @@ impl Checker {
                         }
                     }
                     Declaration::ProcSignature(signature) => {
-                        if !names.insert(signature.name.clone()) {
+                        if !declared_names.insert(signature.name.clone()) {
                             return Err(Error::new(
                                 signature.span,
                                 format!("duplicate context declaration `{}`", signature.name),
                             ));
                         }
+                        current_names.insert(signature.name.clone());
                         let declared =
                             self.signature_from_params(&signature.params, &signature.result)?;
                         let parent_sig = parent.procs.get(&signature.name).cloned().or_else(|| {
@@ -683,11 +686,63 @@ impl Checker {
                             }
                         }
                     }
-                    Declaration::Mode(_) | Declaration::Visibility(_) | Declaration::Proc(_) => {
+                    Declaration::Mode(_) | Declaration::Proc(_) => {
                         return Err(Error::new(
                             context.span,
                             "unsupported declaration in a nested context",
                         ));
+                    }
+                    Declaration::Visibility(_) => {}
+                }
+            }
+
+            for declaration in &context.declarations {
+                let Declaration::Visibility(visibility) = declaration else {
+                    continue;
+                };
+                if context_index == 0 {
+                    return Err(Error::new(
+                        visibility.span,
+                        "a context with no enclosing context cannot contain visibility statements",
+                    ));
+                }
+                if visibility.prefix.is_some()
+                    || !visibility.friends.is_empty()
+                    || visibility.forbid.is_some()
+                {
+                    return Err(Error::new(
+                        visibility.span,
+                        "advanced clauses in context visibility are not implemented yet",
+                    ));
+                }
+                let targets: Vec<String> = if visibility.all {
+                    if visibility.kind == VisibilityKind::Grant {
+                        current_names.iter().cloned().collect()
+                    } else {
+                        declared_names.iter().cloned().collect()
+                    }
+                } else {
+                    visibility
+                        .names
+                        .iter()
+                        .map(|name| name.name.clone())
+                        .collect()
+                };
+                for name in targets {
+                    if visibility.kind == VisibilityKind::Grant {
+                        if !current_names.contains(&name) {
+                            return Err(Error::new(
+                                visibility.span,
+                                format!("cannot GRANT `{name}` in a context: not declared here"),
+                            ));
+                        }
+                    } else if !declared_names.contains(&name) {
+                        return Err(Error::new(
+                            visibility.span,
+                            format!("cannot SEIZE `{name}` in a context: no earlier declaration"),
+                        ));
+                    } else {
+                        declared_names.insert(name);
                     }
                 }
             }
@@ -2670,6 +2725,74 @@ END M;
 "#,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn later_contexts_may_seize() {
+        check_source(
+            r#"
+A: MODULE
+  GRANT x;
+  DCL x INT INIT := 1;
+END A;
+
+CONTEXT
+  DCL x INT;
+FOR
+CONTEXT
+  SEIZE x;
+FOR
+M: MODULE
+  SEIZE x;
+  ASSERT x = 1;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn later_contexts_may_grant_their_own_declarations() {
+        check_source(
+            r#"
+A: MODULE
+  GRANT y;
+  DCL y INT INIT := 1;
+END A;
+
+CONTEXT
+FOR
+CONTEXT
+  DCL y INT;
+  GRANT y;
+FOR
+M: MODULE
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn later_context_seize_requires_an_earlier_declaration() {
+        let error = check_source(
+            r#"
+CONTEXT
+  DCL x INT;
+FOR
+CONTEXT
+  SEIZE y;
+FOR
+M: MODULE
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("no earlier declaration"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

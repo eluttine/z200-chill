@@ -956,22 +956,24 @@ fn has_grant(module: &Module) -> bool {
 /// program model they act as static assertions about the surrounding reach.
 fn check_contexts(module: &Module, index: usize, exports: &[ExportEntry]) -> Result<(), Error> {
     let empty_modes = HashMap::new();
-    let mut names = HashSet::new();
+    let mut declared_names = HashSet::new();
     let mut vars: Vec<(String, Type, Span)> = Vec::new();
     let mut procs: Vec<(String, ProcType, Span)> = Vec::new();
 
-    for context in &module.contexts {
+    for (context_index, context) in module.contexts.iter().enumerate() {
+        let mut current_names = HashSet::new();
         for declaration in &context.declarations {
             match declaration {
                 Declaration::Var(list) => {
                     for var in list {
                         let ty = resolve_mode_with(&var.mode, &empty_modes)?;
-                        if !names.insert(var.name.clone()) {
+                        if !declared_names.insert(var.name.clone()) {
                             return Err(Error::new(
                                 var.span,
                                 format!("duplicate context declaration `{}`", var.name),
                             ));
                         }
+                        current_names.insert(var.name.clone());
                         vars.push((var.name.clone(), ty, var.span));
                     }
                 }
@@ -981,12 +983,13 @@ fn check_contexts(module: &Module, index: usize, exports: &[ExportEntry]) -> Res
                         &signature.result,
                         &empty_modes,
                     )?;
-                    if !names.insert(signature.name.clone()) {
+                    if !declared_names.insert(signature.name.clone()) {
                         return Err(Error::new(
                             signature.span,
                             format!("duplicate context declaration `{}`", signature.name),
                         ));
                     }
+                    current_names.insert(signature.name.clone());
                     procs.push((signature.name.clone(), ty, signature.span));
                 }
                 Declaration::Proc(proc_def) => {
@@ -995,12 +998,13 @@ fn check_contexts(module: &Module, index: usize, exports: &[ExportEntry]) -> Res
                         &proc_def.result,
                         &empty_modes,
                     )?;
-                    if !names.insert(proc_def.name.clone()) {
+                    if !declared_names.insert(proc_def.name.clone()) {
                         return Err(Error::new(
                             proc_def.span,
                             format!("duplicate context declaration `{}`", proc_def.name),
                         ));
                     }
+                    current_names.insert(proc_def.name.clone());
                     procs.push((proc_def.name.clone(), ty, proc_def.span));
                 }
                 Declaration::Mode(_) => {
@@ -1009,11 +1013,57 @@ fn check_contexts(module: &Module, index: usize, exports: &[ExportEntry]) -> Res
                         "mode definitions in contexts are not implemented yet",
                     ));
                 }
-                Declaration::Visibility(visibility) => {
+                Declaration::Visibility(_) => {}
+            }
+        }
+
+        for declaration in &context.declarations {
+            let Declaration::Visibility(visibility) = declaration else {
+                continue;
+            };
+            if context_index == 0 {
+                return Err(Error::new(
+                    visibility.span,
+                    "a context with no enclosing context cannot contain visibility statements",
+                ));
+            }
+            if visibility.prefix.is_some()
+                || !visibility.friends.is_empty()
+                || visibility.forbid.is_some()
+            {
+                return Err(Error::new(
+                    visibility.span,
+                    "advanced clauses in context visibility are not implemented yet",
+                ));
+            }
+            let targets: Vec<String> = if visibility.all {
+                if visibility.kind == VisibilityKind::Grant {
+                    current_names.iter().cloned().collect()
+                } else {
+                    declared_names.iter().cloned().collect()
+                }
+            } else {
+                visibility
+                    .names
+                    .iter()
+                    .map(|name| name.name.clone())
+                    .collect()
+            };
+            for name in targets {
+                if visibility.kind == VisibilityKind::Grant {
+                    if !current_names.contains(&name) {
+                        return Err(Error::new(
+                            visibility.span,
+                            format!("cannot GRANT `{name}` in a context: not declared here"),
+                        ));
+                    }
+                } else if !declared_names.contains(&name) {
                     return Err(Error::new(
                         visibility.span,
-                        "GRANT/SEIZE in a context is not implemented yet",
+                        format!("cannot SEIZE `{name}` in a context: no earlier declaration"),
                     ));
+                } else {
+                    declared_names.insert(name);
                 }
             }
         }
