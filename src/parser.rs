@@ -48,6 +48,27 @@ pub fn parse(tokens: &[Token]) -> Result<Program, Error> {
     .parse_program()
 }
 
+pub fn parse_context_piece(tokens: &[Token]) -> Result<Vec<Context>, Error> {
+    let source = tokens
+        .first()
+        .map(|token| token.span.source)
+        .unwrap_or(SourceId(0));
+    let mut parser = Parser {
+        tokens,
+        index: 0,
+        source,
+        depth: 0,
+    };
+    let contexts = parser.parse_context_list()?;
+    if contexts.is_empty() {
+        return Err(parser.error_here("expected a CONTEXT piece"));
+    }
+    if !parser.at_end() {
+        return Err(parser.error_here("expected end of context-list piece"));
+    }
+    Ok(contexts)
+}
+
 struct Parser<'a> {
     tokens: &'a [Token],
     index: usize,
@@ -198,7 +219,7 @@ impl<'a> Parser<'a> {
             for declaration in &declarations {
                 match declaration {
                     Declaration::Visibility(visibility) => {
-                        if contexts.is_empty() {
+                        if contexts.is_empty() && remote.is_none() {
                             return Err(Error::coded(
                                 "E0205",
                                 visibility.span,

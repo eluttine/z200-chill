@@ -378,10 +378,195 @@ impl Loader {
         package_name: &str,
     ) -> Result<Vec<crate::ast::Module>, String> {
         let mut modules = program.modules;
+        for module in &mut modules {
+            self.expand_module_contexts(module, containing, package)?;
+        }
         for remote in program.remotes {
             modules.extend(self.expand_remote(remote, containing, package, package_name)?);
         }
         Ok(modules)
+    }
+
+    fn expand_module_contexts(
+        &mut self,
+        module: &mut crate::ast::Module,
+        containing: &Path,
+        package: usize,
+    ) -> Result<(), String> {
+        let contexts = std::mem::take(&mut module.contexts);
+        module.contexts =
+            self.expand_contexts(contexts, containing, package, module.name.as_deref())?;
+        self.expand_action_contexts(&mut module.actions, containing, package)
+    }
+
+    fn expand_action_contexts(
+        &mut self,
+        actions: &mut [crate::ast::Action],
+        containing: &Path,
+        package: usize,
+    ) -> Result<(), String> {
+        for action in actions {
+            match action {
+                crate::ast::Action::Module(module) => {
+                    self.expand_module_contexts(module, containing, package)?;
+                }
+                crate::ast::Action::If {
+                    branches,
+                    else_actions,
+                    ..
+                } => {
+                    for branch in branches {
+                        self.expand_action_contexts(&mut branch.body, containing, package)?;
+                    }
+                    if let Some(actions) = else_actions {
+                        self.expand_action_contexts(actions, containing, package)?;
+                    }
+                }
+                crate::ast::Action::Do { body, .. } => {
+                    self.expand_action_contexts(body, containing, package)?;
+                }
+                crate::ast::Action::Case {
+                    alternatives,
+                    else_actions,
+                    ..
+                } => {
+                    for alternative in alternatives {
+                        self.expand_action_contexts(&mut alternative.body, containing, package)?;
+                    }
+                    if let Some(actions) = else_actions {
+                        self.expand_action_contexts(actions, containing, package)?;
+                    }
+                }
+                crate::ast::Action::Labelled { action, .. } => {
+                    self.expand_action_contexts(
+                        std::slice::from_mut(action.as_mut()),
+                        containing,
+                        package,
+                    )?;
+                }
+                crate::ast::Action::Begin { actions, .. } => {
+                    self.expand_action_contexts(actions, containing, package)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn expand_contexts(
+        &mut self,
+        contexts: Vec<crate::ast::Context>,
+        containing: &Path,
+        package: usize,
+        unit_name: Option<&str>,
+    ) -> Result<Vec<crate::ast::Context>, String> {
+        let mut result = Vec::with_capacity(contexts.len());
+        for context in contexts {
+            let Some(designator) = context.remote.clone() else {
+                result.push(context);
+                continue;
+            };
+
+            let resolver = crate::pieces::PieceResolver::new(
+                &self.package_dirs[package],
+                &self.package_pieces[package],
+            );
+            let canonical = resolver
+                .resolve_checked(&designator, unit_name, containing, &mut self.piece_visiting)
+                .map_err(|error| format!("error[E0700]: {error}"))?;
+
+            let expanded = (|| {
+                let mut referenced = self.parse_context_source_file(&canonical)?;
+                referenced = self.expand_contexts(referenced, &canonical, package, unit_name)?;
+                let Some(last) = referenced.last_mut() else {
+                    return Err(format!(
+                        "error[E0700]: piece {} is an empty context list",
+                        canonical.display()
+                    ));
+                };
+                last.declarations.extend(context.declarations);
+                Ok(referenced)
+            })();
+
+            self.piece_visiting.remove(&canonical);
+            result.extend(expanded?);
+        }
+        Ok(result)
+    }
+
+    fn parse_context_source_file(
+        &mut self,
+        path: &Path,
+    ) -> Result<Vec<crate::ast::Context>, String> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|error| format!("error[E0700]: cannot read {}: {error}", path.display()))?;
+        let source_id = self.source_map.add(path.to_path_buf(), text);
+        let tokens = {
+            let source = &self
+                .source_map
+                .get(source_id)
+                .expect("source was just added")
+                .text;
+            lexer::tokenize_with_source(source, source_id)
+                .map_err(|errors| self.source_map.format_lex_errors(&errors))?
+        };
+        self.token_count += tokens.len();
+        parser::parse_context_piece(&tokens).map_err(|error| {
+            format!(
+                "error[E0700]: {}: {}",
+                path.display(),
+                self.source_map
+                    .format_diagnostic(error.code, error.span, &error.message)
+            )
+        })
+    }
+
+    fn expand_context_module(
+        &mut self,
+        remote: crate::ast::RemoteUnit,
+        containing: &Path,
+        package: usize,
+    ) -> Result<Vec<crate::ast::Module>, String> {
+        let resolver = crate::pieces::PieceResolver::new(
+            &self.package_dirs[package],
+            &self.package_pieces[package],
+        );
+        let canonical = resolver
+            .resolve_checked(
+                &remote.designator,
+                remote.name.as_deref(),
+                containing,
+                &mut self.piece_visiting,
+            )
+            .map_err(|error| format!("error[E0700]: {error}"))?;
+
+        let result = (|| {
+            let mut contexts = self.parse_context_source_file(&canonical)?;
+            contexts =
+                self.expand_contexts(contexts, &canonical, package, remote.name.as_deref())?;
+            let declaration = crate::ast::Declaration::Visibility(crate::ast::Visibility {
+                kind: crate::ast::VisibilityKind::Seize,
+                names: Vec::new(),
+                all: true,
+                friends: Vec::new(),
+                prefix: None,
+                forbid: None,
+                span: remote.span,
+            });
+            Ok(vec![crate::ast::Module {
+                name: None,
+                kind: crate::ast::ModuleKind::Body,
+                package: 0,
+                package_name: None,
+                contexts,
+                declarations: vec![declaration],
+                actions: Vec::new(),
+                span: remote.span,
+            }])
+        })();
+
+        self.piece_visiting.remove(&canonical);
+        result
     }
 
     fn expand_remote(
@@ -392,11 +577,7 @@ impl Loader {
         package_name: &str,
     ) -> Result<Vec<crate::ast::Module>, String> {
         if remote.kind == crate::ast::RemoteKind::ContextModule {
-            return Err(self.source_map.format_diagnostic(
-                "E0701",
-                remote.span,
-                "remote context modules are not expanded yet",
-            ));
+            return self.expand_context_module(remote, containing, package);
         }
 
         let resolver = crate::pieces::PieceResolver::new(
@@ -414,12 +595,7 @@ impl Loader {
 
         let result = (|| {
             let (piece, _) = self.parse_source_file(&canonical)?;
-            if piece
-                .remotes
-                .iter()
-                .any(|r| r.kind != crate::ast::RemoteKind::ContextModule)
-                || !piece.remotes.is_empty()
-            {
+            if !piece.remotes.is_empty() {
                 return Err(format!(
                     "error[E0700]: piece {} is itself a remote program unit",
                     canonical.display()
@@ -431,7 +607,11 @@ impl Loader {
                     canonical.display()
                 ));
             }
-            let module = &piece.modules[0];
+
+            let mut modules = piece.modules;
+            self.expand_module_contexts(&mut modules[0], &canonical, package)?;
+            let module = &modules[0];
+
             match remote.kind {
                 crate::ast::RemoteKind::Module if module.kind != crate::ast::ModuleKind::Body => {
                     return Err(format!(
@@ -459,10 +639,7 @@ impl Loader {
                 }
             }
 
-            let mut modules = piece.modules;
-            for module in &mut modules {
-                assign_package(module, package, package_name);
-            }
+            let _ = package_name;
             Ok(modules)
         })();
 

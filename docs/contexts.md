@@ -204,9 +204,9 @@ do not allocate or initialize anything.
 
 ## Piecewise compilation
 
-Remote contexts, remote modulions/specs, and nested spec modules/regions belong to the
-piecewise-compilation milestone. See [piecewise.md](piecewise.md) for the normative
-model, expansion architecture, manifest `[pieces]` lookup, and phased plan.
+Remote contexts and remote modulions/specs are expanded during loading; see
+[piecewise.md](piecewise.md). Nested spec modules/regions and virtual grants remain in
+the piecewise milestone.
 
 ## Non-goals
 

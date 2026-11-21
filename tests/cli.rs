@@ -785,6 +785,156 @@ END Counter;
 }
 
 #[test]
+fn remote_context_is_merged_after_the_last_context_body() {
+    let dir = std::env::temp_dir().join(format!("z200-piece-ctx-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("pieces")).unwrap();
+    std::fs::write(
+        dir.join("pieces/ctx.ch"),
+        r#"
+CONTEXT
+  DCL x INT;
+FOR
+CONTEXT
+FOR
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "remote"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+A: MODULE
+  GRANT x;
+  DCL x INT INIT := 1;
+END A;
+
+CONTEXT REMOTE "pieces/ctx.ch"
+  SEIZE x;
+FOR
+M: MODULE
+  SEIZE x;
+  ASSERT x = 1;
+END M;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("run").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn context_module_remote_is_desugared() {
+    let dir = std::env::temp_dir().join(format!("z200-piece-ctxmod-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("pieces")).unwrap();
+    std::fs::write(
+        dir.join("pieces/ctx.ch"),
+        r#"
+CONTEXT
+  DCL x INT;
+FOR
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "remote"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+A: MODULE
+  GRANT x;
+  DCL x INT INIT := 1;
+END A;
+
+CONTEXT MODULE REMOTE "pieces/ctx.ch";
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("check").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn remote_context_target_must_be_a_context_list() {
+    let dir = std::env::temp_dir().join(format!("z200-piece-ctxkind-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("pieces")).unwrap();
+    std::fs::write(dir.join("pieces/module.ch"), "M: MODULE END M;\n").unwrap();
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "remote"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+CONTEXT REMOTE "pieces/module.ch" FOR
+M: MODULE
+END M;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("check").arg(&dir).output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E0700"), "stderr: {stderr}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn remote_piece_kind_mismatch_is_reported() {
     let dir = std::env::temp_dir().join(format!("z200-piece-kind-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

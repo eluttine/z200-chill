@@ -1,10 +1,10 @@
 # Piecewise compilation (design)
 
-Status: **Phases 0–1 implemented.** Remote syntax, piece designators, manifest
-`[pieces]`, the resolver, and expansion of remote modules/spec modules/program units
-exist. Remote contexts and context modules are still rejected as “not expanded yet”.
-This document also designs the remaining nested spec modules/regions and context
-interactions. Regions are a separate prerequisite and are not implemented yet.
+Status: **Phases 0–2 implemented.** Remote syntax, piece designators, manifest
+`[pieces]`, the resolver, expansion of remote modules/spec modules/program units, remote
+contexts, and `CONTEXT MODULE REMOTE` desugaring exist. This document also designs the
+remaining nested spec modules/regions. Regions are a separate prerequisite and are not
+implemented yet.
 
 ## Normative model
 
@@ -245,14 +245,18 @@ Diagnostics should carry both the referencing span and the resolved piece path.
   module, remote spec module, and execution of expanded modules.
 - Remote contexts and `CONTEXT MODULE REMOTE` still report `E0701`.
 
-### Phase 2 — Remote contexts and context lists
+### Phase 2 — Remote contexts and context lists (implemented)
 
-- Expand `CONTEXT REMOTE ... FOR` by inserting the local body after the last referenced
-  context body.
-- Desugar `CONTEXT MODULE REMOTE`.
-- Check context visibility restrictions after merging.
-- Tests: body insertion order, remote context with no local body, context module
-  desugaring, context visibility in merged lists.
+- `parser::parse_context_piece` parses a standalone context-list piece.
+- `CONTEXT REMOTE ... FOR` resolves, parses, and recursively expands the referenced
+  context list, then appends the local context body to the last context in that list.
+- Parser first-context visibility rejection is deferred for remote contexts; the
+  post-merge checker enforces the final context positions.
+- `CONTEXT MODULE REMOTE` desugars to the referenced context list plus an anonymous
+  `MODULE SEIZE ALL; END;` unit.
+- Context pieces must be context lists, not modules or remote units.
+- Tests: body insertion into a later context, context-module desugaring, wrong-kind
+  context piece, and execution with merged contexts.
 
 ### Phase 3 — Nested spec modules and virtual grants
 
