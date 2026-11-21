@@ -1593,6 +1593,36 @@ impl<'a> Parser<'a> {
                 self.expect_rparen()?;
                 Ok(expr)
             }
+            TokenKind::LParenColon | TokenKind::LBracket => {
+                let closing = if matches!(token.kind, TokenKind::LParenColon) {
+                    TokenKind::RParenColon
+                } else {
+                    TokenKind::RBracket
+                };
+                self.advance();
+                let mut values = Vec::new();
+                if self.kind() != Some(&closing) {
+                    loop {
+                        values.push(self.parse_expr()?);
+                        if self.at_comma() {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                let end = if self.kind() == Some(&closing) {
+                    let span = self.current_span();
+                    self.advance();
+                    span
+                } else {
+                    return Err(self.error_here(format!("expected `{closing}`")));
+                };
+                Ok(Expr::ArrayTuple {
+                    values,
+                    span: Span::new(self.source, span.start, end.end),
+                })
+            }
             _ => Err(self.error_here(format!("expected an expression, found {}", token.kind))),
         }
     }

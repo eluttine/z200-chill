@@ -1563,6 +1563,18 @@ impl<'a> Interpreter<'a> {
                     }
                 }
             }
+            ir::Expr::ArrayLiteral { values, array, .. } => {
+                let element = array.element.ty();
+                let mut lowered = Vec::with_capacity(values.len());
+                for node in values {
+                    let value = self.eval_ir(node)?;
+                    lowered.push(self.convert(value, element, node.span())?);
+                }
+                Ok(Value::Array {
+                    low: array.low,
+                    values: lowered,
+                })
+            }
             ir::Expr::Index {
                 name, index, span, ..
             } => {
@@ -1983,6 +1995,7 @@ impl<'a> Interpreter<'a> {
                 _ => Err(Error::new(span, "expected an array value")),
             },
             Type::IntLiteral => Err(Error::new(span, "internal: cannot declare a literal type")),
+            Type::ArrayTuple => Err(Error::new(span, "array literal has no target array mode")),
         }
     }
 

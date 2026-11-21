@@ -414,6 +414,11 @@ pub enum Expr {
         field: String,
         span: Span,
     },
+    /// An unlabelled array tuple: `(: v, ... :)` or `[v, ...]`.
+    ArrayTuple {
+        values: Vec<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -427,7 +432,8 @@ impl Expr {
             | Self::Apply { span, .. }
             | Self::Unary { span, .. }
             | Self::Binary { span, .. }
-            | Self::Field { span, .. } => *span,
+            | Self::Field { span, .. }
+            | Self::ArrayTuple { span, .. } => *span,
         }
     }
 }

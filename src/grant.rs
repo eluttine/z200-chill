@@ -348,8 +348,9 @@ fn type_name(ty: Type) -> String {
             array.high,
             type_name(array.element.ty())
         ),
-        // Expression-only class; it cannot occur in a declared signature.
+        // Expression-only classes; they cannot occur in a declared signature.
         Type::IntLiteral => "INT".to_owned(),
+        Type::ArrayTuple => "ARRAY".to_owned(),
     }
 }
 

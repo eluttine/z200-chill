@@ -86,7 +86,9 @@ all existing tests pass with no new special cases.
       checks, and whole-array assignment.
 - [x] Arrays of structures, including field selection and field assignment through
       array elements.
-- [ ] Array slices, nested/multidimensional arrays, and array literals.
+- [x] Unlabelled array literals/tuples (`(: v, ... :)` and `[v, ...]`) in contexts
+      with a known array mode.
+- [ ] Array slices, nested/multidimensional arrays, and labelled array tuples.
 - [x] `CHAR` and unbounded `CHARS` modes (`CHARS(n)`, `VARYING`, and `WCHARS` remain).
 - [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
 - [x] Action-level handlers, including handlers on bracketed actions, assignment,

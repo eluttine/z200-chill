@@ -87,6 +87,11 @@ pub enum Expr {
         format: Node,
         span: Span,
     },
+    ArrayLiteral {
+        values: Vec<Node>,
+        array: crate::types::ArrayType,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -104,7 +109,8 @@ impl Expr {
             | Self::Field { span, .. }
             | Self::Index { span, .. }
             | Self::Builtin { span, .. }
-            | Self::TextIo { span, .. } => *span,
+            | Self::TextIo { span, .. }
+            | Self::ArrayLiteral { span, .. } => *span,
         }
     }
 
@@ -120,6 +126,7 @@ impl Expr {
             | Self::Binary { ty, .. }
             | Self::Field { ty, .. }
             | Self::Index { ty, .. } => Some(*ty),
+            Self::ArrayLiteral { array, .. } => Some(Type::Array(*array)),
             Self::Call { ty, .. } | Self::Builtin { ty, .. } => *ty,
             Self::TextIo { .. } => None,
         }
@@ -797,6 +804,29 @@ impl Lowerer<'_> {
                 ty,
                 span,
             }),
+            AstExpr::ArrayTuple { values, .. } => {
+                let Type::Array(array) = self
+                    .check
+                    .types
+                    .get(&span)
+                    .copied()
+                    .unwrap_or(Type::ArrayTuple)
+                else {
+                    return Err(Error::new(
+                        span,
+                        "array literal requires an array target mode",
+                    ));
+                };
+                let values = values
+                    .iter()
+                    .map(|value| self.lower_expr(value))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Rc::new(Expr::ArrayLiteral {
+                    values,
+                    array,
+                    span,
+                })
+            }
         };
 
         self.exprs.insert(&lowered);

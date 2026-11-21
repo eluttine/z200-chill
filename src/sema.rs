@@ -996,7 +996,7 @@ impl Checker {
                     let Some(init) = &var.init else {
                         return Ok(());
                     };
-                    let value_ty = self.check_expr(&init.value)?;
+                    let value_ty = self.check_expr_for_mode(&init.value, ty)?;
                     self.ensure_assignable(ty, value_ty, init.value.span())?;
                     self.check_constant_range(&init.value, ty)
                 })();
@@ -1296,7 +1296,7 @@ impl Checker {
             } => {
                 let target_ty = self.location_type(target)?;
                 self.types.insert(target.span(), target_ty);
-                let value_ty = self.check_expr(value)?;
+                let value_ty = self.check_expr_for_mode(value, target_ty)?;
 
                 if *op == AssignOp::Assign {
                     self.ensure_assignable(target_ty, value_ty, *span)?;
@@ -1522,7 +1522,7 @@ impl Checker {
             }
             Some(Some(result_ty)) => {
                 if let Some(value) = value {
-                    let value_ty = self.check_expr(value)?;
+                    let value_ty = self.check_expr_for_mode(value, result_ty)?;
                     self.ensure_assignable(result_ty, value_ty, value.span())?;
                 }
                 Ok(())
@@ -1533,7 +1533,7 @@ impl Checker {
     fn check_result(&mut self, value: &Expr, span: Span) -> Result<(), Error> {
         match self.results.last().copied() {
             Some(Some(result_ty)) => {
-                let value_ty = self.check_expr(value)?;
+                let value_ty = self.check_expr_for_mode(value, result_ty)?;
                 self.ensure_assignable(result_ty, value_ty, span)
             }
             _ => Err(Error::new(span, "RESULT outside a value procedure")),
@@ -1689,6 +1689,12 @@ impl Checker {
             Expr::Bool { .. } => Ok(Type::Bool),
             Expr::Char { .. } => Ok(Type::Char),
             Expr::String { .. } => Ok(Type::String),
+            Expr::ArrayTuple { values, .. } => {
+                for value in values {
+                    self.check_expr(value)?;
+                }
+                Ok(Type::ArrayTuple)
+            }
             Expr::Name { name, span } => {
                 if let Some(ty) = self.lookup_var(name) {
                     Ok(ty)
@@ -1739,8 +1745,27 @@ impl Checker {
                 right,
                 span,
             } => {
-                let left_ty = self.check_expr(left)?;
-                let right_ty = self.check_expr(right)?;
+                let mut left_ty = if matches!(left.as_ref(), Expr::ArrayTuple { .. }) {
+                    Type::ArrayTuple
+                } else {
+                    self.check_expr(left)?
+                };
+                let mut right_ty = if matches!(right.as_ref(), Expr::ArrayTuple { .. }) {
+                    Type::ArrayTuple
+                } else {
+                    self.check_expr(right)?
+                };
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+                    if left_ty == Type::ArrayTuple {
+                        if let Type::Array(_) = right_ty {
+                            left_ty = self.check_expr_for_mode(left, right_ty)?;
+                        }
+                    } else if right_ty == Type::ArrayTuple {
+                        if let Type::Array(_) = left_ty {
+                            right_ty = self.check_expr_for_mode(right, left_ty)?;
+                        }
+                    }
+                }
                 self.check_binary_types(*op, left_ty, right_ty, *span)
             }
             Expr::Field { base, field, span } => self.check_field(base, field, *span),
@@ -1766,7 +1791,7 @@ impl Checker {
                 } else if left == right
                     && matches!(
                         left,
-                        Type::Bool | Type::Char | Type::String | Type::Struct(_)
+                        Type::Bool | Type::Char | Type::String | Type::Struct(_) | Type::Array(_)
                     )
                 {
                     Ok(Type::Bool)
@@ -2045,7 +2070,7 @@ impl Checker {
         }
 
         for (arg, param_ty) in args.iter().zip(&signature.params) {
-            let arg_ty = self.check_expr(arg)?;
+            let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
             self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
         }
 
@@ -2057,6 +2082,42 @@ impl Checker {
         }
 
         Ok(signature.result)
+    }
+
+    /// Check a value expression in a context where the target mode is known.
+    /// This is what gives array tuples their element and bounds modes.
+    fn check_expr_for_mode(&mut self, value: &Expr, target: Type) -> Result<Type, Error> {
+        let Expr::ArrayTuple { values, span } = value else {
+            return self.check_expr(value);
+        };
+        let Type::Array(array) = target else {
+            return Err(Error::new(
+                *span,
+                format!(
+                    "array literal requires an array target mode, found {}",
+                    target.describe()
+                ),
+            ));
+        };
+        let expected = (array.high - array.low + 1).max(0) as usize;
+        if values.len() != expected {
+            return Err(Error::new(
+                *span,
+                format!(
+                    "array literal has {} element(s), but the target array has {expected}",
+                    values.len()
+                ),
+            ));
+        }
+        let element = array.element.ty();
+        for item in values {
+            let item_ty = self.check_expr(item)?;
+            self.ensure_assignable(element, item_ty, item.span())?;
+            self.check_constant_range(item, element)?;
+        }
+        let ty = Type::Array(array);
+        self.types.insert(*span, ty);
+        Ok(ty)
     }
 
     fn ensure_assignable(&self, target: Type, value: Type, span: Span) -> Result<(), Error> {
@@ -2071,7 +2132,7 @@ impl Checker {
             Type::String => value == Type::String,
             Type::Struct(id) => value == Type::Struct(id),
             Type::Array(array) => value == Type::Array(array),
-            Type::IntLiteral => false,
+            Type::IntLiteral | Type::ArrayTuple => false,
         };
 
         if ok {

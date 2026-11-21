@@ -230,11 +230,16 @@ or `CHARS`) or a structure mode.
   `a(i).field`, including nested fields.
 - Bounds are checked at runtime.
 - Whole-array assignment copies the value.
+- Equality and inequality are defined for arrays of the same mode.
 - As with whole structure assignment, reading a structure element field before it is
   assigned raises the undefined-value runtime error.
 - Array element modes cannot themselves be arrays.
-- Not implemented yet: array slices, nested/multidimensional arrays, and array
-  literals.
+- Unlabelled array tuples are accepted where the target array mode is known:
+  `[1, 2, 3]` or `(: 1, 2, 3 :)`. The number of elements must match the target bounds,
+  and each element must be assignable to the element mode. This works for assignment,
+  `INIT :=`, procedure arguments, `RETURN`, `RESULT`, and array equality.
+- Not implemented yet: array slices, nested/multidimensional arrays, and labelled
+  array tuples.
 
 ### 4.4 Runtime checks
 

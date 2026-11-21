@@ -1,0 +1,3 @@
+M: MODULE
+  DCL x INT INIT := [1, 2];
+END M;

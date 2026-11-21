@@ -1,0 +1,3 @@
+M: MODULE
+  DCL a ARRAY (1:2) INT INIT := [1, TRUE];
+END M;

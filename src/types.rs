@@ -51,7 +51,7 @@ impl ArrayElement {
             Type::Char => Some(Self::Scalar(Scalar::Char)),
             Type::String => Some(Self::Scalar(Scalar::String)),
             Type::Struct(id) => Some(Self::Struct(id)),
-            Type::IntLiteral | Type::Array(_) => None,
+            Type::IntLiteral | Type::Array(_) | Type::ArrayTuple => None,
         }
     }
 
@@ -80,6 +80,8 @@ pub enum Type {
     String,
     Struct(ModeId),
     Array(ArrayType),
+    /// An array tuple before its target array mode is known.
+    ArrayTuple,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,7 +104,7 @@ impl Type {
             Self::Bool => Some(Scalar::Bool),
             Self::Char => Some(Scalar::Char),
             Self::String => Some(Scalar::String),
-            Self::IntLiteral | Self::Struct(_) | Self::Array(_) => None,
+            Self::IntLiteral | Self::Struct(_) | Self::Array(_) | Self::ArrayTuple => None,
         }
     }
 
@@ -124,6 +126,7 @@ impl Type {
             Self::String => "character string",
             Self::Struct(_) => "structure",
             Self::Array(_) => "array",
+            Self::ArrayTuple => "array literal",
         }
     }
 }
