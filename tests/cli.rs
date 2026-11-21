@@ -1,4 +1,10 @@
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+
+fn example_grant_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 fn z200c() -> Command {
     Command::new(env!("CARGO_BIN_EXE_z200c"))
@@ -107,6 +113,7 @@ fn run_directory_dependency_succeeds() {
 
 #[test]
 fn grant_writes_grant_file() {
+    let _guard = example_grant_lock().lock().unwrap();
     let output = z200c()
         .arg("grant")
         .arg(example("modules"))
@@ -372,6 +379,7 @@ END Client;
 
 #[test]
 fn check_resolves_qualified_grant_exports() {
+    let _guard = example_grant_lock().lock().unwrap();
     let grant = z200c()
         .arg("grant")
         .arg(example("modules"))
