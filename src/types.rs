@@ -51,7 +51,9 @@ impl ArrayElement {
             Type::Char => Some(Self::Scalar(Scalar::Char)),
             Type::String => Some(Self::Scalar(Scalar::String)),
             Type::Struct(id) => Some(Self::Struct(id)),
-            Type::IntLiteral | Type::Array(_) | Type::ArrayTuple => None,
+            Type::IntLiteral | Type::Array(_) | Type::DynamicArray { .. } | Type::ArrayTuple => {
+                None
+            }
         }
     }
 
@@ -80,6 +82,12 @@ pub enum Type {
     String,
     Struct(ModeId),
     Array(ArrayType),
+    /// A slice whose upper bound is only known at runtime. The lower bound is
+    /// inherited from the source array.
+    DynamicArray {
+        low: i128,
+        element: ArrayElement,
+    },
     /// An array tuple before its target array mode is known.
     ArrayTuple,
 }
@@ -104,7 +112,11 @@ impl Type {
             Self::Bool => Some(Scalar::Bool),
             Self::Char => Some(Scalar::Char),
             Self::String => Some(Scalar::String),
-            Self::IntLiteral | Self::Struct(_) | Self::Array(_) | Self::ArrayTuple => None,
+            Self::IntLiteral
+            | Self::Struct(_)
+            | Self::Array(_)
+            | Self::DynamicArray { .. }
+            | Self::ArrayTuple => None,
         }
     }
 
@@ -126,6 +138,7 @@ impl Type {
             Self::String => "character string",
             Self::Struct(_) => "structure",
             Self::Array(_) => "array",
+            Self::DynamicArray { .. } => "dynamic array slice",
             Self::ArrayTuple => "array literal",
         }
     }

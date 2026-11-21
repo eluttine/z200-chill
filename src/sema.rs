@@ -1637,17 +1637,16 @@ impl Checker {
         if !first_ty.is_int() || !last_ty.is_int() {
             return Err(Error::new(span, "array slice bounds must be integers"));
         }
-        let Some(first_value) = constant_int(first) else {
-            return Err(Error::new(
-                first.span(),
-                "array slice bounds must be constant in the current subset",
-            ));
-        };
-        let Some(last_value) = constant_int(last) else {
-            return Err(Error::new(
-                last.span(),
-                "array slice bounds must be constant in the current subset",
-            ));
+        let first_value = constant_int(first);
+        let last_value = constant_int(last);
+        let (Some(first_value), Some(last_value)) = (first_value, last_value) else {
+            if up && matches!(last_value, Some(size) if size < 1) {
+                return Err(Error::new(last.span(), "array slice size must be positive"));
+            }
+            return Ok(Type::DynamicArray {
+                low: array.low,
+                element: array.element,
+            });
         };
         let (lower, upper) = if up {
             if last_value < 1 {
@@ -1872,11 +1871,12 @@ impl Checker {
                 if left.is_int() && right.is_int() {
                     self.combine_int(left, right, span)?;
                     Ok(Type::Bool)
-                } else if left == right
+                } else if (left == right
                     && matches!(
                         left,
-                        Type::Bool | Type::Char | Type::String | Type::Struct(_) | Type::Array(_)
-                    )
+                        Type::Bool | Type::Char | Type::String | Type::Struct(_)
+                    ))
+                    || arrays_compatible(left, right)
                 {
                     Ok(Type::Bool)
                 } else {
@@ -2215,7 +2215,19 @@ impl Checker {
             Type::Char => value == Type::Char,
             Type::String => value == Type::String,
             Type::Struct(id) => value == Type::Struct(id),
-            Type::Array(array) => value == Type::Array(array),
+            Type::Array(array) => match value {
+                Type::Array(value_array) => value_array == array,
+                Type::DynamicArray { low, element } => low == array.low && element == array.element,
+                _ => false,
+            },
+            Type::DynamicArray { low, element } => match value {
+                Type::Array(array) => array.low == low && array.element == element,
+                Type::DynamicArray {
+                    low: value_low,
+                    element: value_element,
+                } => value_low == low && value_element == element,
+                _ => false,
+            },
             Type::IntLiteral | Type::ArrayTuple => false,
         };
 
@@ -2300,6 +2312,27 @@ fn binary_for_assign(op: AssignOp) -> BinaryOp {
         AssignOp::Mul => BinaryOp::Mul,
         AssignOp::Div => BinaryOp::Div,
         AssignOp::Concat => BinaryOp::Concat,
+    }
+}
+
+fn arrays_compatible(left: Type, right: Type) -> bool {
+    match (left, right) {
+        (Type::Array(left), Type::Array(right)) => left == right,
+        (Type::Array(array), Type::DynamicArray { low, element })
+        | (Type::DynamicArray { low, element }, Type::Array(array)) => {
+            array.low == low && array.element == element
+        }
+        (
+            Type::DynamicArray {
+                low: left_low,
+                element: left_element,
+            },
+            Type::DynamicArray {
+                low: right_low,
+                element: right_element,
+            },
+        ) => left_low == right_low && left_element == right_element,
+        _ => false,
     }
 }
 

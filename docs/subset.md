@@ -240,11 +240,16 @@ or `CHARS`) or a structure mode.
   `INIT :=`, procedure arguments, `RETURN`, `RESULT`, and array equality.
 - Slices are available as values and as assignment targets:
   `a(lower:upper)` and `a(first UP size)`. The slice keeps the original array's lower
-  bound; its upper bound is the lower bound plus the slice length minus one. Slice
-  bounds are currently required to be constant, and are checked against the source
-  bounds at compile time. Slice assignment copies elements into the source range.
-- Not implemented yet: dynamic slice bounds, nested/multidimensional arrays, and
-  labelled array tuples.
+  bound; its upper bound is the lower bound plus the slice length minus one.
+- Constant slice bounds are checked at compile time. If a bound is not a constant
+  expression, the slice has a dynamic mode and its bounds are checked when it is read
+  or assigned.
+- A dynamic slice may be assigned to a fixed array (or passed to a fixed array
+  parameter) when the lower bound and element mode agree; the runtime checks that the
+  slice length matches the target. It can be compared with a fixed array of the same
+  lower bound and element mode.
+- Slice assignment copies elements into the source range at runtime.
+- Not implemented yet: multidimensional arrays and labelled array tuples.
 
 ### 4.4 Runtime checks
 

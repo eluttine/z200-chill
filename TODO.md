@@ -88,9 +88,9 @@ all existing tests pass with no new special cases.
       array elements.
 - [x] Unlabelled array literals/tuples (`(: v, ... :)` and `[v, ...]`) in contexts
       with a known array mode.
-- [x] Array slices with constant bounds (`a(lower:upper)` and `a(first UP size)`),
-      usable as array values and assignment targets.
-- [ ] Dynamic slice bounds, nested/multidimensional arrays, and labelled array tuples.
+- [x] Array slices (`a(lower:upper)` and `a(first UP size)`), usable as array values
+      and assignment targets, with constant or runtime bounds.
+- [ ] Multidimensional arrays and labelled array tuples.
 - [x] `CHAR` and unbounded `CHARS` modes (`CHARS(n)`, `VARYING`, and `WCHARS` remain).
 - [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
 - [x] Action-level handlers, including handlers on bracketed actions, assignment,

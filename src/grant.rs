@@ -350,7 +350,7 @@ fn type_name(ty: Type) -> String {
         ),
         // Expression-only classes; they cannot occur in a declared signature.
         Type::IntLiteral => "INT".to_owned(),
-        Type::ArrayTuple => "ARRAY".to_owned(),
+        Type::ArrayTuple | Type::DynamicArray { .. } => "ARRAY".to_owned(),
     }
 }
 

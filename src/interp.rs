@@ -1585,6 +1585,25 @@ impl<'a> Interpreter<'a> {
                 let value = self.read_var(name, *span)?;
                 read_array_slice(value, *offset, *count, array.low, *span)
             }
+            ir::Expr::ArraySliceDynamic {
+                name,
+                first,
+                last,
+                up,
+                low,
+                span,
+                ..
+            } => {
+                let value = self.read_var(name, *span)?;
+                let len = array_len(&value, *span)?;
+                let first_value = self.eval_ir(first)?;
+                let (first_value, _) = self.expect_int(first_value, first.span())?;
+                let last_value = self.eval_ir(last)?;
+                let (last_value, _) = self.expect_int(last_value, last.span())?;
+                let (offset, count) =
+                    dynamic_slice_range(len, *low, first_value, last_value, *up, *span)?;
+                read_array_slice(value, offset, count, *low, *span)
+            }
             ir::Expr::Index {
                 name, index, span, ..
             } => {
@@ -2004,6 +2023,16 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => Err(Error::new(span, "expected an array value")),
             },
+            Type::DynamicArray { low, .. } => match value {
+                Value::Array {
+                    low: value_low,
+                    values,
+                } if value_low == low => Ok(Value::Array {
+                    low: value_low,
+                    values,
+                }),
+                _ => Err(Error::new(span, "expected an array slice value")),
+            },
             Type::IntLiteral => Err(Error::new(span, "internal: cannot declare a literal type")),
             Type::ArrayTuple => Err(Error::new(span, "array literal has no target array mode")),
         }
@@ -2081,7 +2110,9 @@ impl<'a> Interpreter<'a> {
             }
             ir::AssignTarget::Field { ty, .. } => Ok(*ty),
             ir::AssignTarget::Index { ty, .. } => Ok(*ty),
-            ir::AssignTarget::Slice { ty, .. } => Ok(*ty),
+            ir::AssignTarget::Slice { ty, .. } | ir::AssignTarget::SliceDynamic { ty, .. } => {
+                Ok(*ty)
+            }
         }
     }
 
@@ -2119,6 +2150,24 @@ impl<'a> Interpreter<'a> {
                 };
                 let value = self.read_var(name, span)?;
                 read_array_slice(value, *offset, *count, array.low, span)
+            }
+            ir::AssignTarget::SliceDynamic {
+                name,
+                first,
+                last,
+                up,
+                low,
+                ..
+            } => {
+                let value = self.read_var(name, span)?;
+                let len = array_len(&value, span)?;
+                let first_value = self.eval_ir(first)?;
+                let (first_value, _) = self.expect_int(first_value, first.span())?;
+                let last_value = self.eval_ir(last)?;
+                let (last_value, _) = self.expect_int(last_value, last.span())?;
+                let (offset, count) =
+                    dynamic_slice_range(len, *low, first_value, last_value, *up, span)?;
+                read_array_slice(value, offset, count, *low, span)
             }
         }
     }
@@ -2178,6 +2227,28 @@ impl<'a> Interpreter<'a> {
                     .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
                 let mut var = cell.borrow_mut();
                 assign_array_slice(&mut var.value, *offset, *count, value, span)
+            }
+            ir::AssignTarget::SliceDynamic {
+                name,
+                first,
+                last,
+                up,
+                low,
+                ty,
+            } => {
+                let value = self.convert(value, *ty, span)?;
+                let first_value = self.eval_ir(first)?;
+                let (first_value, _) = self.expect_int(first_value, first.span())?;
+                let last_value = self.eval_ir(last)?;
+                let (last_value, _) = self.expect_int(last_value, last.span())?;
+                let cell = self
+                    .find_var_cell(name)
+                    .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+                let mut var = cell.borrow_mut();
+                let len = array_len(&var.value, span)?;
+                let (offset, count) =
+                    dynamic_slice_range(len, *low, first_value, last_value, *up, span)?;
+                assign_array_slice(&mut var.value, offset, count, value, span)
             }
         }
     }
@@ -2381,6 +2452,40 @@ fn declare_into_scope<'a>(
         }
     }
     Ok(())
+}
+
+fn array_len(value: &Value, span: Span) -> Result<usize, Error> {
+    match value {
+        Value::Array { values, .. } => Ok(values.len()),
+        _ => Err(Error::new(span, "expected an array value")),
+    }
+}
+
+fn dynamic_slice_range(
+    len: usize,
+    low: i128,
+    first: i128,
+    last: i128,
+    up: bool,
+    span: Span,
+) -> Result<(i128, i128), Error> {
+    let upper = if up {
+        if last < 1 {
+            return Err(Error::new(span, "array slice size must be positive"));
+        }
+        first
+            .checked_add(last - 1)
+            .ok_or_else(|| Error::new(span, "array slice bounds overflow"))?
+    } else {
+        last
+    };
+    let high = low
+        .checked_add(len as i128 - 1)
+        .ok_or_else(|| Error::new(span, "array slice bounds overflow"))?;
+    if first > upper || first < low || upper > high {
+        return Err(Error::new(span, "array slice range is out of bounds"));
+    }
+    Ok((first - low, upper - first + 1))
 }
 
 fn read_array_slice(

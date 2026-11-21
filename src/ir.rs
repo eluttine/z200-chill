@@ -99,6 +99,15 @@ pub enum Expr {
         array: crate::types::ArrayType,
         span: Span,
     },
+    ArraySliceDynamic {
+        name: String,
+        first: Node,
+        last: Node,
+        up: bool,
+        low: i128,
+        element: crate::types::ArrayElement,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -118,7 +127,8 @@ impl Expr {
             | Self::Builtin { span, .. }
             | Self::TextIo { span, .. }
             | Self::ArrayLiteral { span, .. }
-            | Self::ArraySlice { span, .. } => *span,
+            | Self::ArraySlice { span, .. }
+            | Self::ArraySliceDynamic { span, .. } => *span,
         }
     }
 
@@ -137,6 +147,10 @@ impl Expr {
             Self::ArrayLiteral { array, .. } | Self::ArraySlice { array, .. } => {
                 Some(Type::Array(*array))
             }
+            Self::ArraySliceDynamic { low, element, .. } => Some(Type::DynamicArray {
+                low: *low,
+                element: *element,
+            }),
             Self::Call { ty, .. } | Self::Builtin { ty, .. } => *ty,
             Self::TextIo { .. } => None,
         }
@@ -163,6 +177,14 @@ pub enum AssignTarget {
         name: String,
         offset: i128,
         count: i128,
+        ty: Type,
+    },
+    SliceDynamic {
+        name: String,
+        first: Node,
+        last: Node,
+        up: bool,
+        low: i128,
         ty: Type,
     },
 }
@@ -678,28 +700,38 @@ impl Lowerer<'_> {
                     .get(span)
                     .copied()
                     .ok_or_else(|| Error::new(*span, "internal: slice has no checked mode"))?;
-                let Type::Array(array) = ty else {
-                    return Err(Error::new(*span, "internal: slice is not an array"));
-                };
-                let first_value = crate::sema::constant_int(first).ok_or_else(|| {
-                    Error::new(first.span(), "array slice bounds must be constant")
-                })?;
-                let last_value = crate::sema::constant_int(last).ok_or_else(|| {
-                    Error::new(last.span(), "array slice bounds must be constant")
-                })?;
-                let upper = if *up {
-                    first_value
-                        .checked_add(last_value - 1)
-                        .ok_or_else(|| Error::new(*span, "array slice bounds overflow"))?
-                } else {
-                    last_value
-                };
-                Ok(AssignTarget::Slice {
-                    name: name.clone(),
-                    offset: first_value - array.low,
-                    count: upper - first_value + 1,
-                    ty,
-                })
+                match ty {
+                    Type::Array(array) => {
+                        let first_value = crate::sema::constant_int(first).ok_or_else(|| {
+                            Error::new(first.span(), "array slice bounds must be constant")
+                        })?;
+                        let last_value = crate::sema::constant_int(last).ok_or_else(|| {
+                            Error::new(last.span(), "array slice bounds must be constant")
+                        })?;
+                        let upper = if *up {
+                            first_value
+                                .checked_add(last_value - 1)
+                                .ok_or_else(|| Error::new(*span, "array slice bounds overflow"))?
+                        } else {
+                            last_value
+                        };
+                        Ok(AssignTarget::Slice {
+                            name: name.clone(),
+                            offset: first_value - array.low,
+                            count: upper - first_value + 1,
+                            ty,
+                        })
+                    }
+                    Type::DynamicArray { low, .. } => Ok(AssignTarget::SliceDynamic {
+                        name: name.clone(),
+                        first: self.lower_expr(first)?,
+                        last: self.lower_expr(last)?,
+                        up: *up,
+                        low,
+                        ty,
+                    }),
+                    _ => Err(Error::new(*span, "internal: slice is not an array")),
+                }
             }
             _ => Err(Error::new(
                 target.span(),
@@ -857,33 +889,49 @@ impl Lowerer<'_> {
                 up,
                 span: slice_span,
             } => {
-                let Type::Array(array) =
-                    self.check.types.get(slice_span).copied().ok_or_else(|| {
-                        Error::new(*slice_span, "internal: slice has no checked mode")
-                    })?
-                else {
-                    return Err(Error::new(*slice_span, "internal: slice is not an array"));
-                };
-                let first_value = crate::sema::constant_int(first).ok_or_else(|| {
-                    Error::new(first.span(), "array slice bounds must be constant")
+                let checked = self.check.types.get(slice_span).copied().ok_or_else(|| {
+                    Error::new(*slice_span, "internal: slice has no checked mode")
                 })?;
-                let last_value = crate::sema::constant_int(last).ok_or_else(|| {
-                    Error::new(last.span(), "array slice bounds must be constant")
-                })?;
-                let upper = if *up {
-                    first_value
-                        .checked_add(last_value - 1)
-                        .ok_or_else(|| Error::new(*slice_span, "array slice bounds overflow"))?
-                } else {
-                    last_value
-                };
-                Rc::new(Expr::ArraySlice {
-                    name: name.clone(),
-                    offset: first_value - array.low,
-                    count: upper - first_value + 1,
-                    array,
-                    span: *slice_span,
-                })
+                match checked {
+                    Type::Array(array) => {
+                        let first_value = crate::sema::constant_int(first).ok_or_else(|| {
+                            Error::new(first.span(), "array slice bounds must be constant")
+                        })?;
+                        let last_value = crate::sema::constant_int(last).ok_or_else(|| {
+                            Error::new(last.span(), "array slice bounds must be constant")
+                        })?;
+                        let upper = if *up {
+                            first_value.checked_add(last_value - 1).ok_or_else(|| {
+                                Error::new(*slice_span, "array slice bounds overflow")
+                            })?
+                        } else {
+                            last_value
+                        };
+                        Rc::new(Expr::ArraySlice {
+                            name: name.clone(),
+                            offset: first_value - array.low,
+                            count: upper - first_value + 1,
+                            array,
+                            span: *slice_span,
+                        })
+                    }
+                    Type::DynamicArray { low, element } => {
+                        let first = self.lower_expr(first)?;
+                        let last = self.lower_expr(last)?;
+                        Rc::new(Expr::ArraySliceDynamic {
+                            name: name.clone(),
+                            first,
+                            last,
+                            up: *up,
+                            low,
+                            element,
+                            span: *slice_span,
+                        })
+                    }
+                    _ => {
+                        return Err(Error::new(*slice_span, "internal: slice is not an array"));
+                    }
+                }
             }
             AstExpr::Field { base, field, .. } => Rc::new(Expr::Field {
                 base: self.lower_expr(base)?,
