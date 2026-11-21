@@ -380,50 +380,55 @@ impl<'a> Interpreter<'a> {
         let mut parent = std::mem::take(&mut self.modules[index]);
         let mode_names = self.module_modes[index].clone();
         let modes = Rc::clone(&self.modes);
-        self.hoist_children(&module.actions, &mut parent, index, &mode_names, &modes)?;
+        self.hoist_children(module.span, &mut parent, index, &mode_names, &modes)?;
         self.modules[index] = parent;
         Ok(())
     }
 
     fn hoist_children(
         &mut self,
-        actions: &'a [Action],
+        span: Span,
         parent: &mut Scope<'a>,
         top: usize,
         mode_names: &HashMap<String, Type>,
         modes: &crate::modes::ModeTable,
     ) -> Result<(), Error> {
-        for action in actions {
-            let Action::Module(child) = action else {
+        let Some(node) = self.reaches.get(span) else {
+            return Ok(());
+        };
+        let children: Vec<usize> = node.children.clone();
+        for child_id in children {
+            let Some(child_node) = self.reaches.nodes.get(child_id) else {
                 continue;
             };
-            let mut child_modes = self
-                .reaches
-                .get(child.span)
-                .map(|node| node.interface.modes.clone())
-                .unwrap_or_default();
-            child_modes.extend(parent.modes.clone());
-            child_modes.extend(mode_names.clone());
+            if !child_node.hoisted {
+                continue;
+            }
+            let child_span = child_node.span;
+            let child_modes = child_node.interface.modes.clone();
+            let Some(child) = self.modules_by_span.get(&child_span).copied() else {
+                continue;
+            };
+
+            let mut resolution_modes = child_modes.clone();
+            resolution_modes.extend(parent.modes.clone());
+            resolution_modes.extend(mode_names.clone());
             let mut scope = Scope {
-                modes: self
-                    .reaches
-                    .get(child.span)
-                    .map(|node| node.interface.modes.clone())
-                    .unwrap_or_default(),
-                key: Some(child.span),
+                modes: child_modes,
+                key: Some(child_span),
                 ..Scope::default()
             };
             declare_into_scope(
                 &mut scope,
                 &child.declarations,
                 top,
-                &child_modes,
+                &resolution_modes,
                 modes,
-                Some(child.span),
+                Some(child_span),
             )?;
-            self.hoist_children(&child.actions, &mut scope, top, mode_names, modes)?;
+            self.hoist_children(child_span, &mut scope, top, mode_names, modes)?;
             register_hoisted_grants(child, &scope, parent)?;
-            self.nested_scopes.insert(child.span, scope);
+            self.nested_scopes.insert(child_span, scope);
         }
         Ok(())
     }
@@ -906,7 +911,7 @@ impl<'a> Interpreter<'a> {
                 &modes,
                 Some(*span),
             )?;
-            self.hoist_children(&module.actions, &mut scope, top, base_modes, &modes)?;
+            self.hoist_children(module.span, &mut scope, top, base_modes, &modes)?;
             register_hoisted_grants(module, &scope, parent)?;
             self.nested_scopes.insert(*span, scope);
         }

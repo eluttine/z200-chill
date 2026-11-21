@@ -15,8 +15,10 @@ land as a small, green change.
 - [x] Add focused tests for prefix/friend/ambiguity cases.
 - [x] Shared static `ReachTree` for module declarations and modes, consumed by
       `program`, `sema`, and `interp`.
-- [ ] Remaining: share reach exports, hoisting, and virtual grants between the three
-      layers.
+- [x] Shared child/hoisting plan (`children`, `hoisted`), used by the interpreter's
+      module-body hoisting.
+- [ ] Remaining: share reach exports and virtual-grant gluing between the layers; migrate
+      the checker's child preloading to the tree as well.
 
 Acceptance for completion: no duplicate reach-matching or reach-building logic remains;
 all existing tests pass with no new special cases.

@@ -247,6 +247,9 @@ pub enum ExportInfoKind {
 pub struct ReachNode {
     pub span: Span,
     pub parent: Option<usize>,
+    pub children: Vec<usize>,
+    /// True when the module is directly in a module body (not inside an action block).
+    pub hoisted: bool,
     pub interface: ModuleInterface,
 }
 
@@ -805,9 +808,11 @@ fn build_reach_tree(
         tree.nodes.push(ReachNode {
             span: module.span,
             parent: None,
+            children: Vec::new(),
+            hoisted: false,
             interface: interfaces[index].clone(),
         });
-        add_nested_reaches(&module.actions, id, &mut tree, span_modes)?;
+        add_nested_reaches(&module.actions, id, false, &mut tree, span_modes)?;
     }
     Ok(tree)
 }
@@ -815,6 +820,7 @@ fn build_reach_tree(
 fn add_nested_reaches(
     actions: &[Action],
     parent: usize,
+    in_block: bool,
     tree: &mut ReachTree,
     span_modes: &HashMap<Span, HashMap<String, Type>>,
 ) -> Result<(), Error> {
@@ -828,9 +834,12 @@ fn add_nested_reaches(
                 tree.nodes.push(ReachNode {
                     span: module.span,
                     parent: Some(parent),
+                    children: Vec::new(),
+                    hoisted: !in_block,
                     interface,
                 });
-                add_nested_reaches(&module.actions, id, tree, span_modes)?;
+                tree.nodes[parent].children.push(id);
+                add_nested_reaches(&module.actions, id, false, tree, span_modes)?;
             }
             Action::If {
                 branches,
@@ -838,32 +847,35 @@ fn add_nested_reaches(
                 ..
             } => {
                 for branch in branches {
-                    add_nested_reaches(&branch.body, parent, tree, span_modes)?;
+                    add_nested_reaches(&branch.body, parent, true, tree, span_modes)?;
                 }
                 if let Some(actions) = else_actions {
-                    add_nested_reaches(actions, parent, tree, span_modes)?;
+                    add_nested_reaches(actions, parent, true, tree, span_modes)?;
                 }
             }
-            Action::Do { body, .. } => add_nested_reaches(body, parent, tree, span_modes)?,
+            Action::Do { body, .. } => add_nested_reaches(body, parent, true, tree, span_modes)?,
             Action::Case {
                 alternatives,
                 else_actions,
                 ..
             } => {
                 for alternative in alternatives {
-                    add_nested_reaches(&alternative.body, parent, tree, span_modes)?;
+                    add_nested_reaches(&alternative.body, parent, true, tree, span_modes)?;
                 }
                 if let Some(actions) = else_actions {
-                    add_nested_reaches(actions, parent, tree, span_modes)?;
+                    add_nested_reaches(actions, parent, true, tree, span_modes)?;
                 }
             }
             Action::Labelled { action, .. } => add_nested_reaches(
                 std::slice::from_ref(action.as_ref()),
                 parent,
+                true,
                 tree,
                 span_modes,
             )?,
-            Action::Begin { actions, .. } => add_nested_reaches(actions, parent, tree, span_modes)?,
+            Action::Begin { actions, .. } => {
+                add_nested_reaches(actions, parent, true, tree, span_modes)?
+            }
             _ => {}
         }
     }

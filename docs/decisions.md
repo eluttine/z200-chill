@@ -78,8 +78,10 @@ See [ir.md](ir.md).
 `program::ReachTree` now holds the static module reach hierarchy and each module's
 declaration interface (variables, procedures, modes). `sema` and `interp` read module
 mode/declaration data from this tree instead of maintaining separate span-keyed maps.
-Reach exports, hoisting, and virtual-grant gluing are still computed per layer and are
-the next stage.
+The tree also records child reaches and whether each nested module is directly hoisted
+from a module body. The interpreter's module-body hoisting now follows that plan.
+Reach exports, checker child preloading, and virtual-grant gluing are still computed per
+layer and are the next stage.
 
 ## 10.14 Text I/O (implementation-defined, resolved for now)
 
