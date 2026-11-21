@@ -234,11 +234,6 @@ fn load_package(target: &Path, link_grant_sources: bool) -> Result<LoadedPackage
         root_widths: manifest.build.int_widths,
     };
     loader.load_package(&manifest_path)?;
-    if let Err(error) = crate::program::apply_virtual_grants(&mut loader.modules) {
-        return Err(loader
-            .source_map
-            .format_diagnostic(error.code, error.span, &error.message));
-    }
 
     Ok(LoadedPackage {
         manifest,

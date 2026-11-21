@@ -254,6 +254,15 @@ pub struct ProgramInfo {
     pub spec_for_body: HashMap<usize, usize>,
 }
 
+/// Apply virtual grants from nested specs and return the normalized program.
+/// All semantic entry points should analyze the normalized program so behavior does
+/// not depend on whether the loader already normalized it.
+pub fn normalize(program: &Program) -> Result<Program, Error> {
+    let mut normalized = program.clone();
+    apply_virtual_grants(&mut normalized.modules)?;
+    Ok(normalized)
+}
+
 pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
     if let Some(remote) = program.remotes.first() {
         return Err(Error::coded(
@@ -400,7 +409,8 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
 
 /// The portable public interface of the program, sorted by name.
 pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
-    let info = analyze(program)?;
+    let program = normalize(program)?;
+    let info = analyze(&program)?;
     let modes = info.modes;
     let mut exports: Vec<ExportInfo> = info
         .exports
@@ -1712,22 +1722,36 @@ fn apply_virtual_visibility(nested_specs: &[Module], body: &mut Module) -> Resul
             .cloned()
             .collect::<Vec<_>>();
 
-        if nested_body
+        let body_visibility: Vec<Span> = nested_body
             .declarations
             .iter()
-            .any(|declaration| matches!(declaration, Declaration::Visibility(_)))
-        {
-            return Err(Error::new(
-                nested_body.span,
-                format!(
-                    "nested body `{name}` must not contain visibility statements; they belong in the nested spec"
-                ),
-            ));
+            .filter_map(|declaration| match declaration {
+                Declaration::Visibility(visibility) => Some(visibility.span),
+                _ => None,
+            })
+            .collect();
+        if !body_visibility.is_empty() {
+            let spec_visibility: Vec<Span> = visibility
+                .iter()
+                .map(|declaration| match declaration {
+                    Declaration::Visibility(visibility) => visibility.span,
+                    _ => unreachable!(),
+                })
+                .collect();
+            if body_visibility != spec_visibility {
+                return Err(Error::new(
+                    nested_body.span,
+                    format!(
+                        "nested body `{name}` must not contain visibility statements; they belong in the nested spec"
+                    ),
+                ));
+            }
+        } else {
+            nested_body.declarations.extend(visibility);
         }
 
         let nested_body_clone = nested_body.clone();
         let child_specs = collect_nested_specs(&[nested_spec, &nested_body_clone])?;
-        nested_body.declarations.extend(visibility);
         apply_virtual_visibility(&child_specs, nested_body)?;
     }
     Ok(())

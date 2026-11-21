@@ -139,7 +139,17 @@ pub fn analyze_with_externals(
     profile: WidthProfile,
     external: &[program::ExternalInterface],
 ) -> CheckResult {
-    let info = match program::analyze(program) {
+    let program = match program::normalize(program) {
+        Ok(program) => program,
+        Err(error) => {
+            return CheckResult {
+                diagnostics: vec![Diagnostic::new(error.code, Some(error.span), error.message)],
+                types: HashMap::new(),
+                resolutions: HashMap::new(),
+            };
+        }
+    };
+    let info = match program::analyze(&program) {
         Ok(info) => info,
         Err(error) => {
             return CheckResult {

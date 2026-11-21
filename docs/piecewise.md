@@ -269,9 +269,10 @@ Implemented:
   paired by name with directly nested body modules.
 - Interfaces are checked with the normal spec/body rules, recursively through the nested
   spec/body tree.
-- `program::apply_virtual_grants` copies nested-spec `GRANT`/`SEIZE` declarations into
-  the matching nested body before analysis, recursively, so they export into the parent
-  reach and can be re-granted upward.
+- `program::normalize` applies virtual grants (nested-spec `GRANT`/`SEIZE` copied into
+  the matching body) before semantic analysis, recursively, so they export into the
+  parent reach and can be re-granted upward. The checker, interpreter, and grant
+  emitter all normalize, so behavior does not depend on the loader path.
 - Nested bodies with their own visibility statements are rejected when a nested spec
   exists.
 - Tests: nested spec parsing, context nested specs, recursive spec/body trees,

@@ -110,7 +110,9 @@ pub fn run_checked(
     check: &CheckResult,
     external: &[program::ExternalInterface],
 ) -> Result<(), Error> {
-    let info = program::analyze(program)
+    let program = program::normalize(program)
+        .map_err(|error| Error::coded(error.code, error.span, error.message))?;
+    let info = program::analyze(&program)
         .map_err(|error| Error::coded(error.code, error.span, error.message))?;
     let module_modes: Vec<HashMap<String, Type>> = info
         .interfaces
@@ -170,7 +172,7 @@ pub fn run_checked(
         }
     }
 
-    let lowered = ir::lower(program, check)
+    let lowered = ir::lower(&program, check)
         .map_err(|error| Error::coded("E0400", error.span, error.message))?;
     let mut interpreter = Interpreter {
         profile,
@@ -185,7 +187,7 @@ pub fn run_checked(
         modes,
         module_modes,
         module_modes_by_span: info.module_modes_by_span,
-        modules_by_span: collect_modules_by_span(program),
+        modules_by_span: collect_modules_by_span(&program),
         package_names: program
             .modules
             .iter()
@@ -196,8 +198,8 @@ pub fn run_checked(
         bodies: lowered.bodies,
     };
 
-    interpreter.declare_modules(program)?;
-    interpreter.apply_seizes(program)?;
+    interpreter.declare_modules(&program)?;
+    interpreter.apply_seizes(&program)?;
 
     for (index, module) in program.modules.iter().enumerate() {
         if module.kind.is_spec() {
@@ -2482,6 +2484,54 @@ M: MODULE
     ASSERT Add() = 2;
   END A;
 END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn program_normalization_is_idempotent() {
+        let tokens = lexer::tokenize(
+            r#"
+Outer: SPEC MODULE
+  Inner: SPEC MODULE
+    DCL x INT;
+    GRANT x;
+  END Inner;
+END Outer;
+
+Outer: MODULE
+  Inner: MODULE
+    DCL x INT INIT := 1;
+  END Inner;
+  ASSERT x = 1;
+END Outer;
+"#,
+        )
+        .unwrap();
+        let program = parser::parse(&tokens).unwrap();
+        let once = crate::program::normalize(&program).unwrap();
+        let twice = crate::program::normalize(&once).unwrap();
+        assert_eq!(once.modules.len(), twice.modules.len());
+    }
+
+    #[test]
+    fn direct_entry_points_apply_virtual_grants() {
+        run_source(
+            r#"
+Outer: SPEC MODULE
+  Inner: SPEC MODULE
+    DCL x INT;
+    GRANT x;
+  END Inner;
+END Outer;
+
+Outer: MODULE
+  Inner: MODULE
+    DCL x INT INIT := 1;
+  END Inner;
+  ASSERT x = 1;
+END Outer;
 "#,
         )
         .unwrap();

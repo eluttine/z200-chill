@@ -79,7 +79,8 @@ implementation-defined, so the manifest will carry a `[pieces]` text-reference t
 literal designators resolve package-relative. Phases 0–4 are implemented for the current subset: `[pieces]` manifest lookups, remote
 syntax, designator resolution with cycle detection, expansion of remote
 modules/specs/regions/program units, remote contexts/context-list merging,
-`CONTEXT MODULE REMOTE` desugaring, recursive nested spec modules, virtual grants,
+`CONTEXT MODULE REMOTE` desugaring, recursive nested spec modules, virtual grants (applied by `program::normalize` for
+every semantic entry point),
 top-level regions, and spec regions. Region concurrency/mutual exclusion and nested
 regions remain. See [piecewise.md](piecewise.md).
 

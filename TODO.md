@@ -21,12 +21,12 @@ all existing tests pass with no new special cases.
 
 ## 2. Move virtual grants into analysis
 
-- [ ] Replace the loader-side `apply_virtual_grants` mutation with a normalization step
-      in program analysis.
-- [ ] Ensure `run_source`/direct `check`/`grant` see the same virtual grants as the CLI
+- [x] Replace the loader-side `apply_virtual_grants` mutation with a normalization step
+      (`program::normalize`) used by semantic entry points.
+- [x] Ensure `run_source`/direct `check`/`grant` see the same virtual grants as the CLI
       loader path.
-- [ ] Add a regression test that checks the same nested-spec program through every entry
-      point.
+- [x] Add regression tests for direct entry points and normalization idempotence.
+- [x] Remove the loader-side mutation.
 
 ## 3. Conformance and negative fixtures
 
