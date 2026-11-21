@@ -614,16 +614,13 @@ fn resolve_external_type(ty: &ExternalType, ids: &ExternalModeIds) -> Result<Typ
     }
 }
 
-fn build_modes(
-    program: &Program,
-) -> Result<
-    (
-        ModeTable,
-        Vec<HashMap<String, Type>>,
-        HashMap<Span, HashMap<String, Type>>,
-    ),
-    Error,
-> {
+type ModeBuildResult = (
+    ModeTable,
+    Vec<HashMap<String, Type>>,
+    HashMap<Span, HashMap<String, Type>>,
+);
+
+fn build_modes(program: &Program) -> Result<ModeBuildResult, Error> {
     let mut table = ModeTable::default();
     let mut top_maps = Vec::with_capacity(program.modules.len());
     let mut span_maps = HashMap::new();
@@ -647,6 +644,7 @@ fn build_modes(
     Ok((table, top_maps, span_maps))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_module_modes(
     module: &Module,
     top: usize,

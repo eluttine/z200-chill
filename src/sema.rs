@@ -326,14 +326,11 @@ impl Checker {
 
     fn check_nested_module(&mut self, module: &Module) -> Result<(), Error> {
         for declaration in &module.declarations {
-            match declaration {
-                Declaration::ProcSignature(signature) => {
-                    return Err(Error::new(
-                        signature.span,
-                        "procedure signatures in nested modules are not supported yet",
-                    ));
-                }
-                _ => {}
+            if let Declaration::ProcSignature(signature) = declaration {
+                return Err(Error::new(
+                    signature.span,
+                    "procedure signatures in nested modules are not supported yet",
+                ));
             }
         }
 

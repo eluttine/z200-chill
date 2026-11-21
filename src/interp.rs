@@ -1848,7 +1848,7 @@ impl<'a> Interpreter<'a> {
     }
 }
 
-fn collect_modules_by_span<'a>(program: &'a Program) -> HashMap<Span, &'a Module> {
+fn collect_modules_by_span(program: &Program) -> HashMap<Span, &Module> {
     let mut map = HashMap::new();
     for module in &program.modules {
         collect_module_span(module, &mut map);
