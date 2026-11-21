@@ -304,7 +304,8 @@ impl Lowerer<'_> {
                 }
                 Declaration::ProcSignature(_)
                 | Declaration::Visibility(_)
-                | Declaration::Mode(_) => {}
+                | Declaration::Mode(_)
+                | Declaration::SpecModule(_) => {}
             }
         }
         Ok(())

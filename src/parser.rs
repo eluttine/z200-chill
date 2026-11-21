@@ -243,7 +243,9 @@ impl<'a> Parser<'a> {
                             "mode definitions in contexts are not implemented yet",
                         ));
                     }
-                    Declaration::Proc(_) | Declaration::ProcSignature(_) => {}
+                    Declaration::Proc(_)
+                    | Declaration::ProcSignature(_)
+                    | Declaration::SpecModule(_) => {}
                 }
             }
             let end = self.expect_keyword(Keyword::For)?;
@@ -334,6 +336,32 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn at_spec_module_start(&self) -> bool {
+        if self.at_keyword(Keyword::Spec)
+            && self.kind_at(1) == Some(&TokenKind::Keyword(Keyword::Module))
+        {
+            return true;
+        }
+        if self.at_keyword(Keyword::Module)
+            && self.kind_at(1) == Some(&TokenKind::Keyword(Keyword::Spec))
+        {
+            return true;
+        }
+        if self.at_identifier() && self.kind_at(1) == Some(&TokenKind::Colon) {
+            match self.kind_at(2) {
+                Some(TokenKind::Keyword(Keyword::Spec)) => {
+                    self.kind_at(3) == Some(&TokenKind::Keyword(Keyword::Module))
+                }
+                Some(TokenKind::Keyword(Keyword::Module)) => {
+                    self.kind_at(3) == Some(&TokenKind::Keyword(Keyword::Spec))
+                }
+                _ => false,
+            }
+        } else {
+            false
+        }
+    }
+
     fn parse_declarations(
         &mut self,
         allow_visibility: bool,
@@ -341,7 +369,14 @@ impl<'a> Parser<'a> {
     ) -> Result<Vec<Declaration>, Error> {
         let mut declarations = Vec::new();
         loop {
-            if self.at_keyword(Keyword::Dcl) {
+            if spec && (self.at_keyword(Keyword::Context) || self.at_spec_module_start()) {
+                let contexts = self.parse_context_list()?;
+                if !self.at_spec_module_start() {
+                    return Err(self.error_here("expected a nested spec module"));
+                }
+                let module = self.parse_module(contexts)?;
+                declarations.push(Declaration::SpecModule(Box::new(module)));
+            } else if self.at_keyword(Keyword::Dcl) {
                 declarations.push(Declaration::Var(self.parse_dcl()?));
             } else if self.at_keyword(Keyword::NewMode) || self.at_keyword(Keyword::SynMode) {
                 declarations.push(Declaration::Mode(self.parse_mode_definition()?));
@@ -1982,6 +2017,27 @@ END M;
         let module = &program.modules[0];
         assert_eq!(module.contexts.len(), 1);
         assert_eq!(module.contexts[0].declarations.len(), 2);
+    }
+
+    #[test]
+    fn parses_nested_spec_modules() {
+        let program = parse_source(
+            r#"
+Outer: SPEC MODULE
+  Inner: SPEC MODULE
+    DCL x INT;
+    GRANT x;
+  END Inner;
+END Outer;
+"#,
+        );
+
+        let Declaration::SpecModule(inner) = &program.modules[0].declarations[0] else {
+            panic!("expected nested spec module");
+        };
+        assert_eq!(inner.name.as_deref(), Some("Inner"));
+        assert_eq!(inner.kind, ModuleKind::Spec);
+        assert_eq!(inner.declarations.len(), 2);
     }
 
     #[test]

@@ -72,6 +72,8 @@ pub enum Declaration {
     ProcSignature(ProcSignature),
     Visibility(Visibility),
     Mode(ModeDefinition),
+    /// A nested `SPEC MODULE` inside a spec module or context.
+    SpecModule(Box<Module>),
 }
 
 #[derive(Debug, Clone)]

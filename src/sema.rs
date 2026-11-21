@@ -692,7 +692,7 @@ impl Checker {
                             "unsupported declaration in a nested context",
                         ));
                     }
-                    Declaration::Visibility(_) => {}
+                    Declaration::Visibility(_) | Declaration::SpecModule(_) => {}
                 }
             }
 
@@ -996,7 +996,7 @@ impl Checker {
                     self.declare_proc(&signature.name, proc_sig, signature.span)?;
                 }
                 Declaration::Mode(_) => {}
-                Declaration::Visibility(_) => {}
+                Declaration::Visibility(_) | Declaration::SpecModule(_) => {}
             }
         }
         Ok(())

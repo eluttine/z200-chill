@@ -76,11 +76,12 @@ See [ir.md](ir.md).
 Remote pieces, piece designators, nested spec modules, and regions are a separate
 "piecewise compilation" milestone. Z.200 leaves designator-to-text mapping
 implementation-defined, so the manifest will carry a `[pieces]` text-reference table and
-literal designators resolve package-relative. Phases 0–2 are implemented: `[pieces]` manifest lookups, remote syntax, designator
-resolution with cycle detection, expansion of remote modules/spec modules/program units,
-remote contexts/context-list merging, and `CONTEXT MODULE REMOTE` desugaring. Regions
-are a prerequisite for remote regions and spec regions. See
-[piecewise.md](piecewise.md).
+literal designators resolve package-relative. Phases 0–2 and part of Phase 3 are implemented: `[pieces]` manifest lookups, remote
+syntax, designator resolution with cycle detection, expansion of remote
+modules/specs/program units, remote contexts/context-list merging,
+`CONTEXT MODULE REMOTE` desugaring, and nested spec modules inside top-level spec modules
+with virtual grants. Nested specs inside contexts, recursive nested specs, and regions
+remain. See [piecewise.md](piecewise.md).
 
 ## 10.9 Code generation (open)
 

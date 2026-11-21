@@ -637,7 +637,8 @@ impl<'a> Interpreter<'a> {
                 }
                 Declaration::ProcSignature(_)
                 | Declaration::Visibility(_)
-                | Declaration::Mode(_) => {}
+                | Declaration::Mode(_)
+                | Declaration::SpecModule(_) => {}
             }
         }
         Ok(())
@@ -2091,7 +2092,10 @@ fn declare_into_scope<'a>(
                     },
                 );
             }
-            Declaration::ProcSignature(_) | Declaration::Visibility(_) | Declaration::Mode(_) => {}
+            Declaration::ProcSignature(_)
+            | Declaration::Visibility(_)
+            | Declaration::Mode(_)
+            | Declaration::SpecModule(_) => {}
         }
     }
     Ok(())

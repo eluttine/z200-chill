@@ -330,6 +330,7 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
         }
 
         check_interface(&interfaces[*spec_index], &interfaces[body_index], spec.span)?;
+        check_nested_specs(spec, body, &module_modes_by_span)?;
         add_grants(
             spec,
             &interfaces[*spec_index],
@@ -907,7 +908,7 @@ pub fn collect_interface(
                     ));
                 }
             }
-            Declaration::Mode(_) | Declaration::Visibility(_) => {}
+            Declaration::Mode(_) | Declaration::Visibility(_) | Declaration::SpecModule(_) => {}
         }
     }
 
@@ -1048,7 +1049,7 @@ fn check_contexts(module: &Module, index: usize, exports: &[ExportEntry]) -> Res
                         "mode definitions in contexts are not implemented yet",
                     ));
                 }
-                Declaration::Visibility(_) => {}
+                Declaration::Visibility(_) | Declaration::SpecModule(_) => {}
             }
         }
 
@@ -1545,6 +1546,143 @@ fn add_grants(
         }
     }
 
+    Ok(())
+}
+
+fn check_nested_specs(
+    spec: &Module,
+    body: &Module,
+    span_modes: &HashMap<Span, HashMap<String, Type>>,
+) -> Result<(), Error> {
+    let mut nested_specs: HashMap<String, &Module> = HashMap::new();
+    for declaration in &spec.declarations {
+        let Declaration::SpecModule(nested) = declaration else {
+            continue;
+        };
+        let Some(name) = &nested.name else {
+            return Err(Error::new(nested.span, "nested spec module must be named"));
+        };
+        if nested_specs.insert(name.clone(), nested).is_some() {
+            return Err(Error::new(
+                nested.span,
+                format!("duplicate nested spec module `{name}`"),
+            ));
+        }
+    }
+    if nested_specs.is_empty() {
+        return Ok(());
+    }
+
+    let mut nested_bodies: HashMap<String, &Module> = HashMap::new();
+    for action in &body.actions {
+        let Action::Module(nested) = action else {
+            continue;
+        };
+        if nested.kind == ModuleKind::Body {
+            if let Some(name) = &nested.name {
+                nested_bodies.insert(name.clone(), nested);
+            }
+        }
+    }
+
+    for (name, nested_spec) in nested_specs {
+        let Some(nested_body) = nested_bodies.get(&name).copied() else {
+            return Err(Error::new(
+                nested_spec.span,
+                format!("nested spec module `{name}` has no body"),
+            ));
+        };
+        let empty = HashMap::new();
+        let spec_modes = span_modes.get(&nested_spec.span).unwrap_or(&empty);
+        let body_modes = span_modes.get(&nested_body.span).unwrap_or(&empty);
+        let spec_interface = collect_interface(nested_spec, spec_modes)?;
+        let body_interface = collect_interface(nested_body, body_modes)?;
+        check_interface(&spec_interface, &body_interface, nested_spec.span)?;
+    }
+    Ok(())
+}
+
+/// Copy `GRANT`/`SEIZE` declarations from nested spec modules into their matching
+/// nested body modules. This is the virtual-grant step for nested specs.
+pub fn apply_virtual_grants(modules: &mut [Module]) -> Result<(), Error> {
+    let mut specs: HashMap<(usize, String), usize> = HashMap::new();
+    let mut bodies: HashMap<(usize, String), usize> = HashMap::new();
+    for (index, module) in modules.iter().enumerate() {
+        let Some(name) = &module.name else {
+            continue;
+        };
+        let key = (module.package, name.clone());
+        match module.kind {
+            ModuleKind::Spec => {
+                specs.insert(key, index);
+            }
+            ModuleKind::Body => {
+                bodies.insert(key, index);
+            }
+        }
+    }
+
+    let mut pending: Vec<(usize, Vec<(String, Vec<Declaration>)>)> = Vec::new();
+    for (key, spec_index) in &specs {
+        let Some(body_index) = bodies.get(key).copied() else {
+            continue;
+        };
+        let spec = &modules[*spec_index];
+        let mut nested = Vec::new();
+        for declaration in &spec.declarations {
+            let Declaration::SpecModule(nested_spec) = declaration else {
+                continue;
+            };
+            let Some(name) = &nested_spec.name else {
+                continue;
+            };
+            let visibility = nested_spec
+                .declarations
+                .iter()
+                .filter(|declaration| matches!(declaration, Declaration::Visibility(_)))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !visibility.is_empty() {
+                nested.push((name.clone(), visibility));
+            }
+        }
+        if !nested.is_empty() {
+            pending.push((body_index, nested));
+        }
+    }
+
+    for (body_index, nested) in pending {
+        let body = &mut modules[body_index];
+        for (name, visibility) in nested {
+            let mut found = None;
+            for action in &mut body.actions {
+                if let Action::Module(module) = action {
+                    if module.kind == ModuleKind::Body
+                        && module.name.as_deref() == Some(name.as_str())
+                    {
+                        found = Some(module);
+                        break;
+                    }
+                }
+            }
+            let Some(module) = found else {
+                continue;
+            };
+            if module
+                .declarations
+                .iter()
+                .any(|declaration| matches!(declaration, Declaration::Visibility(_)))
+            {
+                return Err(Error::new(
+                    module.span,
+                    format!(
+                        "nested body `{name}` must not contain visibility statements; they belong in the nested spec"
+                    ),
+                ));
+            }
+            module.declarations.extend(visibility);
+        }
+    }
     Ok(())
 }
 
