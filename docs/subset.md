@@ -454,8 +454,8 @@ text**:
 - Parenthesized clauses are supported, e.g. `%2(%C:%C %)`.
 - Variable widths are taken from the io list in format order; for example
   `WRITETEXT(s, "%CV", 5, 42)` uses width 5 and value 42.
-- Not implemented yet: fractional/exponent widths, `%F` scientific conversion, and
-  I/O control clauses (`%/`, `%+`, etc.).
+- Not implemented yet: fractional/exponent widths and `%F` (these require
+  floating-point modes), and I/O control clauses (`%/`, `%+`, etc.).
 - Text locations must have a varying string mode (`CHARS` or `CHARS(n) VARYING`).
 
 ### 5.6 Text modes
@@ -480,6 +480,9 @@ implementation is an intentional simplification of Z.200 file handling:
 
 - `ASSOCIATE(association, "path")` attaches an implementation-defined host-file path.
 - `ISASSOCIATED(association)` reports whether an association is present.
+- `EXISTING`, `READABLE`, `WRITEABLE`, `INDEXABLE`, `SEQUENCIBLE`, and `VARIABLE`
+  report association attributes. In the current text-file model, readable/writeable
+  follow `existing`, sequencible is always true, and indexable/variable are false.
 - `DISSOCIATE(association)` clears the association.
 - `CREATE(association)` creates/truncates the associated file.
 - `DELETE(association)` removes the associated file.
@@ -489,8 +492,7 @@ implementation is an intentional simplification of Z.200 file handling:
 - `WRITERECORD(access, text)` appends one line-based record.
 - `READRECORD(access)` returns the next line; `READRECORD(access, target)` stores it in
   a `CHARS` location.
-- Access is sequential only; there is no index mode, random access, attribute
-  inspection, or `MODIFY`.
+- Access is sequential only; there is no index mode, random access, or `MODIFY`.
 
 The built-in routines raise implementation-defined `ASSOCIATEFAIL`, `NOTASSOCIATED`,
 `CREATEFAIL`, `DELETEFAIL`, `CONNECTFAIL`, `NOTCONNECTED`, `READFAIL`, and `WRITEFAIL`

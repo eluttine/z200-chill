@@ -2057,11 +2057,17 @@ impl Checker {
                     }
                     None
                 }
-                AssociationOp::IsAssociated => {
+                AssociationOp::IsAssociated
+                | AssociationOp::Existing
+                | AssociationOp::Readable
+                | AssociationOp::Writeable
+                | AssociationOp::Indexable
+                | AssociationOp::Sequencible
+                | AssociationOp::Variable => {
                     let [association] = args else {
                         return Err(Error::new(
                             span,
-                            "ISASSOCIATED takes an association location",
+                            format!("{name} takes an association location"),
                         ));
                     };
                     association_arg(self, association)?;

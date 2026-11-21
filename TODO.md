@@ -115,8 +115,10 @@ all existing tests pass with no new special cases.
       `WRITERECORD` over sequential line records.
 - [x] Parenthesized text-format clauses with repetition.
 - [x] Variable format widths (`V`) for conversions and editing clauses.
-- [ ] Fractional/exponent widths, `%F`, I/O control clauses, and the remaining
-      association attributes/modify parameters/indexed access.
+- [x] Association attributes `EXISTING`, `READABLE`, `WRITEABLE`, `INDEXABLE`,
+      `SEQUENCIBLE`, and `VARIABLE`.
+- [ ] Fractional/exponent widths and `%F` (blocked on floating-point modes),
+      I/O control clauses, `MODIFY`, and indexed access.
 - [ ] Processes, signals, and timers.
 - [ ] Sets/powersets, moreta modes, templates.
 

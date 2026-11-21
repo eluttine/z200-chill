@@ -320,6 +320,12 @@ pub enum AssociationOp {
     Disconnect,
     ReadRecord,
     WriteRecord,
+    Existing,
+    Readable,
+    Writeable,
+    Indexable,
+    Sequencible,
+    Variable,
 }
 
 pub fn lookup_association(name: &str) -> Option<AssociationOp> {
@@ -333,6 +339,12 @@ pub fn lookup_association(name: &str) -> Option<AssociationOp> {
         "DISCONNECT" => Some(AssociationOp::Disconnect),
         "READRECORD" => Some(AssociationOp::ReadRecord),
         "WRITERECORD" => Some(AssociationOp::WriteRecord),
+        "EXISTING" => Some(AssociationOp::Existing),
+        "READABLE" => Some(AssociationOp::Readable),
+        "WRITEABLE" => Some(AssociationOp::Writeable),
+        "INDEXABLE" => Some(AssociationOp::Indexable),
+        "SEQUENCIBLE" => Some(AssociationOp::Sequencible),
+        "VARIABLE" => Some(AssociationOp::Variable),
         _ => None,
     }
 }

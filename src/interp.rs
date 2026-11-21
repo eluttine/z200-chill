@@ -1042,6 +1042,25 @@ impl<'a> Interpreter<'a> {
                 };
                 Ok(Value::Bool(state.is_some()))
             }
+            AssociationOp::Existing
+            | AssociationOp::Readable
+            | AssociationOp::Writeable
+            | AssociationOp::Indexable
+            | AssociationOp::Sequencible
+            | AssociationOp::Variable => {
+                let state = self.association_state(first, span)?;
+                let state = state.borrow();
+                let value = match op {
+                    AssociationOp::Existing => state.existing,
+                    AssociationOp::Readable => state.existing,
+                    AssociationOp::Writeable => state.existing,
+                    AssociationOp::Indexable => false,
+                    AssociationOp::Sequencible => true,
+                    AssociationOp::Variable => false,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Bool(value))
+            }
             AssociationOp::Dissociate => {
                 let cell = self
                     .find_var_cell(first)

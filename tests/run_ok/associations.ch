@@ -8,7 +8,14 @@ M: MODULE
   ASSOCIATE(assoc, "/tmp/z200c-association-fixture.txt");
   ASSERT ISASSOCIATED(assoc);
 
+  ASSERT NOT EXISTING(assoc);
   CREATE(assoc);
+  ASSERT EXISTING(assoc);
+  ASSERT READABLE(assoc);
+  ASSERT WRITEABLE(assoc);
+  ASSERT NOT INDEXABLE(assoc);
+  ASSERT SEQUENCIBLE(assoc);
+  ASSERT NOT VARIABLE(assoc);
   CONNECT(file, assoc);
   WRITERECORD(file, "one");
   WRITERECORD(file, "two");
@@ -22,6 +29,7 @@ M: MODULE
   DISCONNECT(file);
 
   DELETE(assoc);
+  ASSERT NOT EXISTING(assoc);
   DISSOCIATE(assoc);
   ASSERT NOT ISASSOCIATED(assoc);
 END M;
