@@ -40,7 +40,7 @@ all existing tests pass with no new special cases.
 - [ ] Expand fixtures with more direct Z.200 examples and, if useful, full golden
       snapshots.
 
-## 4. Decide product direction
+## 4. Decide product direction (needs decision)
 
 - [ ] Choose interpreter-first educational compiler vs native/C backend.
 - [ ] If backend: define declaration/procedure lowering, symbol mangling, and runtime
@@ -49,10 +49,11 @@ all existing tests pass with no new special cases.
 
 ## 5. CI
 
-- [ ] Add CI for `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-      `cargo test --all`.
-- [ ] Pin/declare the minimum supported Rust version.
-- [ ] Optionally run tests on Linux with a stable toolchain matrix.
+- [x] CI workflow runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+      and `cargo test --all` on stable Linux.
+- [x] `rust-toolchain.toml` pins the stable channel with rustfmt/clippy.
+- [ ] Decide whether to declare and test an MSRV; current policy is stable-only.
+- [ ] Optionally add a stable/nightly matrix once there is a reason.
 
 ## 6. Region concurrency
 
