@@ -1,4 +1,5 @@
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
 fn example_grant_lock() -> &'static Mutex<()> {
@@ -598,6 +599,69 @@ END Client;
     assert!(stderr.contains("FORBIDden"), "stderr: {stderr}");
 
     std::fs::remove_dir_all(&base).unwrap();
+}
+
+#[test]
+fn write_and_writeline_text_io() {
+    let dir = std::env::temp_dir().join(format!("z200-text-out-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("Chill.toml"), "").unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  WRITE("a");
+  WRITE("b");
+  WRITELINE("c");
+  WRITELINE();
+END M;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("run").arg(&dir).output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "abc\n\n");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn readline_text_io() {
+    let dir = std::env::temp_dir().join(format!("z200-text-in-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("Chill.toml"), "").unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL line CHARS;
+  line := READLINE();
+  ASSERT line = "hello";
+END M;
+"#,
+    )
+    .unwrap();
+
+    let mut child = z200c()
+        .arg("run")
+        .arg(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"hello\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

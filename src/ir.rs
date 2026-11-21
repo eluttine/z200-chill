@@ -74,6 +74,12 @@ pub enum Expr {
         ty: Type,
         span: Span,
     },
+    Builtin {
+        builtin: crate::builtins::Builtin,
+        args: Vec<Node>,
+        ty: Option<Type>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -89,7 +95,8 @@ impl Expr {
             | Self::Unary { span, .. }
             | Self::Binary { span, .. }
             | Self::Field { span, .. }
-            | Self::Index { span, .. } => *span,
+            | Self::Index { span, .. }
+            | Self::Builtin { span, .. } => *span,
         }
     }
 
@@ -105,7 +112,7 @@ impl Expr {
             | Self::Binary { ty, .. }
             | Self::Field { ty, .. }
             | Self::Index { ty, .. } => Some(*ty),
-            Self::Call { ty, .. } => *ty,
+            Self::Call { ty, .. } | Self::Builtin { ty, .. } => *ty,
         }
     }
 }
@@ -614,6 +621,12 @@ impl Lowerer<'_> {
                 }
                 Some(ApplyResolution::Procedure) => Rc::new(Expr::Call {
                     name: name.clone(),
+                    args,
+                    ty,
+                    span,
+                }),
+                Some(ApplyResolution::Builtin(builtin)) => Rc::new(Expr::Builtin {
+                    builtin: *builtin,
                     args,
                     ty,
                     span,

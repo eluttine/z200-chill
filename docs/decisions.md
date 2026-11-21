@@ -73,6 +73,13 @@ expression and statement nodes (`ir::Expr`, `ir::Stmt`) that the interpreter con
 This removes expression-level re-inference and AST action traversal from the interpreter.
 See [ir.md](ir.md).
 
+## 10.14 Text I/O (implementation-defined, resolved for now)
+
+`WRITE`, `WRITELINE`, and `READLINE` provide practical text I/O as
+implementation-defined built-in routines, which Z.200 permits. Standard
+`READTEXT`/`WRITETEXT`, text modes, associations, and format conversions remain future
+work.
+
 ## 10.13 Exceptions (partial, resolved for now)
 
 `CAUSE`, module/procedure handlers (`ON ... ELSE ... END`), and catching `ASSERTFAIL`

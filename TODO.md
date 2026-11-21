@@ -72,6 +72,8 @@ all existing tests pass with no new special cases.
 - [x] `CHAR` and unbounded `CHARS` modes (`CHARS(n)`, `VARYING`, and `WCHARS` remain).
 - [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
 - [ ] Action-level handlers and exception-set flow checking.
+- [x] Implementation-defined text I/O (`WRITE`, `WRITELINE`, `READLINE`).
+- [ ] Standard `READTEXT`/`WRITETEXT`, text modes, associations, and format conversions.
 - [ ] Processes, signals, and timers.
 - [ ] Sets/powersets, moreta modes, templates.
 

@@ -95,7 +95,8 @@ Not implemented yet (rejected or deferred with a diagnostic):
 - `OUT` / `INOUT` / `LOC` parameter passing;
 - action-level handlers (handlers are supported on modules and procedures);
 - exception-set flow checking (`EXCEPTIONS` lists are parsed but not enforced);
-- text I/O;
+- standard `READTEXT`/`WRITETEXT` and associations (z200c instead provides the
+  implementation-defined `WRITE`, `WRITELINE`, and `READLINE` below);
 - region concurrency/mutual exclusion;
 - processes, timers, powersets, references, and generics.
 
@@ -358,6 +359,17 @@ END
 - Action-level handlers and static exception-flow checking are not implemented yet.
 
 ---
+
+### 5.5 Text I/O (implementation-defined)
+
+Z.200 permits implementation-defined built-in routine names. `z200c` provides:
+
+- `WRITE(chars);` writes to stdout without a newline.
+- `WRITELINE();` / `WRITELINE(chars);` writes a line to stdout.
+- `line := READLINE();` reads one stdin line as `CHARS`, without the terminator.
+
+These are not the standard `READTEXT`/`WRITETEXT` text-transfer operations; those require
+text modes and associations, which are not implemented yet.
 
 ## 6. Procedures
 

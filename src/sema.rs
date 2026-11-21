@@ -83,6 +83,7 @@ pub enum ApplyResolution {
     Conversion(IntKind),
     Procedure,
     ArrayIndex,
+    Builtin(crate::builtins::Builtin),
 }
 
 /// The checker's result: diagnostics plus expression annotations that the
@@ -1876,6 +1877,38 @@ impl Checker {
         span: Span,
         require_result: bool,
     ) -> Result<Option<Type>, Error> {
+        if let Some(builtin) = crate::builtins::lookup(name) {
+            let result = match builtin {
+                crate::builtins::Builtin::Write | crate::builtins::Builtin::WriteLine => {
+                    if args.len() > 1 {
+                        return Err(Error::new(
+                            span,
+                            format!("`{name}` takes at most one argument"),
+                        ));
+                    }
+                    if let Some(arg) = args.first() {
+                        let ty = self.check_expr(arg)?;
+                        if ty != Type::String {
+                            return Err(Error::new(
+                                arg.span(),
+                                format!("`{name}` requires CHARS, found {}", ty.describe()),
+                            ));
+                        }
+                    }
+                    None
+                }
+                crate::builtins::Builtin::ReadLine => {
+                    if !args.is_empty() {
+                        return Err(Error::new(span, "READLINE takes no arguments"));
+                    }
+                    Some(Type::String)
+                }
+            };
+            self.resolutions
+                .insert(span, ApplyResolution::Builtin(builtin));
+            return Ok(result);
+        }
+
         if let Some(Type::Array(array)) = self.lookup_var(name) {
             if args.len() != 1 {
                 return Err(Error::new(

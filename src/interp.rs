@@ -1470,6 +1470,53 @@ impl<'a> Interpreter<'a> {
             ir::Expr::Char { value, .. } => Ok(Value::Char(*value)),
             ir::Expr::String { value, .. } => Ok(Value::String(value.clone())),
             ir::Expr::Name { name, span, .. } => self.read_var(name, *span),
+            ir::Expr::Builtin {
+                builtin,
+                args,
+                span,
+                ..
+            } => {
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval_ir(arg)?);
+                }
+                match builtin {
+                    crate::builtins::Builtin::Write => {
+                        if let Some(value) = values.first() {
+                            let Value::String(text) = value else {
+                                return Err(Error::new(*span, "WRITE requires CHARS"));
+                            };
+                            print!("{text}");
+                            use std::io::Write as _;
+                            std::io::stdout()
+                                .flush()
+                                .map_err(|error| Error::new(*span, error.to_string()))?;
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    crate::builtins::Builtin::WriteLine => {
+                        if let Some(value) = values.first() {
+                            let Value::String(text) = value else {
+                                return Err(Error::new(*span, "WRITELINE requires CHARS"));
+                            };
+                            println!("{text}");
+                        } else {
+                            println!();
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    crate::builtins::Builtin::ReadLine => {
+                        let mut line = String::new();
+                        std::io::stdin()
+                            .read_line(&mut line)
+                            .map_err(|error| Error::new(*span, error.to_string()))?;
+                        let line = line
+                            .trim_end_matches(|ch| ch == '\n' || ch == '\r')
+                            .to_owned();
+                        Ok(Value::String(line))
+                    }
+                }
+            }
             ir::Expr::Index {
                 name, index, span, ..
             } => {
