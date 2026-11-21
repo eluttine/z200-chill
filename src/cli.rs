@@ -432,6 +432,13 @@ impl Loader {
                 crate::ast::Action::Begin { actions, .. } => {
                     self.expand_action_contexts(actions, containing, package)?;
                 }
+                crate::ast::Action::Handled { action, .. } => {
+                    self.expand_action_contexts(
+                        std::slice::from_mut(action.as_mut()),
+                        containing,
+                        package,
+                    )?;
+                }
                 _ => {}
             }
         }
@@ -767,6 +774,13 @@ fn assign_action_packages(actions: &mut [crate::ast::Action], package: usize, pa
             }
             crate::ast::Action::Begin { actions, .. } => {
                 assign_action_packages(actions, package, package_name);
+            }
+            crate::ast::Action::Handled { action, .. } => {
+                assign_action_packages(
+                    std::slice::from_mut(action.as_mut()),
+                    package,
+                    package_name,
+                );
             }
             _ => {}
         }

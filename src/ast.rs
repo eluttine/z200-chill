@@ -315,6 +315,12 @@ pub enum Action {
     },
     /// A module used as an action (a nested modulion).
     Module(Box<Module>),
+    /// An action with an exception handler appended (Z.200 8.2).
+    Handled {
+        action: Box<Action>,
+        handler: Handler,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -441,7 +447,8 @@ impl Action {
             | Self::Labelled { span, .. }
             | Self::Begin { span, .. }
             | Self::Empty { span }
-            | Self::Cause { span, .. } => *span,
+            | Self::Cause { span, .. }
+            | Self::Handled { span, .. } => *span,
             Self::Module(module) => module.span,
         }
     }

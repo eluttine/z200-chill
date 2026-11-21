@@ -941,6 +941,22 @@ impl<'a> Parser<'a> {
         Ok(actions)
     }
 
+    /// Consume the statement terminator and, when an `ON` handler follows,
+    /// append it to the action (Z.200 8.2).
+    fn finish_action(&mut self, action: Action, start: Span) -> Result<Action, Error> {
+        if self.at_keyword(Keyword::On) {
+            let handler = self.parse_handler()?;
+            let end = self.expect_semicolon()?;
+            return Ok(Action::Handled {
+                action: Box::new(action),
+                handler,
+                span: Span::new(self.source, start.start, end.end),
+            });
+        }
+        self.expect_semicolon()?;
+        Ok(action)
+    }
+
     fn parse_action(&mut self) -> Result<Action, Error> {
         self.enter_nesting()?;
         let result = self.parse_action_inner();
@@ -1084,11 +1100,11 @@ impl<'a> Parser<'a> {
         let start = self.current_span();
         self.expect_keyword(Keyword::Assert)?;
         let condition = self.parse_expr()?;
-        let end = self.expect_semicolon()?;
-        Ok(Action::Assert {
+        let action = Action::Assert {
             condition,
-            span: Span::new(self.source, start.start, end.end),
-        })
+            span: Span::new(self.source, start.start, self.current_span().start),
+        };
+        self.finish_action(action, start)
     }
 
     fn parse_return(&mut self) -> Result<Action, Error> {
@@ -1173,13 +1189,13 @@ impl<'a> Parser<'a> {
         };
 
         self.expect_keyword(Keyword::Fi)?;
-        let end = self.expect_semicolon()?;
-        Ok(Action::If {
+        let action = Action::If {
             branches,
             else_actions,
             else_span,
-            span: Span::new(self.source, start.start, end.end),
-        })
+            span: Span::new(self.source, start.start, self.current_span().start),
+        };
+        self.finish_action(action, start)
     }
 
     fn parse_case(&mut self) -> Result<Action, Error> {
@@ -1224,7 +1240,6 @@ impl<'a> Parser<'a> {
         };
 
         self.expect_keyword(Keyword::Esac)?;
-        let end = self.expect_semicolon()?;
 
         if alternatives.is_empty() && else_actions.is_none() {
             return Err(Error::coded(
@@ -1234,13 +1249,14 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        Ok(Action::Case {
+        let action = Action::Case {
             selector,
             alternatives,
             else_actions,
             else_span,
-            span: Span::new(self.source, start.start, end.end),
-        })
+            span: Span::new(self.source, start.start, self.current_span().start),
+        };
+        self.finish_action(action, start)
     }
 
     fn parse_case_body(&mut self) -> Result<Vec<Action>, Error> {
@@ -1368,13 +1384,12 @@ impl<'a> Parser<'a> {
 
         let body = self.parse_actions_until(&[Keyword::Od])?;
         self.expect_keyword(Keyword::Od)?;
-        let end = self.expect_semicolon()?;
-
-        Ok(Action::Do {
+        let action = Action::Do {
             control,
             body,
-            span: Span::new(self.source, start.start, end.end),
-        })
+            span: Span::new(self.source, start.start, self.current_span().start),
+        };
+        self.finish_action(action, start)
     }
 
     fn parse_begin(&mut self) -> Result<Action, Error> {
@@ -1383,13 +1398,12 @@ impl<'a> Parser<'a> {
         let declarations = self.parse_declarations(false, false)?;
         let actions = self.parse_actions_until(&[Keyword::End])?;
         self.expect_keyword(Keyword::End)?;
-        let end = self.expect_semicolon()?;
-
-        Ok(Action::Begin {
+        let action = Action::Begin {
             declarations,
             actions,
-            span: Span::new(self.source, start.start, end.end),
-        })
+            span: Span::new(self.source, start.start, self.current_span().start),
+        };
+        self.finish_action(action, start)
     }
 
     fn parse_expression_action(&mut self) -> Result<Action, Error> {
@@ -1400,13 +1414,13 @@ impl<'a> Parser<'a> {
             self.advance();
             let value = self.parse_expr()?;
             let value_end = value.span().end;
-            self.expect_semicolon()?;
-            return Ok(Action::Assign {
+            let action = Action::Assign {
                 target,
                 op,
                 value,
                 span: Span::new(self.source, start, value_end),
-            });
+            };
+            return self.finish_action(action, Span::new(self.source, start, value_end));
         }
 
         let span = target.span();
@@ -1414,8 +1428,7 @@ impl<'a> Parser<'a> {
             Expr::Apply { .. } => target,
             _ => return Err(Error::new(span, "expected assignment or procedure call")),
         };
-        self.expect_semicolon()?;
-        Ok(Action::Call { callee, span })
+        self.finish_action(Action::Call { callee, span }, span)
     }
 
     fn assignment_operator(&self) -> Option<AssignOp> {

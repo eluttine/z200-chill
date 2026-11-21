@@ -88,7 +88,9 @@ all existing tests pass with no new special cases.
       literals.
 - [x] `CHAR` and unbounded `CHARS` modes (`CHARS(n)`, `VARYING`, and `WCHARS` remain).
 - [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
-- [ ] Action-level handlers and exception-set flow checking.
+- [x] Action-level handlers, including handlers on bracketed actions, assignment,
+      assert, and call actions.
+- [ ] Exception-set flow checking (`EXCEPTIONS` lists are parsed but not enforced).
 - [x] Implementation-defined text I/O (`WRITE`, `WRITELINE`, `READLINE`).
 - [x] `READTEXT`/`WRITETEXT` for `CHARS` locations with literal format text.
 - [ ] Text modes, associations, format conversion/editing codes, and io lists.

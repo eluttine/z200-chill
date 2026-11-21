@@ -380,6 +380,30 @@ impl Checker {
         }
     }
 
+    fn check_begin(
+        &mut self,
+        declarations: &[Declaration],
+        actions: &[Action],
+        span: Span,
+        handler: Option<&Handler>,
+    ) -> Result<(), Error> {
+        self.scopes.push(Scope::default());
+        let result = (|| {
+            self.collect_declarations(declarations)?;
+            reject_nested_procs(declarations)?;
+            self.check_initializers(declarations)?;
+            self.check_proc_bodies(declarations)?;
+            self.seed_reach_exports_at(span);
+            self.check_actions(actions)?;
+            if let Some(handler) = handler {
+                self.check_handler(handler)?;
+            }
+            Ok(())
+        })();
+        self.scopes.pop();
+        result
+    }
+
     fn check_handler(&mut self, handler: &Handler) -> Result<(), Error> {
         let mut names = HashSet::new();
         for alternative in &handler.alternatives {
@@ -1338,18 +1362,21 @@ impl Checker {
                 declarations,
                 actions,
                 span,
+            } => self.check_begin(declarations, actions, *span, None),
+            Action::Handled {
+                action, handler, ..
             } => {
-                self.scopes.push(Scope::default());
-                let result = (|| {
-                    self.collect_declarations(declarations)?;
-                    reject_nested_procs(declarations)?;
-                    self.check_initializers(declarations)?;
-                    self.check_proc_bodies(declarations)?;
-                    self.seed_reach_exports_at(*span);
-                    self.check_actions(actions)
-                })();
-                self.scopes.pop();
-                result
+                if let Action::Begin {
+                    declarations,
+                    actions,
+                    span,
+                } = action.as_ref()
+                {
+                    self.check_begin(declarations, actions, *span, Some(handler))
+                } else {
+                    self.check_action(action)?;
+                    self.check_handler(handler)
+                }
             }
             Action::Empty { .. } => Ok(()),
             Action::Cause { .. } => Ok(()),

@@ -1113,6 +1113,14 @@ fn add_nested_reaches(
                 add_nested_reaches(actions, id, true, tree, span_modes, modes)?;
                 tree.nodes[id].exports = collect_block_exports(actions, span_modes, modes)?;
             }
+            Action::Handled { action, .. } => add_nested_reaches(
+                std::slice::from_ref(action.as_ref()),
+                parent,
+                in_block,
+                tree,
+                span_modes,
+                modes,
+            )?,
             _ => {}
         }
     }
@@ -1173,6 +1181,9 @@ fn walk_nested_modules<'a>(
                 walk_nested_modules(std::slice::from_ref(action), visit)?
             }
             Action::Begin { actions, .. } => walk_nested_modules(actions, visit)?,
+            Action::Handled { action, .. } => {
+                walk_nested_modules(std::slice::from_ref(action), visit)?
+            }
             _ => {}
         }
     }

@@ -211,6 +211,13 @@ pub enum Stmt {
         actions: Vec<Stmt>,
         span: Span,
     },
+    /// An action together with its exception handler, keyed by `span` in the
+    /// body table. BEGIN blocks keep their handler keyed by the block span so the
+    /// handler runs in the block's reach.
+    Handled {
+        action: Box<Stmt>,
+        span: Span,
+    },
 }
 
 #[derive(Debug)]
@@ -518,11 +525,14 @@ impl Lowerer<'_> {
                 declarations,
                 actions,
                 span,
-            } => Ok(Stmt::Begin {
-                declarations: declarations.clone(),
-                actions: self.lower_actions(actions)?,
-                span: *span,
-            }),
+            } => {
+                self.lower_declarations(declarations)?;
+                Ok(Stmt::Begin {
+                    declarations: declarations.clone(),
+                    actions: self.lower_actions(actions)?,
+                    span: *span,
+                })
+            }
             Action::Empty { span } => Ok(Stmt::Empty { span: *span }),
             Action::Cause { name, span } => Ok(Stmt::Cause {
                 name: name.clone(),
@@ -539,6 +549,23 @@ impl Lowerer<'_> {
                     declarations: module.declarations.clone(),
                     actions: self.lower_actions(&module.actions)?,
                     span: module.span,
+                })
+            }
+            Action::Handled {
+                action,
+                handler,
+                span,
+            } => {
+                let handler_ir = self.lower_handler(handler)?;
+                let inner = self.lower_action(action)?;
+                let handler_key = match &inner {
+                    Stmt::Begin { span, .. } => *span,
+                    _ => *span,
+                };
+                self.bodies.insert_handler(handler_key, handler_ir);
+                Ok(Stmt::Handled {
+                    action: Box::new(inner),
+                    span: *span,
                 })
             }
         }

@@ -921,7 +921,7 @@ impl<'a> Interpreter<'a> {
                         self.hoist_block_children(*span, &mut scope, &mode_names)?;
                         self.seed_reach_exports(*span, &mut scope);
                         self.locals.push(scope);
-                        self.exec_stmts(actions, frame)
+                        self.exec_with_handler(*span, actions, frame)
                     })();
                     self.locals.pop();
                     return match result {
@@ -940,6 +940,13 @@ impl<'a> Interpreter<'a> {
                     span,
                 } => {
                     return self.exec_nested_module(label.as_deref(), declarations, actions, *span);
+                }
+                ir::Stmt::Handled { action, span } => {
+                    return self.exec_with_handler(
+                        *span,
+                        std::slice::from_ref(action.as_ref()),
+                        frame,
+                    );
                 }
             }
         }
@@ -2247,6 +2254,9 @@ fn walk_action_modules<'a>(actions: &'a [Action], visit: &mut impl FnMut(&'a Mod
                 walk_action_modules(std::slice::from_ref(action), visit)
             }
             Action::Begin { actions, .. } => walk_action_modules(actions, visit),
+            Action::Handled { action, .. } => {
+                walk_action_modules(std::slice::from_ref(action), visit)
+            }
             _ => {}
         }
     }
@@ -3369,6 +3379,46 @@ END;
 "#,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn action_handler_runs_in_the_begin_reach() {
+        run_source(
+            r#"
+M: MODULE
+  BEGIN
+    DCL outer INT INIT := 1;
+    BEGIN
+      DCL inner INT INIT := 2;
+      CAUSE fail;
+    END
+    ON (fail):
+      ASSERT outer + inner = 3;
+    END;
+  END;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn action_handler_only_handles_matching_exceptions() {
+        let error = run_source(
+            r#"
+M: MODULE
+  BEGIN
+    CAUSE unexpected;
+  END
+  ON (handled):
+    ASSERT TRUE;
+  END;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "E0509");
+        assert!(error.message.contains("unexpected"));
     }
 
     #[test]

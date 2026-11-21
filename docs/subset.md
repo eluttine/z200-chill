@@ -83,6 +83,8 @@ Implemented in `z200c`:
   actions) consumed by the interpreter instead of re-inferring or walking the AST;
 - multi-file `[build] sources`, package-directory dependency linking, and
   package-qualified module identity for `run`;
+- action-level handlers on bracketed actions, assignment, assert, and call actions,
+  including handlers that see `BEGIN` block declarations;
 - source-map diagnostics with stable codes, multi-error checker reporting, a parser
   nesting limit, and fixture-based parser/sema/run tests;
 - a tree-walking interpreter, so `z200c run examples/hello` executes the example and
@@ -93,7 +95,6 @@ Not implemented yet (rejected or deferred with a diagnostic):
 - interface-only external dependencies for `run`;
 - multiple `CASE` selectors and non-integer `CASE` labels;
 - `OUT` / `INOUT` / `LOC` parameter passing;
-- action-level handlers (handlers are supported on modules and procedures);
 - exception-set flow checking (`EXCEPTIONS` lists are parsed but not enforced);
 - standard `READTEXT`/`WRITETEXT` and associations (z200c instead provides the
   implementation-defined `WRITE`, `WRITELINE`, and `READLINE` below);
@@ -342,7 +343,7 @@ OD;
 `ASSERT boolean-expression;` raises the `ASSERTFAIL` exception if the expression is
 `FALSE` (§6.10). `CAUSE name;` raises a named exception (§6.12).
 
-Handlers may be appended to a module or procedure:
+Handlers may be appended to a module, procedure, or action statement (Z.200 §8.2):
 
 ```text
 END
@@ -352,11 +353,31 @@ ELSE actions
 END
 ```
 
+For action statements, the handler follows the action and precedes the terminating
+semicolon, for example:
+
+```chill
+BEGIN
+  ...
+END
+ON (OVERFLOW):
+  ...
+END;
+
+a +:= 1
+ON (OVERFLOW):
+  ...
+END;
+```
+
 - A matching `CAUSE` name runs the corresponding alternative; `ELSE` runs when no
   alternative matches.
 - `ASSERTFAIL` and `OVERFLOW` also behave as catchable exceptions.
 - Unhandled exceptions terminate the program with `E0509`.
-- Action-level handlers and static exception-flow checking are not implemented yet.
+- A handler appended to a `BEGIN` block runs in that block's reach and can see its
+  declarations. Handlers on other action statements run in the enclosing reach.
+- Static exception-set flow checking is not implemented yet; `EXCEPTIONS` lists are
+  parsed but not enforced.
 
 ---
 
