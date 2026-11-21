@@ -417,8 +417,29 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
 
     for (index, module) in program.modules.iter().enumerate() {
         if module.kind.is_body() && !spec_for_body.contains_key(&index) {
-            let reach_vars =
-                collect_child_grants(module, &module_modes[index], &module_modes_by_span)?;
+            let reach_vars = reaches
+                .get(module.span)
+                .map(|node| {
+                    let mut vars: HashMap<String, ExportKind> = HashMap::new();
+                    for (name, entries) in &node.exports {
+                        for entry in entries {
+                            if !entry.meta.prefix.is_empty() {
+                                continue;
+                            }
+                            let kind = match &entry.kind {
+                                ReachExportKind::Var(ty) => ExportKind::Var(*ty),
+                                ReachExportKind::Proc(signature) => {
+                                    ExportKind::Proc(signature.clone())
+                                }
+                                ReachExportKind::Mode(Type::Struct(id)) => ExportKind::Mode(*id),
+                                ReachExportKind::Mode(_) => continue,
+                            };
+                            vars.entry(name.clone()).or_insert(kind);
+                        }
+                    }
+                    vars
+                })
+                .unwrap_or_default();
             add_grants(
                 module,
                 &interfaces[index],
@@ -1462,7 +1483,6 @@ fn context_export<'a>(
     }
 }
 
-/// Names granted by a module's directly enclosed modules into its reach.
 fn collect_child_grants(
     module: &Module,
     mode_names: &HashMap<String, Type>,

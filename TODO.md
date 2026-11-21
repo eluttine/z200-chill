@@ -19,8 +19,10 @@ land as a small, green change.
       module-body hoisting.
 - [x] Shared module-reach exports (`exports` with owner, kind, prefix/friend metadata),
       used to seed checker and interpreter module scopes.
-- [ ] Remaining: block-level reach exports (BEGIN/IF/DO/CASE) still use dynamic
-      preloading, and some checker validation still recomputes grant sets.
+- [x] Top-level `GRANT` child-export collection now uses the tree; removed the separate
+      `collect_child_grants`/`collect_module_exports` path.
+- [ ] Remaining: block-level reach exports (`BEGIN`/`IF`/`DO`/`CASE`) still use dynamic
+      preloading, and checker grant validation still recomputes some grant sets.
 
 Acceptance for completion: no duplicate reach-matching or reach-building logic remains;
 all existing tests pass with no new special cases.

@@ -82,8 +82,9 @@ The tree also records child reaches, whether each nested module is directly hois
 from a module body, and the module-reach export metadata (owner, kind, prefix/friends).
 The interpreter's module-body hoisting follows that plan, and both the checker and
 interpreter seed module-scope exports from the tree instead of recomputing module-body
-grants. Block reaches (`BEGIN`/`IF`/`DO`/`CASE`) still use dynamic per-layer preloading;
-that is the remaining reach-tree stage.
+grants. Top-level child-export collection for `GRANT` re-exports now also reads the tree.
+Block reaches (`BEGIN`/`IF`/`DO`/`CASE`) still use dynamic per-layer preloading; that is
+the remaining reach-tree stage.
 
 ## 10.14 Text I/O (implementation-defined, resolved for now)
 
