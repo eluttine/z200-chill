@@ -172,6 +172,7 @@ pub fn analyze_with_externals(
         modes,
         module_modes,
         module_modes_by_span: info.module_modes_by_span,
+        current_nested_module_name: None,
         module_floor: 0,
         current_module: 0,
         current_package: 0,
@@ -217,10 +218,35 @@ fn map_program_error(error: program::Error) -> Error {
 }
 
 #[derive(Clone)]
-enum ReachExport {
+struct ReachExport {
+    kind: ReachKind,
+    prefix: Vec<String>,
+    friends: Option<Vec<String>>,
+}
+
+#[derive(Clone)]
+enum ReachKind {
     Var(Type),
     Proc(ProcType),
     Mode(Type),
+}
+
+impl ReachExport {
+    fn is_accessible_to(&self, package: Option<&str>, module: Option<&str>) -> bool {
+        let Some(friends) = &self.friends else {
+            return true;
+        };
+        let Some(module) = module else {
+            return false;
+        };
+        let qualified = match package {
+            Some(package) => format!("{package}!{module}"),
+            None => module.to_owned(),
+        };
+        friends
+            .iter()
+            .any(|friend| friend == module || friend == &qualified)
+    }
 }
 
 #[derive(Default, Clone)]
@@ -241,6 +267,7 @@ struct Checker {
     modes: crate::modes::ModeTable,
     module_modes: Vec<HashMap<String, Type>>,
     module_modes_by_span: HashMap<Span, HashMap<String, Type>>,
+    current_nested_module_name: Option<String>,
     /// Index of the current module's scope in `scopes`. Outer module scopes
     /// below this index are hidden except through `SEIZE`.
     module_floor: usize,
@@ -338,6 +365,8 @@ impl Checker {
         self.check_nested_contexts(module, &parent)?;
 
         let previous_floor = self.module_floor;
+        let previous_name =
+            std::mem::replace(&mut self.current_nested_module_name, module.name.clone());
         self.scopes.push(Scope::default());
         self.module_floor = self.scopes.len() - 1;
 
@@ -363,103 +392,10 @@ impl Checker {
 
         self.scopes.pop();
         self.module_floor = previous_floor;
+        self.current_nested_module_name = previous_name;
         result
     }
 
-    fn check_nested_grants(&mut self, module: &Module) -> Result<(), Error> {
-        let mut grantable: HashMap<String, ReachExport> = HashMap::new();
-        for declaration in &module.declarations {
-            match declaration {
-                Declaration::Var(list) => {
-                    for var in list {
-                        let ty = self.resolve_mode(&var.mode)?;
-                        grantable.insert(var.name.clone(), ReachExport::Var(ty));
-                    }
-                }
-                Declaration::Proc(proc_def) => {
-                    let signature =
-                        self.signature_from_params(&proc_def.params, &proc_def.result)?;
-                    grantable.insert(proc_def.name.clone(), ReachExport::Proc(signature));
-                }
-                Declaration::Mode(mode_def) => {
-                    let ty = self.resolve_mode(&ModeRef {
-                        name: mode_def.name.clone(),
-                        span: mode_def.span,
-                    })?;
-                    grantable.insert(mode_def.name.clone(), ReachExport::Mode(ty));
-                }
-                _ => {}
-            }
-        }
-        let scope = self.scopes.last().expect("scope stack is never empty");
-        for (name, exports) in &scope.exports {
-            if let [export] = exports.as_slice() {
-                grantable.insert(name.clone(), export.clone());
-            }
-        }
-
-        let mut granted = HashSet::new();
-        for declaration in &module.declarations {
-            let Declaration::Visibility(visibility) = declaration else {
-                continue;
-            };
-            if visibility.kind != VisibilityKind::Grant {
-                continue;
-            }
-            if visibility.prefix.is_some() {
-                return Err(Error::new(
-                    visibility.span,
-                    "prefix clauses in a nested GRANT are not supported yet",
-                ));
-            }
-            if !visibility.friends.is_empty() {
-                return Err(Error::new(
-                    visibility.span,
-                    "TO restrictions in a nested GRANT are not supported yet",
-                ));
-            }
-            if visibility.forbid.is_some() {
-                return Err(Error::new(
-                    visibility.span,
-                    "FORBID in a nested GRANT are not supported yet",
-                ));
-            }
-
-            let names: Vec<(String, Span)> = if visibility.all {
-                grantable
-                    .keys()
-                    .map(|name| (name.clone(), visibility.span))
-                    .collect()
-            } else {
-                visibility
-                    .names
-                    .iter()
-                    .map(|name| (name.name.clone(), name.span))
-                    .collect()
-            };
-
-            for (name, span) in names {
-                if !granted.insert(name.clone()) {
-                    return Err(Error::new(
-                        span,
-                        format!("`{name}` is granted more than once"),
-                    ));
-                }
-                if !grantable.contains_key(&name) {
-                    return Err(Error::new(
-                        span,
-                        format!(
-                            "cannot GRANT `{name}`: not a declaration or child grant in this reach"
-                        ),
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Collect the names a module grants into its parent reach, recursively
-    /// accounting for grants from directly enclosed modules.
     fn collect_module_grants(
         &mut self,
         module: &Module,
@@ -470,29 +406,30 @@ impl Checker {
             local_modes.extend(modes.clone());
         }
 
-        let mut grantable: HashMap<String, ReachExport> = HashMap::new();
+        let mut grantable: HashMap<String, ReachKind> = HashMap::new();
         for declaration in &module.declarations {
             match declaration {
                 Declaration::Var(list) => {
                     for var in list {
-                        let ty = program::resolve_mode_with(&var.mode, &local_modes)
-                            .map_err(map_program_error)?;
-                        grantable.insert(var.name.clone(), ReachExport::Var(ty));
+                        if let Ok(ty) = program::resolve_mode_with(&var.mode, &local_modes) {
+                            grantable.insert(var.name.clone(), ReachKind::Var(ty));
+                        }
                     }
                 }
                 Declaration::Proc(proc_def) => {
-                    let signature = program::signature_from_params_with(
+                    if let Ok(signature) = program::signature_from_params_with(
                         &proc_def.params,
                         &proc_def.result,
                         &local_modes,
-                    )
-                    .map_err(map_program_error)?;
-                    grantable.insert(proc_def.name.clone(), ReachExport::Proc(signature));
+                    ) {
+                        grantable.insert(proc_def.name.clone(), ReachKind::Proc(signature));
+                    }
                 }
                 Declaration::Mode(mode_def) => {
-                    if let Some(ty) = local_modes.get(&mode_def.name) {
-                        grantable.insert(mode_def.name.clone(), ReachExport::Mode(*ty));
-                    }
+                    let ty = local_modes.get(&mode_def.name).copied().ok_or_else(|| {
+                        Error::new(mode_def.span, format!("unknown mode `{}`", mode_def.name))
+                    })?;
+                    grantable.insert(mode_def.name.clone(), ReachKind::Mode(ty));
                 }
                 _ => {}
             }
@@ -503,7 +440,9 @@ impl Checker {
                 continue;
             };
             for (name, export) in self.collect_module_grants(child, &local_modes)? {
-                grantable.entry(name).or_insert(export);
+                if export.prefix.is_empty() {
+                    grantable.entry(name).or_insert(export.kind);
+                }
             }
         }
 
@@ -516,12 +455,26 @@ impl Checker {
             if visibility.kind != VisibilityKind::Grant {
                 continue;
             }
-            if visibility.prefix.is_some()
-                || !visibility.friends.is_empty()
-                || visibility.forbid.is_some()
-            {
-                continue;
+            let (old, new) =
+                program::grant_prefixes(visibility, module).map_err(map_program_error)?;
+            if !old.is_empty() {
+                return Err(Error::new(
+                    visibility.span,
+                    "non-empty old prefixes in a nested GRANT are not supported yet",
+                ));
             }
+            let friends = if visibility.friends.is_empty() {
+                None
+            } else {
+                Some(
+                    visibility
+                        .friends
+                        .iter()
+                        .map(|friend| friend.qualified())
+                        .collect::<Vec<_>>(),
+                )
+            };
+
             let names: Vec<String> = if visibility.all {
                 grantable.keys().cloned().collect()
             } else {
@@ -538,7 +491,7 @@ impl Checker {
                         format!("`{name}` is granted more than once"),
                     ));
                 }
-                let Some(export) = grantable.get(&name).cloned() else {
+                let Some(kind) = grantable.get(&name).cloned() else {
                     return Err(Error::new(
                         visibility.span,
                         format!(
@@ -546,10 +499,62 @@ impl Checker {
                         ),
                     ));
                 };
-                exports.insert(name, export);
+                if let Some(forbid) = &visibility.forbid {
+                    self.apply_nested_forbid(&name, &kind, forbid, visibility.span)?;
+                }
+                exports.insert(
+                    name,
+                    ReachExport {
+                        kind,
+                        prefix: new.clone(),
+                        friends: friends.clone(),
+                    },
+                );
             }
         }
         Ok(exports)
+    }
+
+    fn check_nested_grants(&mut self, module: &Module) -> Result<(), Error> {
+        let mut base_modes = self.module_modes[self.current_module].clone();
+        for scope in &self.scopes[self.module_floor..] {
+            for (name, ty) in &scope.modes {
+                base_modes.insert(name.clone(), *ty);
+            }
+        }
+        let _ = self.collect_module_grants(module, &base_modes)?;
+        Ok(())
+    }
+
+    fn apply_nested_forbid(
+        &mut self,
+        name: &str,
+        kind: &ReachKind,
+        forbid: &Forbid,
+        span: Span,
+    ) -> Result<(), Error> {
+        let ReachKind::Mode(Type::Struct(id)) = kind else {
+            return Err(Error::new(
+                span,
+                format!("FORBID requires a structure mode, not `{name}`"),
+            ));
+        };
+        let mode = self.modes.get_mut(*id);
+        let fields: Vec<String> = if forbid.all {
+            mode.fields.iter().map(|field| field.name.clone()).collect()
+        } else {
+            forbid.fields.clone()
+        };
+        for field in fields {
+            if !mode.fields.iter().any(|info| info.name == field) {
+                return Err(Error::new(
+                    span,
+                    format!("FORBID field `{field}` is not a field of `{name}`"),
+                ));
+            }
+            mode.forbidden.insert(field);
+        }
+        Ok(())
     }
 
     fn preload_child_grants(&mut self, actions: &[Action]) -> Result<(), Error> {
@@ -571,30 +576,16 @@ impl Checker {
         Ok(())
     }
 
-    fn single_reach_export<'e>(
-        name: &str,
-        exports: &'e [ReachExport],
-        span: Span,
-    ) -> Result<&'e ReachExport, Error> {
-        match exports {
-            [export] => Ok(export),
-            _ => Err(Error::new(
-                span,
-                format!("SEIZE `{name}` is ambiguous; several sibling modules grant it"),
-            )),
-        }
-    }
-
     fn import_reach_export(
         &mut self,
         name: &str,
         export: &ReachExport,
         span: Span,
     ) -> Result<(), Error> {
-        match export {
-            ReachExport::Var(ty) => self.declare_var(name, *ty, span),
-            ReachExport::Proc(signature) => self.declare_proc(name, signature.clone(), span),
-            ReachExport::Mode(ty) => self.declare_mode(name, *ty, span),
+        match &export.kind {
+            ReachKind::Var(ty) => self.declare_var(name, *ty, span),
+            ReachKind::Proc(signature) => self.declare_proc(name, signature.clone(), span),
+            ReachKind::Mode(ty) => self.declare_mode(name, *ty, span),
         }
     }
 
@@ -615,7 +606,11 @@ impl Checker {
                             let parent_ty = parent.vars.get(&var.name).copied().or_else(|| {
                                 parent.exports.get(&var.name).and_then(|exports| {
                                     match exports.as_slice() {
-                                        [ReachExport::Var(ty)] => Some(*ty),
+                                        [ReachExport {
+                                            kind: ReachKind::Var(ty),
+                                            prefix,
+                                            ..
+                                        }] if prefix.is_empty() => Some(*ty),
                                         _ => None,
                                     }
                                 })
@@ -657,7 +652,11 @@ impl Checker {
                         let parent_sig = parent.procs.get(&signature.name).cloned().or_else(|| {
                             parent.exports.get(&signature.name).and_then(|exports| {
                                 match exports.as_slice() {
-                                    [ReachExport::Proc(signature)] => Some(signature.clone()),
+                                    [ReachExport {
+                                        kind: ReachKind::Proc(signature),
+                                        prefix,
+                                        ..
+                                    }] if prefix.is_empty() => Some(signature.clone()),
                                     _ => None,
                                 }
                             })
@@ -701,6 +700,8 @@ impl Checker {
         declarations: &[Declaration],
         parent: &Scope,
     ) -> Result<(), Error> {
+        let package = self.current_package_name.clone();
+        let module_name = self.current_nested_module_name.clone();
         for declaration in declarations {
             let Declaration::Visibility(visibility) = declaration else {
                 continue;
@@ -708,47 +709,66 @@ impl Checker {
             if visibility.kind != VisibilityKind::Seize {
                 continue;
             }
-            if visibility.prefix.is_some() {
-                return Err(Error::new(
-                    visibility.span,
-                    "prefix clauses in a nested SEIZE are not supported yet",
-                ));
-            }
+            let old_prefix = program::seize_old_prefix(&visibility.prefix)
+                .map_err(|message| Error::new(visibility.span, message))?;
 
             if visibility.all {
-                for (name, ty) in &parent.vars {
-                    self.declare_var(name, *ty, visibility.span)?;
-                }
-                for (name, signature) in &parent.procs {
-                    self.declare_proc(name, signature.clone(), visibility.span)?;
-                }
-                for (name, ty) in &parent.modes {
-                    self.declare_mode(name, *ty, visibility.span)?;
+                if old_prefix.is_empty() {
+                    for (name, ty) in &parent.vars {
+                        self.declare_var(name, *ty, visibility.span)?;
+                    }
+                    for (name, signature) in &parent.procs {
+                        self.declare_proc(name, signature.clone(), visibility.span)?;
+                    }
+                    for (name, ty) in &parent.modes {
+                        self.declare_mode(name, *ty, visibility.span)?;
+                    }
                 }
                 for (name, exports) in &parent.exports {
-                    let export = Self::single_reach_export(name, exports, visibility.span)?;
-                    self.import_reach_export(name, export, visibility.span)?;
+                    let matching: Vec<&ReachExport> = exports
+                        .iter()
+                        .filter(|export| {
+                            export.prefix == old_prefix
+                                && export
+                                    .is_accessible_to(package.as_deref(), module_name.as_deref())
+                        })
+                        .collect();
+                    match matching.as_slice() {
+                        [] => {}
+                        [export] => self.import_reach_export(name, export, visibility.span)?,
+                        _ => {
+                            return Err(Error::new(
+                                visibility.span,
+                                format!(
+                                    "SEIZE ALL is ambiguous for `{name}`; several sibling modules grant it"
+                                ),
+                            ));
+                        }
+                    }
                 }
                 continue;
             }
 
             for name in &visibility.names {
-                if !name.prefix.is_empty() {
-                    return Err(Error::new(
-                        name.span,
-                        "qualified names in a nested SEIZE are not supported yet",
-                    ));
+                let mut source_prefix = old_prefix.to_vec();
+                source_prefix.extend(name.prefix.iter().cloned());
+
+                if source_prefix.is_empty() {
+                    if let Some(ty) = parent.vars.get(&name.name) {
+                        self.declare_var(&name.name, *ty, name.span)?;
+                        continue;
+                    }
+                    if let Some(signature) = parent.procs.get(&name.name) {
+                        self.declare_proc(&name.name, signature.clone(), name.span)?;
+                        continue;
+                    }
+                    if let Some(ty) = parent.modes.get(&name.name) {
+                        self.declare_mode(&name.name, *ty, name.span)?;
+                        continue;
+                    }
                 }
-                if let Some(ty) = parent.vars.get(&name.name) {
-                    self.declare_var(&name.name, *ty, name.span)?;
-                } else if let Some(signature) = parent.procs.get(&name.name) {
-                    self.declare_proc(&name.name, signature.clone(), name.span)?;
-                } else if let Some(ty) = parent.modes.get(&name.name) {
-                    self.declare_mode(&name.name, *ty, name.span)?;
-                } else if let Some(exports) = parent.exports.get(&name.name) {
-                    let export = Self::single_reach_export(&name.name, exports, name.span)?;
-                    self.import_reach_export(&name.name, export, name.span)?;
-                } else {
+
+                let Some(exports) = parent.exports.get(&name.name) else {
                     return Err(Error::new(
                         name.span,
                         format!(
@@ -756,6 +776,34 @@ impl Checker {
                             name.qualified()
                         ),
                     ));
+                };
+                let matching: Vec<&ReachExport> = exports
+                    .iter()
+                    .filter(|export| {
+                        export.prefix == source_prefix
+                            && export.is_accessible_to(package.as_deref(), module_name.as_deref())
+                    })
+                    .collect();
+                match matching.as_slice() {
+                    [] => {
+                        return Err(Error::new(
+                            name.span,
+                            format!(
+                                "cannot SEIZE `{}`: no such name in the enclosing reach",
+                                name.qualified()
+                            ),
+                        ));
+                    }
+                    [export] => self.import_reach_export(&name.name, export, name.span)?,
+                    _ => {
+                        return Err(Error::new(
+                            name.span,
+                            format!(
+                                "SEIZE `{}` is ambiguous; several sibling modules grant it",
+                                name.qualified()
+                            ),
+                        ));
+                    }
                 }
             }
         }
@@ -1057,8 +1105,15 @@ impl Checker {
                 return Ok(*ty);
             }
             if let Some(exports) = scope.exports.get(&mode.name) {
-                if let [ReachExport::Mode(ty)] = exports.as_slice() {
-                    return Ok(*ty);
+                if let [ReachExport {
+                    kind: ReachKind::Mode(ty),
+                    prefix,
+                    ..
+                }] = exports.as_slice()
+                {
+                    if prefix.is_empty() {
+                        return Ok(*ty);
+                    }
                 }
             }
         }
@@ -1071,8 +1126,15 @@ impl Checker {
                 return Some(*ty);
             }
             if let Some(exports) = scope.exports.get(name) {
-                if let [ReachExport::Var(ty)] = exports.as_slice() {
-                    return Some(*ty);
+                if let [ReachExport {
+                    kind: ReachKind::Var(ty),
+                    prefix,
+                    ..
+                }] = exports.as_slice()
+                {
+                    if prefix.is_empty() {
+                        return Some(*ty);
+                    }
                 }
             }
         }
@@ -1085,8 +1147,15 @@ impl Checker {
                 return Some(signature.clone());
             }
             if let Some(exports) = scope.exports.get(name) {
-                if let [ReachExport::Proc(signature)] = exports.as_slice() {
-                    return Some(signature.clone());
+                if let [ReachExport {
+                    kind: ReachKind::Proc(signature),
+                    prefix,
+                    ..
+                }] = exports.as_slice()
+                {
+                    if prefix.is_empty() {
+                        return Some(signature.clone());
+                    }
                 }
             }
         }
@@ -1417,7 +1486,11 @@ impl Checker {
             ));
         };
 
-        if mode.module != self.current_module && mode.forbidden.contains(field) {
+        let in_defining_module = match &self.current_nested_module_name {
+            Some(current) => mode.module_name.as_deref() == Some(current.as_str()),
+            None => mode.module == self.current_module,
+        };
+        if !in_defining_module && mode.forbidden.contains(field) {
             return Err(Error::new(
                 span,
                 format!("field `{field}` is FORBIDden outside its defining module"),
@@ -2287,6 +2360,85 @@ END M;
         )
         .unwrap_err();
         assert!(error.message.contains("SEIZE"), "{}", error.message);
+    }
+
+    #[test]
+    fn nested_grant_prefixes_are_seizable() {
+        check_source(
+            r#"
+M: MODULE
+  A: MODULE
+    GRANT x PREFIXED P;
+    DCL x INT INIT := 1;
+  END A;
+  B: MODULE
+    SEIZE x PREFIXED P;
+    ASSERT x = 1;
+  END B;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_grant_to_friends_is_enforced() {
+        check_source(
+            r#"
+M: MODULE
+  A: MODULE
+    GRANT x TO B;
+    DCL x INT INIT := 1;
+  END A;
+  B: MODULE
+    SEIZE x;
+    ASSERT x = 1;
+  END B;
+END M;
+"#,
+        )
+        .unwrap();
+
+        let error = check_source(
+            r#"
+M: MODULE
+  A: MODULE
+    GRANT x TO B;
+    DCL x INT INIT := 1;
+  END A;
+  C: MODULE
+    SEIZE x;
+  END C;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("cannot SEIZE `x`"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn nested_grant_forbid_is_enforced() {
+        let error = check_source(
+            r#"
+M: MODULE
+  A: MODULE
+    NEWMODE S = STRUCT(x INT, hidden BOOL);
+    GRANT S FORBID (hidden);
+  END A;
+  B: MODULE
+    SEIZE S;
+    DCL s S;
+    s.hidden := TRUE;
+  END B;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("FORBIDden"), "{}", error.message);
     }
 
     #[test]

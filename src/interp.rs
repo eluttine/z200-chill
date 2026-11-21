@@ -186,6 +186,11 @@ pub fn run_checked(
         module_modes,
         module_modes_by_span: info.module_modes_by_span,
         modules_by_span: collect_modules_by_span(program),
+        package_names: program
+            .modules
+            .iter()
+            .map(|module| module.package_name.clone())
+            .collect(),
         nested_scopes: HashMap::new(),
         exprs: lowered.exprs,
         bodies: lowered.bodies,
@@ -248,10 +253,35 @@ struct ProcRef<'a> {
 }
 
 #[derive(Clone)]
-enum ReachExport<'a> {
+struct ReachExport<'a> {
+    kind: ReachKind<'a>,
+    prefix: Vec<String>,
+    friends: Option<Vec<String>>,
+}
+
+#[derive(Clone)]
+enum ReachKind<'a> {
     Var(VarCell),
     Proc(ProcRef<'a>),
     Mode(Type),
+}
+
+impl ReachExport<'_> {
+    fn is_accessible_to(&self, package: Option<&str>, module: Option<&str>) -> bool {
+        let Some(friends) = &self.friends else {
+            return true;
+        };
+        let Some(module) = module else {
+            return false;
+        };
+        let qualified = match package {
+            Some(package) => format!("{package}!{module}"),
+            None => module.to_owned(),
+        };
+        friends
+            .iter()
+            .any(|friend| friend == module || friend == &qualified)
+    }
 }
 
 #[derive(Default, Clone)]
@@ -298,6 +328,7 @@ struct Interpreter<'a> {
     module_modes: Vec<HashMap<String, Type>>,
     module_modes_by_span: HashMap<Span, HashMap<String, Type>>,
     modules_by_span: HashMap<Span, &'a Module>,
+    package_names: Vec<Option<String>>,
     /// Scopes for nested modules declared in a module body, keyed by span.
     nested_scopes: HashMap<Span, Scope<'a>>,
     exprs: ir::ExprTable,
@@ -491,7 +522,10 @@ impl<'a> Interpreter<'a> {
                         .get(&name)
                         .or_else(|| match self.modules[source].exports.get(&name) {
                             Some(exports) => match exports.as_slice() {
-                                [ReachExport::Proc(proc_ref)] => Some(proc_ref),
+                                [ReachExport {
+                                    kind: ReachKind::Proc(proc_ref),
+                                    ..
+                                }] => Some(proc_ref),
                                 _ => None,
                             },
                             None => None,
@@ -511,7 +545,10 @@ impl<'a> Interpreter<'a> {
                         .cloned()
                         .or_else(|| match self.modules[source].exports.get(&name) {
                             Some(exports) => match exports.as_slice() {
-                                [ReachExport::Var(cell)] => Some(cell.clone()),
+                                [ReachExport {
+                                    kind: ReachKind::Var(cell),
+                                    ..
+                                }] => Some(cell.clone()),
                                 _ => None,
                             },
                             None => None,
@@ -935,6 +972,15 @@ impl<'a> Interpreter<'a> {
         declarations: &[Declaration],
         parent: &Scope<'a>,
     ) -> Result<(), Error> {
+        let package = self
+            .package_names
+            .get(self.active_module)
+            .and_then(|name| name.clone());
+        let module_name = self
+            .active_scope_key
+            .and_then(|key| self.modules_by_span.get(&key))
+            .and_then(|module| module.name.clone());
+
         for declaration in declarations {
             let Declaration::Visibility(visibility) = declaration else {
                 continue;
@@ -942,48 +988,68 @@ impl<'a> Interpreter<'a> {
             if visibility.kind != VisibilityKind::Seize {
                 continue;
             }
-            if visibility.prefix.is_some() {
-                return Err(Error::new(
-                    visibility.span,
-                    "prefix clauses in a nested SEIZE are not supported yet",
-                ));
-            }
+            let old_prefix = program::seize_old_prefix(&visibility.prefix)
+                .map_err(|message| Error::new(visibility.span, message))?;
 
             if visibility.all {
-                for (name, cell) in &parent.vars {
-                    self.insert_nested_var(name, cell.clone(), visibility.span)?;
-                }
-                for (name, proc_ref) in &parent.procs {
-                    self.insert_nested_proc(name, *proc_ref, visibility.span)?;
-                }
-                for (name, ty) in &parent.modes {
-                    self.insert_nested_mode(name, *ty, visibility.span)?;
+                if old_prefix.is_empty() {
+                    for (name, cell) in &parent.vars {
+                        self.insert_nested_var(name, cell.clone(), visibility.span)?;
+                    }
+                    for (name, proc_ref) in &parent.procs {
+                        self.insert_nested_proc(name, *proc_ref, visibility.span)?;
+                    }
+                    for (name, ty) in &parent.modes {
+                        self.insert_nested_mode(name, *ty, visibility.span)?;
+                    }
                 }
                 for (name, exports) in &parent.exports {
-                    for export in exports {
-                        self.insert_reach_export(name, export.clone(), visibility.span)?;
+                    let matching: Vec<&ReachExport<'a>> = exports
+                        .iter()
+                        .filter(|export| {
+                            export.prefix == old_prefix
+                                && export
+                                    .is_accessible_to(package.as_deref(), module_name.as_deref())
+                        })
+                        .collect();
+                    match matching.as_slice() {
+                        [] => {}
+                        [export] => {
+                            self.insert_reach_export(name, (*export).clone(), visibility.span)?
+                        }
+                        _ => {
+                            return Err(Error::new(
+                                visibility.span,
+                                format!(
+                                    "SEIZE ALL is ambiguous for `{name}`; several sibling modules grant it"
+                                ),
+                            ));
+                        }
                     }
                 }
                 continue;
             }
 
             for name in &visibility.names {
-                if !name.prefix.is_empty() {
-                    return Err(Error::new(
-                        name.span,
-                        "qualified names in a nested SEIZE are not supported yet",
-                    ));
+                let mut source_prefix = old_prefix.to_vec();
+                source_prefix.extend(name.prefix.iter().cloned());
+
+                if source_prefix.is_empty() {
+                    if let Some(cell) = parent.vars.get(&name.name) {
+                        self.insert_nested_var(&name.name, cell.clone(), name.span)?;
+                        continue;
+                    }
+                    if let Some(proc_ref) = parent.procs.get(&name.name) {
+                        self.insert_nested_proc(&name.name, *proc_ref, name.span)?;
+                        continue;
+                    }
+                    if let Some(ty) = parent.modes.get(&name.name) {
+                        self.insert_nested_mode(&name.name, *ty, name.span)?;
+                        continue;
+                    }
                 }
-                if let Some(cell) = parent.vars.get(&name.name) {
-                    self.insert_nested_var(&name.name, cell.clone(), name.span)?;
-                } else if let Some(proc_ref) = parent.procs.get(&name.name) {
-                    self.insert_nested_proc(&name.name, *proc_ref, name.span)?;
-                } else if let Some(ty) = parent.modes.get(&name.name) {
-                    self.insert_nested_mode(&name.name, *ty, name.span)?;
-                } else if let Some(exports) = parent.exports.get(&name.name) {
-                    let export = single_reach_export(&name.name, exports, name.span)?;
-                    self.insert_reach_export(&name.name, export.clone(), name.span)?;
-                } else {
+
+                let Some(exports) = parent.exports.get(&name.name) else {
                     return Err(Error::new(
                         name.span,
                         format!(
@@ -991,6 +1057,36 @@ impl<'a> Interpreter<'a> {
                             name.qualified()
                         ),
                     ));
+                };
+                let matching: Vec<&ReachExport<'a>> = exports
+                    .iter()
+                    .filter(|export| {
+                        export.prefix == source_prefix
+                            && export.is_accessible_to(package.as_deref(), module_name.as_deref())
+                    })
+                    .collect();
+                match matching.as_slice() {
+                    [] => {
+                        return Err(Error::new(
+                            name.span,
+                            format!(
+                                "cannot SEIZE `{}`: no such name in the enclosing reach",
+                                name.qualified()
+                            ),
+                        ));
+                    }
+                    [export] => {
+                        self.insert_reach_export(&name.name, (*export).clone(), name.span)?
+                    }
+                    _ => {
+                        return Err(Error::new(
+                            name.span,
+                            format!(
+                                "SEIZE `{}` is ambiguous; several sibling modules grant it",
+                                name.qualified()
+                            ),
+                        ));
+                    }
                 }
             }
         }
@@ -1064,14 +1160,14 @@ impl<'a> Interpreter<'a> {
                 format!("duplicate declaration of `{name}`"),
             ));
         }
-        match export {
-            ReachExport::Var(cell) => {
+        match export.kind {
+            ReachKind::Var(cell) => {
                 scope.vars.insert(name.to_owned(), cell);
             }
-            ReachExport::Proc(proc_ref) => {
+            ReachKind::Proc(proc_ref) => {
                 scope.procs.insert(name.to_owned(), proc_ref);
             }
-            ReachExport::Mode(ty) => {
+            ReachKind::Mode(ty) => {
                 scope.modes.insert(name.to_owned(), ty);
             }
         }
@@ -1083,22 +1179,28 @@ impl<'a> Interpreter<'a> {
         declarations: &[Declaration],
         parent_is_local: bool,
     ) -> Result<(), Error> {
+        let module_name = self
+            .active_scope_key
+            .and_then(|key| self.modules_by_span.get(&key))
+            .and_then(|module| module.name.clone());
         let scope = self.locals.last().cloned().unwrap_or_default();
-        let mut grantable: HashMap<String, ReachExport<'a>> = HashMap::new();
+        let mut grantable: HashMap<String, ReachKind<'a>> = HashMap::new();
         for (name, cell) in &scope.vars {
-            grantable.insert(name.clone(), ReachExport::Var(cell.clone()));
+            grantable.insert(name.clone(), ReachKind::Var(cell.clone()));
         }
         for (name, proc_ref) in &scope.procs {
-            grantable.insert(name.clone(), ReachExport::Proc(*proc_ref));
+            grantable.insert(name.clone(), ReachKind::Proc(*proc_ref));
         }
         for (name, ty) in &scope.modes {
-            grantable.insert(name.clone(), ReachExport::Mode(*ty));
+            grantable.insert(name.clone(), ReachKind::Mode(*ty));
         }
         for (name, exports) in &scope.exports {
             if let [export] = exports.as_slice() {
-                grantable
-                    .entry(name.clone())
-                    .or_insert_with(|| export.clone());
+                if export.prefix.is_empty() {
+                    grantable
+                        .entry(name.clone())
+                        .or_insert_with(|| export.kind.clone());
+                }
             }
         }
 
@@ -1109,6 +1211,18 @@ impl<'a> Interpreter<'a> {
             if visibility.kind != VisibilityKind::Grant {
                 continue;
             }
+            let prefix = reach_grant_prefix(visibility, module_name.as_deref())?;
+            let friends = if visibility.friends.is_empty() {
+                None
+            } else {
+                Some(
+                    visibility
+                        .friends
+                        .iter()
+                        .map(|friend| friend.qualified())
+                        .collect::<Vec<_>>(),
+                )
+            };
             let names: Vec<(String, Span)> = if visibility.all {
                 grantable
                     .keys()
@@ -1123,11 +1237,16 @@ impl<'a> Interpreter<'a> {
             };
 
             for (name, span) in names {
-                let Some(export) = grantable.get(&name).cloned() else {
+                let Some(kind) = grantable.get(&name).cloned() else {
                     return Err(Error::new(
                         span,
                         format!("cannot GRANT `{name}`: not a declaration of this module"),
                     ));
+                };
+                let export = ReachExport {
+                    kind,
+                    prefix: prefix.clone(),
+                    friends: friends.clone(),
                 };
                 let parent_index = self.locals.len().checked_sub(2);
                 let parent_scope = if parent_is_local {
@@ -1704,8 +1823,15 @@ impl<'a> Interpreter<'a> {
                 return Ok(*ty);
             }
             if let Some(exports) = scope.exports.get(&mode.name) {
-                if let [ReachExport::Mode(ty)] = exports.as_slice() {
-                    return Ok(*ty);
+                if let [ReachExport {
+                    kind: ReachKind::Mode(ty),
+                    prefix,
+                    ..
+                }] = exports.as_slice()
+                {
+                    if prefix.is_empty() {
+                        return Ok(*ty);
+                    }
                 }
             }
         }
@@ -1804,8 +1930,15 @@ impl<'a> Interpreter<'a> {
                 return Some(cell.clone());
             }
             if let Some(exports) = scope.exports.get(name) {
-                if let [ReachExport::Var(cell)] = exports.as_slice() {
-                    return Some(cell.clone());
+                if let [ReachExport {
+                    kind: ReachKind::Var(cell),
+                    prefix,
+                    ..
+                }] = exports.as_slice()
+                {
+                    if prefix.is_empty() {
+                        return Some(cell.clone());
+                    }
                 }
             }
         }
@@ -1814,7 +1947,11 @@ impl<'a> Interpreter<'a> {
             return Some(cell.clone());
         }
         if let Some(exports) = module.exports.get(name) {
-            if let [ReachExport::Var(cell)] = exports.as_slice() {
+            if let [ReachExport {
+                kind: ReachKind::Var(cell),
+                ..
+            }] = exports.as_slice()
+            {
                 return Some(cell.clone());
             }
         }
@@ -1833,8 +1970,15 @@ impl<'a> Interpreter<'a> {
             return Some(*proc_ref);
         }
         if let Some(exports) = scope.exports.get(name) {
-            if let [ReachExport::Proc(proc_ref)] = exports.as_slice() {
-                return Some(*proc_ref);
+            if let [ReachExport {
+                kind: ReachKind::Proc(proc_ref),
+                prefix,
+                ..
+            }] = exports.as_slice()
+            {
+                if prefix.is_empty() {
+                    return Some(*proc_ref);
+                }
             }
         }
         None
@@ -1958,29 +2102,32 @@ fn register_hoisted_grants<'a>(
     scope: &Scope<'a>,
     parent: &mut Scope<'a>,
 ) -> Result<(), Error> {
-    register_grants(&module.declarations, scope, parent)
+    register_grants(&module.declarations, module.name.as_deref(), scope, parent)
 }
 
 fn register_grants<'a>(
     declarations: &[Declaration],
+    module_name: Option<&str>,
     scope: &Scope<'a>,
     parent: &mut Scope<'a>,
 ) -> Result<(), Error> {
-    let mut grantable: HashMap<String, ReachExport<'a>> = HashMap::new();
+    let mut grantable: HashMap<String, ReachKind<'a>> = HashMap::new();
     for (name, cell) in &scope.vars {
-        grantable.insert(name.clone(), ReachExport::Var(cell.clone()));
+        grantable.insert(name.clone(), ReachKind::Var(cell.clone()));
     }
     for (name, proc_ref) in &scope.procs {
-        grantable.insert(name.clone(), ReachExport::Proc(*proc_ref));
+        grantable.insert(name.clone(), ReachKind::Proc(*proc_ref));
     }
     for (name, ty) in &scope.modes {
-        grantable.insert(name.clone(), ReachExport::Mode(*ty));
+        grantable.insert(name.clone(), ReachKind::Mode(*ty));
     }
     for (name, exports) in &scope.exports {
         if let [export] = exports.as_slice() {
-            grantable
-                .entry(name.clone())
-                .or_insert_with(|| export.clone());
+            if export.prefix.is_empty() {
+                grantable
+                    .entry(name.clone())
+                    .or_insert_with(|| export.kind.clone());
+            }
         }
     }
 
@@ -1991,12 +2138,18 @@ fn register_grants<'a>(
         if visibility.kind != VisibilityKind::Grant {
             continue;
         }
-        if visibility.prefix.is_some()
-            || !visibility.friends.is_empty()
-            || visibility.forbid.is_some()
-        {
-            continue;
-        }
+        let prefix = reach_grant_prefix(visibility, module_name)?;
+        let friends = if visibility.friends.is_empty() {
+            None
+        } else {
+            Some(
+                visibility
+                    .friends
+                    .iter()
+                    .map(|friend| friend.qualified())
+                    .collect::<Vec<_>>(),
+            )
+        };
         let names: Vec<(String, Span)> = if visibility.all {
             grantable
                 .keys()
@@ -2010,7 +2163,7 @@ fn register_grants<'a>(
                 .collect()
         };
         for (name, span) in names {
-            let Some(export) = grantable.get(&name).cloned() else {
+            let Some(kind) = grantable.get(&name).cloned() else {
                 return Err(Error::new(
                     span,
                     format!(
@@ -2018,10 +2171,42 @@ fn register_grants<'a>(
                     ),
                 ));
             };
-            parent.exports.entry(name).or_default().push(export);
+            parent.exports.entry(name).or_default().push(ReachExport {
+                kind,
+                prefix: prefix.clone(),
+                friends: friends.clone(),
+            });
         }
     }
     Ok(())
+}
+
+fn reach_grant_prefix(
+    visibility: &crate::ast::Visibility,
+    module_name: Option<&str>,
+) -> Result<Vec<String>, Error> {
+    match &visibility.prefix {
+        None => Ok(Vec::new()),
+        Some(crate::ast::PrefixClause::Prefixed(Some(prefix))) => Ok(prefix.clone()),
+        Some(crate::ast::PrefixClause::Prefixed(None)) => module_name
+            .map(|name| vec![name.to_owned()])
+            .ok_or_else(|| {
+                Error::new(
+                    visibility.span,
+                    "GRANT ... PREFIXED without a prefix requires a named module",
+                )
+            }),
+        Some(crate::ast::PrefixClause::Rename { old, new }) => {
+            if old.is_empty() {
+                Ok(new.clone())
+            } else {
+                Err(Error::new(
+                    visibility.span,
+                    "non-empty old prefixes in a GRANT are not supported here",
+                ))
+            }
+        }
+    }
 }
 
 fn single_reach_export<'a, 'e>(
@@ -2538,6 +2723,44 @@ M: MODULE
       ASSERT x = 1;
     END B;
   FI;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_grant_prefixes_are_seizable_at_runtime() {
+        run_source(
+            r#"
+M: MODULE
+  A: MODULE
+    GRANT x PREFIXED P;
+    DCL x INT INIT := 1;
+  END A;
+  B: MODULE
+    SEIZE x PREFIXED P;
+    ASSERT x = 1;
+  END B;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_grant_to_friends_works_at_runtime() {
+        run_source(
+            r#"
+M: MODULE
+  A: MODULE
+    GRANT x TO B;
+    DCL x INT INIT := 1;
+  END A;
+  B: MODULE
+    SEIZE x;
+    ASSERT x = 1;
+  END B;
 END M;
 "#,
         )

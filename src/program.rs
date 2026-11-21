@@ -1134,14 +1134,17 @@ fn collect_module_exports(
         match declaration {
             Declaration::Var(list) => {
                 for var in list {
-                    let ty = resolve_mode_with(&var.mode, mode_names)?;
-                    grantable.insert(var.name.clone(), ExportKind::Var(ty));
+                    if let Ok(ty) = resolve_mode_with(&var.mode, mode_names) {
+                        grantable.insert(var.name.clone(), ExportKind::Var(ty));
+                    }
                 }
             }
             Declaration::Proc(proc_def) => {
-                let signature =
-                    signature_from_params_with(&proc_def.params, &proc_def.result, mode_names)?;
-                grantable.insert(proc_def.name.clone(), ExportKind::Proc(signature));
+                if let Ok(signature) =
+                    signature_from_params_with(&proc_def.params, &proc_def.result, mode_names)
+                {
+                    grantable.insert(proc_def.name.clone(), ExportKind::Proc(signature));
+                }
             }
             Declaration::Mode(mode_def) => {
                 if let Some(modes) = span_modes.get(&module.span) {
@@ -1252,7 +1255,7 @@ pub fn seize_name(
     ))
 }
 
-fn grant_prefixes(
+pub(crate) fn grant_prefixes(
     visibility: &crate::ast::Visibility,
     module: &Module,
 ) -> Result<(Vec<String>, Vec<String>), Error> {

@@ -70,7 +70,8 @@ Implemented in `z200c`:
   reach; siblings and parents can seize/re-grant those grants, action blocks (`BEGIN`,
   `IF`, `CASE`, `DO`) form their own reaches, and declarations are hoisted so runtime
   visibility is order-independent; nested modules may define modes and procedures and
-  grant/re-grant them (see [contexts.md](contexts.md));
+  grant/re-grant them with `PREFIXED`/`TO`/`FORBID` (see
+  [contexts.md](contexts.md));
 - `z200c grant`, which writes a TOML grant file describing the package interface and
   (optionally) its source package directory;
 - loading dependency grant files from `[dependencies]` for static `SEIZE` resolution in

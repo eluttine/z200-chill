@@ -104,7 +104,7 @@ Implemented:
   not escape;
 - nested modules can define modes and procedures;
 - `GRANT` of a nested module's own variables, procedures, and modes into its parent
-  reach;
+  reach, including `PREFIXED`, `TO`, and `FORBID` clauses;
 - sibling modules can `SEIZE` those grants (visibility is checked independently of
   textual order; duplicate names are ambiguous at the `SEIZE`);
 - the parent reach itself can use a child's grant directly, and a nested parent can use
@@ -131,8 +131,7 @@ Action blocks get their own reach:
 
 Not implemented yet:
 
-- prefix clauses, `TO`, or `FORBID` in a nested `GRANT`;
-- re-granting a prefixed nested grant upward;
+- re-granting a prefixed/`TO`/`FORBID` nested grant upward;
 - prefix clauses or qualified names in a nested `SEIZE`;
 - procedure and mode definitions inside nested modules;
 - nested spec modules and regions.
@@ -158,8 +157,8 @@ Done: `Action::Module`, parser/AST support, nested execution, parent-reach `SEIZ
 grants entering the parent reach, parent re-grants, direct use of child grants, and
 hoisting of direct nested module declarations.
 
-Still to do: nested `GRANT` prefix/`TO`/`FORBID` clauses, nested spec modules/regions,
-and context visibility statements.
+Still to do: context visibility statements, nested spec modules/regions, and remote
+pieces.
 
 ### Stage 2 — finish quasi declarations
 
