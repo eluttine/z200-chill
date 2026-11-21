@@ -1510,9 +1510,7 @@ impl<'a> Interpreter<'a> {
                         std::io::stdin()
                             .read_line(&mut line)
                             .map_err(|error| Error::new(*span, error.to_string()))?;
-                        let line = line
-                            .trim_end_matches(|ch| ch == '\n' || ch == '\r')
-                            .to_owned();
+                        let line = line.trim_end_matches(['\n', '\r']).to_owned();
                         Ok(Value::String(line))
                     }
                 }
