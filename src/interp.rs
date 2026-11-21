@@ -1994,11 +1994,11 @@ impl<'a> Interpreter<'a> {
                 span: mode.span,
             };
             let base = self.resolve_mode(&element_mode)?;
-            let Some(element) = base.scalar() else {
+            let Some(element) = crate::types::ArrayElement::from_type(base) else {
                 return Err(Error::new(
                     mode.span,
                     format!(
-                        "array elements must be scalar modes, found {}",
+                        "array elements must be scalar or structure modes, found {}",
                         base.describe()
                     ),
                 ));
@@ -2064,7 +2064,20 @@ impl<'a> Interpreter<'a> {
     fn read_target(&mut self, target: &ir::AssignTarget, span: Span) -> Result<Value, Error> {
         match target {
             ir::AssignTarget::Var(name) => self.read_var(name, span),
-            ir::AssignTarget::Field { root, path, .. } => self.read_field_path(root, path, span),
+            ir::AssignTarget::Field {
+                root, index, path, ..
+            } => {
+                let value = match index {
+                    Some(index) => {
+                        let value = self.read_var(root, span)?;
+                        let index_value = self.eval_ir(index)?;
+                        let (index, _) = self.expect_int(index_value, index.span())?;
+                        read_array_element(value, index, span)?
+                    }
+                    None => self.read_var(root, span)?,
+                };
+                read_path(value, path, span)
+            }
             ir::AssignTarget::Index { name, index, .. } => {
                 let value = self.read_var(name, span)?;
                 let index_value = self.eval_ir(index)?;
@@ -2072,19 +2085,6 @@ impl<'a> Interpreter<'a> {
                 read_array_element(value, index, span)
             }
         }
-    }
-
-    fn read_field_path(&self, root: &str, path: &[String], span: Span) -> Result<Value, Error> {
-        let cell = self
-            .find_var_cell(root)
-            .ok_or_else(|| Error::new(span, format!("unknown variable `{root}`")))?;
-        let value = match &cell.borrow().value {
-            Value::Undefined => {
-                return Err(Error::new(span, format!("use of undefined value `{root}`")));
-            }
-            value => value.clone(),
-        };
-        read_path(value, path, span)
     }
 
     fn assign_target(
@@ -2095,13 +2095,30 @@ impl<'a> Interpreter<'a> {
     ) -> Result<(), Error> {
         match target {
             ir::AssignTarget::Var(name) => self.assign_var(name, value, span),
-            ir::AssignTarget::Field { root, path, ty } => {
+            ir::AssignTarget::Field {
+                root,
+                index,
+                path,
+                ty,
+            } => {
                 let value = self.convert(value, *ty, span)?;
+                let index = match index {
+                    Some(index) => {
+                        let index_value = self.eval_ir(index)?;
+                        let (index, _) = self.expect_int(index_value, index.span())?;
+                        Some(index)
+                    }
+                    None => None,
+                };
                 let cell = self
                     .find_var_cell(root)
                     .ok_or_else(|| Error::new(span, format!("unknown variable `{root}`")))?;
                 let mut var = cell.borrow_mut();
-                assign_path(&mut var.value, path, value, span)
+                let target = match index {
+                    Some(index) => array_element_mut(&mut var.value, index, span)?,
+                    None => &mut var.value,
+                };
+                assign_path(target, path, value, span)
             }
             ir::AssignTarget::Index { name, index, ty } => {
                 let value = self.convert(value, *ty, span)?;
@@ -2337,6 +2354,20 @@ fn read_array_element(value: Value, index: i128, span: Span) -> Result<Value, Er
     }
 }
 
+fn array_element_mut(value: &mut Value, index: i128, span: Span) -> Result<&mut Value, Error> {
+    let Value::Array { low, values } = value else {
+        return Err(Error::new(span, "expected an array value"));
+    };
+    let offset = index - *low;
+    if offset < 0 || offset as usize >= values.len() {
+        return Err(Error::new(
+            span,
+            format!("array index `{index}` is out of bounds"),
+        ));
+    }
+    Ok(&mut values[offset as usize])
+}
+
 fn assign_array_element(
     value: &mut Value,
     index: i128,
@@ -2420,10 +2451,18 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
                 .map(|field| (field.name.clone(), default_value(modes, field.ty)))
                 .collect(),
         ),
-        Type::Array(array) => Value::Array {
-            low: array.low,
-            values: vec![Value::Undefined; (array.high - array.low + 1).max(0) as usize],
-        },
+        Type::Array(array) => {
+            let element = array.element.ty();
+            let value = if matches!(element, Type::Struct(_)) {
+                default_value(modes, element)
+            } else {
+                Value::Undefined
+            };
+            Value::Array {
+                low: array.low,
+                values: vec![value; (array.high - array.low + 1).max(0) as usize],
+            }
+        }
         _ => Value::Undefined,
     }
 }

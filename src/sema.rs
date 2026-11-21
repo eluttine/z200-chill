@@ -1186,11 +1186,11 @@ impl Checker {
                 span: mode.span,
             };
             let base = self.resolve_mode(&element_mode)?;
-            let Some(element) = base.scalar() else {
+            let Some(element) = crate::types::ArrayElement::from_type(base) else {
                 return Err(Error::new(
                     mode.span,
                     format!(
-                        "array elements must be scalar modes, found {}",
+                        "array elements must be scalar or structure modes, found {}",
                         base.describe()
                     ),
                 ));
@@ -1543,16 +1543,18 @@ impl Checker {
     fn location_type(&mut self, target: &Expr) -> Result<Type, Error> {
         match target {
             Expr::Field { base, field, span } => {
-                let Some(root) = field_root(target) else {
+                if let Some(root) = field_root(target) {
+                    if self.is_readonly(root) {
+                        return Err(Error::new(
+                            *span,
+                            format!("`{root}` is a loop counter and is not a location"),
+                        ));
+                    }
+                }
+                if !self.is_field_location(target) {
                     return Err(Error::new(
                         *span,
-                        "assignment target must be a variable or a field of a variable",
-                    ));
-                };
-                if self.is_readonly(root) {
-                    return Err(Error::new(
-                        *span,
-                        format!("`{root}` is a loop counter and is not a location"),
+                        "assignment target must be a variable, array element, or field of one",
                     ));
                 }
                 let ty = self.check_field(base, field, *span)?;
@@ -1582,7 +1584,7 @@ impl Checker {
                     ));
                 }
                 self.resolutions.insert(*span, ApplyResolution::ArrayIndex);
-                Ok(Type::from_scalar(array.element))
+                Ok(array.element.ty())
             }
             Expr::Name { name, span } => {
                 if self.is_readonly(name) {
@@ -1638,6 +1640,17 @@ impl Checker {
         }
 
         Ok(info.ty)
+    }
+
+    fn is_field_location(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Name { .. } => true,
+            Expr::Field { base, .. } => self.is_field_location(base),
+            Expr::Apply { name, args, .. } => {
+                args.len() == 1 && matches!(self.lookup_var(name), Some(Type::Array(_)))
+            }
+            _ => false,
+        }
     }
 
     fn is_readonly(&self, name: &str) -> bool {
@@ -1980,7 +1993,7 @@ impl Checker {
                 ));
             }
             self.resolutions.insert(span, ApplyResolution::ArrayIndex);
-            return Ok(Some(Type::from_scalar(array.element)));
+            return Ok(Some(array.element.ty()));
         }
 
         if let Some(mode) = types::resolve_mode(name) {
@@ -3260,12 +3273,12 @@ END M;
     }
 
     #[test]
-    fn array_elements_must_be_scalar() {
+    fn nested_array_elements_are_rejected() {
         let error = check_source(
             r#"
 M: MODULE
-  NEWMODE S = STRUCT(x INT);
-  DCL a ARRAY (1:2) S;
+  SYNMODE Row = ARRAY (1:2) INT;
+  DCL a ARRAY (1:2) Row;
 END M;
 "#,
         )
@@ -3275,6 +3288,19 @@ END M;
             "{}",
             error.message
         );
+    }
+
+    #[test]
+    fn arrays_of_structures_are_accepted() {
+        check_source(
+            r#"
+M: MODULE
+  NEWMODE S = STRUCT(x INT);
+  DCL a ARRAY (1:2) S;
+END M;
+"#,
+        )
+        .unwrap();
     }
 
     #[test]

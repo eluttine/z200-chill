@@ -295,15 +295,19 @@ fn parse_external_type(
             return Err(format!("invalid array bounds in `{name}`"));
         }
         let element = parse_external_type(element.trim(), definitions)?;
-        let program::ExternalType::Builtin(element) = element else {
-            return Err(format!("array element must be scalar in `{name}`"));
-        };
-        let Some(element) = element.scalar() else {
-            return Err(format!("array element must be scalar in `{name}`"));
-        };
-        return Ok(program::ExternalType::Builtin(Type::Array(
-            types::ArrayType { low, high, element },
-        )));
+        if matches!(
+            element,
+            program::ExternalType::Array { .. } | program::ExternalType::Builtin(Type::Array(_))
+        ) {
+            return Err(format!(
+                "nested array elements are not implemented in `{name}`"
+            ));
+        }
+        return Ok(program::ExternalType::Array {
+            low,
+            high,
+            element: Box::new(element),
+        });
     }
     if let Some(ty) = types::resolve_mode(name) {
         return Ok(program::ExternalType::Builtin(ty));
@@ -323,6 +327,9 @@ fn external_type_name(ty: &program::ExternalType) -> String {
     match ty {
         program::ExternalType::Builtin(ty) => type_name(*ty),
         program::ExternalType::Mode(symbol) => symbol.clone(),
+        program::ExternalType::Array { low, high, element } => {
+            format!("ARRAY({low}:{high}) {}", external_type_name(element))
+        }
     }
 }
 
@@ -339,7 +346,7 @@ fn type_name(ty: Type) -> String {
             "ARRAY({}:{}) {}",
             array.low,
             array.high,
-            type_name(Type::from_scalar(array.element))
+            type_name(array.element.ty())
         ),
         // Expression-only class; it cannot occur in a declared signature.
         Type::IntLiteral => "INT".to_owned(),
@@ -600,13 +607,43 @@ END M;
         let ty = Type::Array(types::ArrayType {
             low: -1,
             high: 2,
-            element: types::Scalar::Int(types::IntKind::Int),
+            element: types::ArrayElement::Scalar(types::Scalar::Int(types::IntKind::Int)),
         });
         let text = type_name(ty);
         assert_eq!(
             parse_external_type(&text, &std::collections::HashMap::new()).unwrap(),
-            program::ExternalType::Builtin(ty)
+            program::ExternalType::Array {
+                low: -1,
+                high: 2,
+                element: Box::new(program::ExternalType::Builtin(Type::Int(
+                    types::IntKind::Int
+                ))),
+            }
         );
+    }
+
+    #[test]
+    fn structure_array_types_round_trip() {
+        let symbol = "pkg!M!Point".to_owned();
+        let mode = GrantMode {
+            name: "Point".to_owned(),
+            module: Some("M".to_owned()),
+            package: Some("pkg".to_owned()),
+            fields: vec![GrantField {
+                name: "x".to_owned(),
+                mode: "INT".to_owned(),
+            }],
+        };
+        let mut definitions = std::collections::HashMap::new();
+        definitions.insert(symbol.clone(), &mode);
+        let ty = program::ExternalType::Array {
+            low: 0,
+            high: 1,
+            element: Box::new(program::ExternalType::Mode(symbol)),
+        };
+        let text = external_type_name(&ty);
+        assert_eq!(text, "ARRAY(0:1) pkg!M!Point");
+        assert_eq!(parse_external_type(&text, &definitions).unwrap(), ty);
     }
 
     #[test]

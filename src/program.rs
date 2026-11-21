@@ -200,6 +200,11 @@ pub fn resolve_export<'a>(
 pub enum ExternalType {
     Builtin(Type),
     Mode(String),
+    Array {
+        low: i128,
+        high: i128,
+        element: Box<ExternalType>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -525,6 +530,11 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
 pub fn portable_type(ty: Type, modes: &ModeTable) -> ExternalType {
     match ty {
         Type::Struct(id) => ExternalType::Mode(modes.get(id).symbol()),
+        Type::Array(array) => ExternalType::Array {
+            low: array.low,
+            high: array.high,
+            element: Box::new(portable_type(array.element.ty(), modes)),
+        },
         other => ExternalType::Builtin(other),
     }
 }
@@ -726,6 +736,17 @@ fn resolve_external_type(ty: &ExternalType, ids: &ExternalModeIds) -> Result<Typ
             .get(symbol)
             .map(Type::Struct)
             .ok_or_else(|| format!("external interface references unknown mode `{symbol}`")),
+        ExternalType::Array { low, high, element } => {
+            let element = resolve_external_type(element, ids)?;
+            let Some(element) = crate::types::ArrayElement::from_type(element) else {
+                return Err("array element must be a scalar or structure mode".to_owned());
+            };
+            Ok(Type::Array(crate::types::ArrayType {
+                low: *low,
+                high: *high,
+                element,
+            }))
+        }
     }
 }
 

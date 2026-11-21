@@ -38,10 +38,36 @@ pub enum Scalar {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArrayElement {
+    Scalar(Scalar),
+    Struct(ModeId),
+}
+
+impl ArrayElement {
+    pub fn from_type(ty: Type) -> Option<Self> {
+        match ty {
+            Type::Int(kind) => Some(Self::Scalar(Scalar::Int(kind))),
+            Type::Bool => Some(Self::Scalar(Scalar::Bool)),
+            Type::Char => Some(Self::Scalar(Scalar::Char)),
+            Type::String => Some(Self::Scalar(Scalar::String)),
+            Type::Struct(id) => Some(Self::Struct(id)),
+            Type::IntLiteral | Type::Array(_) => None,
+        }
+    }
+
+    pub fn ty(self) -> Type {
+        match self {
+            Self::Scalar(scalar) => Type::from_scalar(scalar),
+            Self::Struct(id) => Type::Struct(id),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ArrayType {
     pub low: i128,
     pub high: i128,
-    pub element: Scalar,
+    pub element: ArrayElement,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,7 +153,7 @@ pub fn resolve_mode_ref(
     match mode.array {
         None => Some(base),
         Some(bounds) => {
-            let element = base.scalar()?;
+            let element = ArrayElement::from_type(base)?;
             Some(Type::Array(ArrayType {
                 low: bounds.low,
                 high: bounds.high,

@@ -132,6 +132,8 @@ pub enum AssignTarget {
     Var(String),
     Field {
         root: String,
+        /// When present, the field path starts from this array element.
+        index: Option<Node>,
         path: Vec<String>,
         ty: Type,
     },
@@ -623,13 +625,22 @@ impl Lowerer<'_> {
                     .ok_or_else(|| {
                         Error::new(target.span(), "internal: field has no checked mode")
                     })?;
-                let (root, path) = flatten_field(target).ok_or_else(|| {
+                let (root, index, path) = flatten_field_location(target).ok_or_else(|| {
                     Error::new(
                         target.span(),
-                        "assignment target must be a variable or a field of a variable",
+                        "assignment target must be a variable, array element, or field of one",
                     )
                 })?;
-                Ok(AssignTarget::Field { root, path, ty })
+                let index = match index {
+                    Some(index) => Some(self.lower_expr(index)?),
+                    None => None,
+                };
+                Ok(AssignTarget::Field {
+                    root,
+                    index,
+                    path,
+                    ty,
+                })
             }
             _ => Err(Error::new(
                 target.span(),
@@ -793,14 +804,18 @@ impl Lowerer<'_> {
     }
 }
 
-/// Flatten `a.b.c` into root `a` and path `["b", "c"]`.
-fn flatten_field(expr: &AstExpr) -> Option<(String, Vec<String>)> {
+/// Flatten `a.b.c` or `a(i).b.c` into the root name, optional array index, and
+/// field path.
+fn flatten_field_location(expr: &AstExpr) -> Option<(String, Option<&AstExpr>, Vec<String>)> {
     match expr {
-        AstExpr::Name { name, .. } => Some((name.clone(), Vec::new())),
+        AstExpr::Name { name, .. } => Some((name.clone(), None, Vec::new())),
+        AstExpr::Apply { name, args, .. } if args.len() == 1 => {
+            Some((name.clone(), Some(&args[0]), Vec::new()))
+        }
         AstExpr::Field { base, field, .. } => {
-            let (root, mut path) = flatten_field(base)?;
+            let (root, index, mut path) = flatten_field_location(base)?;
             path.push(field.clone());
-            Some((root, path))
+            Some((root, index, path))
         }
         _ => None,
     }

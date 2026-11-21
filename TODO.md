@@ -84,8 +84,9 @@ all existing tests pass with no new special cases.
 
 - [x] One-dimensional scalar arrays (`ARRAY (low:high) mode`) with indexing, bounds
       checks, and whole-array assignment.
-- [ ] Array slices, nested/multidimensional arrays, arrays of structures, and array
-      literals.
+- [x] Arrays of structures, including field selection and field assignment through
+      array elements.
+- [ ] Array slices, nested/multidimensional arrays, and array literals.
 - [x] `CHAR` and unbounded `CHARS` modes (`CHARS(n)`, `VARYING`, and `WCHARS` remain).
 - [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
 - [x] Action-level handlers, including handlers on bracketed actions, assignment,
