@@ -1560,6 +1560,21 @@ impl Checker {
                 let ty = self.check_field(base, field, *span)?;
                 Ok(ty)
             }
+            Expr::ArraySlice {
+                name,
+                first,
+                last,
+                up,
+                span,
+            } => {
+                if self.is_readonly(name) {
+                    return Err(Error::new(
+                        *span,
+                        format!("`{name}` is a loop counter and is not a location"),
+                    ));
+                }
+                self.check_slice(name, first, last, *up, *span)
+            }
             Expr::Apply { name, args, span } => {
                 let Some(Type::Array(array)) = self.lookup_var(name) else {
                     return Err(Error::new(
@@ -1601,6 +1616,68 @@ impl Checker {
                 "assignment target must be a name or field",
             )),
         }
+    }
+
+    fn check_slice(
+        &mut self,
+        name: &str,
+        first: &Expr,
+        last: &Expr,
+        up: bool,
+        span: Span,
+    ) -> Result<Type, Error> {
+        let Some(Type::Array(array)) = self.lookup_var(name) else {
+            return Err(Error::new(
+                span,
+                format!("array slice requires an array, but `{name}` is not one"),
+            ));
+        };
+        let first_ty = self.check_expr(first)?;
+        let last_ty = self.check_expr(last)?;
+        if !first_ty.is_int() || !last_ty.is_int() {
+            return Err(Error::new(span, "array slice bounds must be integers"));
+        }
+        let Some(first_value) = constant_int(first) else {
+            return Err(Error::new(
+                first.span(),
+                "array slice bounds must be constant in the current subset",
+            ));
+        };
+        let Some(last_value) = constant_int(last) else {
+            return Err(Error::new(
+                last.span(),
+                "array slice bounds must be constant in the current subset",
+            ));
+        };
+        let (lower, upper) = if up {
+            if last_value < 1 {
+                return Err(Error::new(last.span(), "array slice size must be positive"));
+            }
+            let Some(upper) = first_value.checked_add(last_value - 1) else {
+                return Err(Error::new(span, "array slice bounds overflow"));
+            };
+            (first_value, upper)
+        } else {
+            (first_value, last_value)
+        };
+        if lower > upper || lower < array.low || upper > array.high {
+            return Err(Error::new(
+                span,
+                format!(
+                    "array slice `{lower}:{upper}` is outside the array bounds `{}:{}`",
+                    array.low, array.high
+                ),
+            ));
+        }
+        let count = upper - lower + 1;
+        let Some(high) = array.low.checked_add(count - 1) else {
+            return Err(Error::new(span, "array slice bounds overflow"));
+        };
+        Ok(Type::Array(crate::types::ArrayType {
+            low: array.low,
+            high,
+            element: array.element,
+        }))
     }
 
     fn check_field(&mut self, base: &Expr, field: &str, span: Span) -> Result<Type, Error> {
@@ -1769,6 +1846,13 @@ impl Checker {
                 self.check_binary_types(*op, left_ty, right_ty, *span)
             }
             Expr::Field { base, field, span } => self.check_field(base, field, *span),
+            Expr::ArraySlice {
+                name,
+                first,
+                last,
+                up,
+                span,
+            } => self.check_slice(name, first, last, *up, *span),
         }
     }
 
@@ -2219,7 +2303,7 @@ fn binary_for_assign(op: AssignOp) -> BinaryOp {
     }
 }
 
-fn constant_int(expr: &Expr) -> Option<i128> {
+pub(crate) fn constant_int(expr: &Expr) -> Option<i128> {
     match expr {
         Expr::Integer { value, .. } => Some(*value),
         Expr::Unary {

@@ -1575,6 +1575,16 @@ impl<'a> Interpreter<'a> {
                     values: lowered,
                 })
             }
+            ir::Expr::ArraySlice {
+                name,
+                offset,
+                count,
+                array,
+                span,
+            } => {
+                let value = self.read_var(name, *span)?;
+                read_array_slice(value, *offset, *count, array.low, *span)
+            }
             ir::Expr::Index {
                 name, index, span, ..
             } => {
@@ -2071,6 +2081,7 @@ impl<'a> Interpreter<'a> {
             }
             ir::AssignTarget::Field { ty, .. } => Ok(*ty),
             ir::AssignTarget::Index { ty, .. } => Ok(*ty),
+            ir::AssignTarget::Slice { ty, .. } => Ok(*ty),
         }
     }
 
@@ -2096,6 +2107,18 @@ impl<'a> Interpreter<'a> {
                 let index_value = self.eval_ir(index)?;
                 let (index, _) = self.expect_int(index_value, index.span())?;
                 read_array_element(value, index, span)
+            }
+            ir::AssignTarget::Slice {
+                name,
+                offset,
+                count,
+                ty,
+            } => {
+                let Type::Array(array) = ty else {
+                    return Err(Error::new(span, "internal: slice is not an array"));
+                };
+                let value = self.read_var(name, span)?;
+                read_array_slice(value, *offset, *count, array.low, span)
             }
         }
     }
@@ -2142,6 +2165,19 @@ impl<'a> Interpreter<'a> {
                     .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
                 let mut var = cell.borrow_mut();
                 assign_array_element(&mut var.value, index, value, span)
+            }
+            ir::AssignTarget::Slice {
+                name,
+                offset,
+                count,
+                ty,
+            } => {
+                let value = self.convert(value, *ty, span)?;
+                let cell = self
+                    .find_var_cell(name)
+                    .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+                let mut var = cell.borrow_mut();
+                assign_array_slice(&mut var.value, *offset, *count, value, span)
             }
         }
     }
@@ -2343,6 +2379,57 @@ fn declare_into_scope<'a>(
             | Declaration::Mode(_)
             | Declaration::SpecModule(_) => {}
         }
+    }
+    Ok(())
+}
+
+fn read_array_slice(
+    value: Value,
+    offset: i128,
+    count: i128,
+    low: i128,
+    span: Span,
+) -> Result<Value, Error> {
+    let Value::Array { values, .. } = value else {
+        return Err(Error::new(span, "expected an array value"));
+    };
+    if offset < 0 || count < 0 || offset + count > values.len() as i128 {
+        return Err(Error::new(span, "array slice is out of bounds"));
+    }
+    let start = offset as usize;
+    let end = (offset + count) as usize;
+    Ok(Value::Array {
+        low,
+        values: values[start..end].to_vec(),
+    })
+}
+
+fn assign_array_slice(
+    value: &mut Value,
+    offset: i128,
+    count: i128,
+    new_value: Value,
+    span: Span,
+) -> Result<(), Error> {
+    let Value::Array { values, .. } = value else {
+        return Err(Error::new(span, "expected an array value"));
+    };
+    let Value::Array {
+        values: new_values, ..
+    } = new_value
+    else {
+        return Err(Error::new(span, "expected an array value"));
+    };
+    if offset < 0
+        || count < 0
+        || offset + count > values.len() as i128
+        || new_values.len() != count as usize
+    {
+        return Err(Error::new(span, "array slice is out of bounds"));
+    }
+    let start = offset as usize;
+    for (index, item) in new_values.into_iter().enumerate() {
+        values[start + index] = item;
     }
     Ok(())
 }

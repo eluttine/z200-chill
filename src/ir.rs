@@ -92,6 +92,13 @@ pub enum Expr {
         array: crate::types::ArrayType,
         span: Span,
     },
+    ArraySlice {
+        name: String,
+        offset: i128,
+        count: i128,
+        array: crate::types::ArrayType,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -110,7 +117,8 @@ impl Expr {
             | Self::Index { span, .. }
             | Self::Builtin { span, .. }
             | Self::TextIo { span, .. }
-            | Self::ArrayLiteral { span, .. } => *span,
+            | Self::ArrayLiteral { span, .. }
+            | Self::ArraySlice { span, .. } => *span,
         }
     }
 
@@ -126,7 +134,9 @@ impl Expr {
             | Self::Binary { ty, .. }
             | Self::Field { ty, .. }
             | Self::Index { ty, .. } => Some(*ty),
-            Self::ArrayLiteral { array, .. } => Some(Type::Array(*array)),
+            Self::ArrayLiteral { array, .. } | Self::ArraySlice { array, .. } => {
+                Some(Type::Array(*array))
+            }
             Self::Call { ty, .. } | Self::Builtin { ty, .. } => *ty,
             Self::TextIo { .. } => None,
         }
@@ -147,6 +157,12 @@ pub enum AssignTarget {
     Index {
         name: String,
         index: Node,
+        ty: Type,
+    },
+    Slice {
+        name: String,
+        offset: i128,
+        count: i128,
         ty: Type,
     },
 }
@@ -649,6 +665,42 @@ impl Lowerer<'_> {
                     ty,
                 })
             }
+            AstExpr::ArraySlice {
+                name,
+                first,
+                last,
+                up,
+                span,
+            } => {
+                let ty = self
+                    .check
+                    .types
+                    .get(span)
+                    .copied()
+                    .ok_or_else(|| Error::new(*span, "internal: slice has no checked mode"))?;
+                let Type::Array(array) = ty else {
+                    return Err(Error::new(*span, "internal: slice is not an array"));
+                };
+                let first_value = crate::sema::constant_int(first).ok_or_else(|| {
+                    Error::new(first.span(), "array slice bounds must be constant")
+                })?;
+                let last_value = crate::sema::constant_int(last).ok_or_else(|| {
+                    Error::new(last.span(), "array slice bounds must be constant")
+                })?;
+                let upper = if *up {
+                    first_value
+                        .checked_add(last_value - 1)
+                        .ok_or_else(|| Error::new(*span, "array slice bounds overflow"))?
+                } else {
+                    last_value
+                };
+                Ok(AssignTarget::Slice {
+                    name: name.clone(),
+                    offset: first_value - array.low,
+                    count: upper - first_value + 1,
+                    ty,
+                })
+            }
             _ => Err(Error::new(
                 target.span(),
                 "assignment target must be a variable or a field of a variable",
@@ -798,6 +850,41 @@ impl Lowerer<'_> {
                 })
             }
             AstExpr::Apply { .. } => unreachable!("handled above"),
+            AstExpr::ArraySlice {
+                name,
+                first,
+                last,
+                up,
+                span: slice_span,
+            } => {
+                let Type::Array(array) =
+                    self.check.types.get(slice_span).copied().ok_or_else(|| {
+                        Error::new(*slice_span, "internal: slice has no checked mode")
+                    })?
+                else {
+                    return Err(Error::new(*slice_span, "internal: slice is not an array"));
+                };
+                let first_value = crate::sema::constant_int(first).ok_or_else(|| {
+                    Error::new(first.span(), "array slice bounds must be constant")
+                })?;
+                let last_value = crate::sema::constant_int(last).ok_or_else(|| {
+                    Error::new(last.span(), "array slice bounds must be constant")
+                })?;
+                let upper = if *up {
+                    first_value
+                        .checked_add(last_value - 1)
+                        .ok_or_else(|| Error::new(*slice_span, "array slice bounds overflow"))?
+                } else {
+                    last_value
+                };
+                Rc::new(Expr::ArraySlice {
+                    name: name.clone(),
+                    offset: first_value - array.low,
+                    count: upper - first_value + 1,
+                    array,
+                    span: *slice_span,
+                })
+            }
             AstExpr::Field { base, field, .. } => Rc::new(Expr::Field {
                 base: self.lower_expr(base)?,
                 field: field.clone(),

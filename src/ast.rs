@@ -419,6 +419,15 @@ pub enum Expr {
         values: Vec<Expr>,
         span: Span,
     },
+    /// An array slice: `a(lower : upper)` or `a(first UP size)`.
+    ArraySlice {
+        name: String,
+        first: Box<Expr>,
+        last: Box<Expr>,
+        /// True for the `UP` form, where `last` is the slice size.
+        up: bool,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -433,7 +442,8 @@ impl Expr {
             | Self::Unary { span, .. }
             | Self::Binary { span, .. }
             | Self::Field { span, .. }
-            | Self::ArrayTuple { span, .. } => *span,
+            | Self::ArrayTuple { span, .. }
+            | Self::ArraySlice { span, .. } => *span,
         }
     }
 }

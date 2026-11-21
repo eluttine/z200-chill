@@ -238,8 +238,13 @@ or `CHARS`) or a structure mode.
   `[1, 2, 3]` or `(: 1, 2, 3 :)`. The number of elements must match the target bounds,
   and each element must be assignable to the element mode. This works for assignment,
   `INIT :=`, procedure arguments, `RETURN`, `RESULT`, and array equality.
-- Not implemented yet: array slices, nested/multidimensional arrays, and labelled
-  array tuples.
+- Slices are available as values and as assignment targets:
+  `a(lower:upper)` and `a(first UP size)`. The slice keeps the original array's lower
+  bound; its upper bound is the lower bound plus the slice length minus one. Slice
+  bounds are currently required to be constant, and are checked against the source
+  bounds at compile time. Slice assignment copies elements into the source range.
+- Not implemented yet: dynamic slice bounds, nested/multidimensional arrays, and
+  labelled array tuples.
 
 ### 4.4 Runtime checks
 

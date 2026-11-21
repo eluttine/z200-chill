@@ -1563,16 +1563,43 @@ impl<'a> Parser<'a> {
                 let (name, name_span) = self.expect_identifier()?;
                 if self.at_lparen() {
                     self.advance();
-                    let mut args = Vec::new();
-                    if !self.at_rparen() {
-                        loop {
-                            args.push(self.parse_expr()?);
-                            if self.at_comma() {
-                                self.advance();
-                            } else {
-                                break;
-                            }
-                        }
+                    if self.at_rparen() {
+                        let end = self.expect_rparen()?;
+                        return Ok(Expr::Apply {
+                            name,
+                            args: Vec::new(),
+                            span: Span::new(self.source, name_span.start, end.end),
+                        });
+                    }
+                    let first = self.parse_expr()?;
+                    if self.at_colon() {
+                        self.advance();
+                        let last = self.parse_expr()?;
+                        let end = self.expect_rparen()?;
+                        return Ok(Expr::ArraySlice {
+                            name,
+                            first: Box::new(first),
+                            last: Box::new(last),
+                            up: false,
+                            span: Span::new(self.source, name_span.start, end.end),
+                        });
+                    }
+                    if self.at_keyword(Keyword::Up) {
+                        self.advance();
+                        let last = self.parse_expr()?;
+                        let end = self.expect_rparen()?;
+                        return Ok(Expr::ArraySlice {
+                            name,
+                            first: Box::new(first),
+                            last: Box::new(last),
+                            up: true,
+                            span: Span::new(self.source, name_span.start, end.end),
+                        });
+                    }
+                    let mut args = vec![first];
+                    while self.at_comma() {
+                        self.advance();
+                        args.push(self.parse_expr()?);
                     }
                     let end = self.expect_rparen()?;
                     Ok(Expr::Apply {
@@ -1747,6 +1774,10 @@ impl<'a> Parser<'a> {
 
     fn at_semicolon(&self) -> bool {
         matches!(self.kind(), Some(TokenKind::Semicolon))
+    }
+
+    fn at_colon(&self) -> bool {
+        matches!(self.kind(), Some(TokenKind::Colon))
     }
 
     fn at_assign(&self) -> bool {
