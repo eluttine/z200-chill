@@ -624,6 +624,69 @@ END Client;
 }
 
 #[test]
+fn remote_piece_must_exist() {
+    let dir = std::env::temp_dir().join(format!("z200-piece-missing-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "remote"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/main.ch"), "REMOTE \"pieces/missing.ch\";\n").unwrap();
+
+    let output = z200c().arg("check").arg(&dir).output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E0700"), "stderr: {stderr}");
+    assert!(stderr.contains("piece file not found"), "stderr: {stderr}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn remote_piece_reports_not_expanded() {
+    let dir = std::env::temp_dir().join(format!("z200-piece-present-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("pieces")).unwrap();
+    std::fs::write(dir.join("pieces/counter.ch"), "M: MODULE END M;\n").unwrap();
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "remote"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+
+[pieces]
+counter = "pieces/counter.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/main.ch"), "REMOTE counter;\n").unwrap();
+
+    let output = z200c().arg("check").arg(&dir).output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E0701"), "stderr: {stderr}");
+    assert!(stderr.contains("not expanded yet"), "stderr: {stderr}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn version_prints_package_version() {
     let output = z200c().arg("--version").output().unwrap();
     assert!(output.status.success());

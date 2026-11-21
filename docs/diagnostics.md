@@ -23,6 +23,7 @@ multi-file diagnostics do not depend on the entry file.
 | `E04xx` | checker (static semantics) |
 | `E05xx` | interpreter (runtime) |
 | `E06xx` | grant files / dependency compatibility |
+| `E07xx` | piecewise compilation / remote pieces |
 
 ### Lexer
 
@@ -77,6 +78,13 @@ multi-file diagnostics do not depend on the entry file.
 | `E0506` | call error (arity, depth, missing result) |
 | `E0507` | runtime value/mode error |
 | `E0508` | control flow or external-link error |
+
+### Piecewise compilation
+
+| Code | Meaning |
+|---|---|
+| `E0700` | generic piece/piece-designator error |
+| `E0701` | remote piece or context is not expanded yet |
 
 ### Manifest / grant files
 

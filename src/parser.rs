@@ -60,14 +60,127 @@ const MAX_NESTING_DEPTH: usize = 256;
 impl<'a> Parser<'a> {
     fn parse_program(&mut self) -> Result<Program, Error> {
         let mut modules = Vec::new();
+        let mut remotes = Vec::new();
         while !self.at_end() {
+            if self.at_context_module_remote() {
+                remotes.push(self.parse_context_module_remote()?);
+                continue;
+            }
+            if self.at_remote_unit() {
+                remotes.push(self.parse_remote_unit()?);
+                continue;
+            }
             let contexts = self.parse_context_list()?;
             modules.push(self.parse_module(contexts)?);
         }
-        if modules.is_empty() {
+        if modules.is_empty() && remotes.is_empty() {
             return Err(self.error_here("expected a module"));
         }
-        Ok(Program { modules })
+        Ok(Program { modules, remotes })
+    }
+
+    fn at_context_module_remote(&self) -> bool {
+        self.at_keyword(Keyword::Context)
+            && self.kind_at(1) == Some(&TokenKind::Keyword(Keyword::Module))
+    }
+
+    fn parse_context_module_remote(&mut self) -> Result<RemoteUnit, Error> {
+        let start = self.current_span();
+        self.expect_keyword(Keyword::Context)?;
+        self.expect_keyword(Keyword::Module)?;
+        self.expect_keyword(Keyword::Remote)?;
+        let designator = self.parse_piece_designator(true)?;
+        let end = self.expect_semicolon()?;
+        Ok(RemoteUnit {
+            kind: RemoteKind::ContextModule,
+            name: None,
+            designator,
+            span: Span::new(self.source, start.start, end.end),
+        })
+    }
+
+    fn at_remote_unit(&self) -> bool {
+        if self.at_keyword(Keyword::Remote) {
+            return true;
+        }
+        if self.at_keyword(Keyword::Spec)
+            && self.kind_at(1) == Some(&TokenKind::Keyword(Keyword::Remote))
+        {
+            return true;
+        }
+        if self.at_identifier() && self.kind_at(1) == Some(&TokenKind::Colon) {
+            match self.kind_at(2) {
+                Some(TokenKind::Keyword(Keyword::Remote)) => true,
+                Some(TokenKind::Keyword(Keyword::Spec)) => {
+                    self.kind_at(3) == Some(&TokenKind::Keyword(Keyword::Remote))
+                }
+                _ => false,
+            }
+        } else {
+            false
+        }
+    }
+
+    fn parse_remote_unit(&mut self) -> Result<RemoteUnit, Error> {
+        let start = self.current_span();
+        let name = if self.at_identifier() && self.kind_at(1) == Some(&TokenKind::Colon) {
+            let (name, _) = self.expect_identifier()?;
+            self.expect_colon()?;
+            Some(name)
+        } else {
+            None
+        };
+
+        let kind = if self.at_keyword(Keyword::Remote) {
+            self.advance();
+            if name.is_some() {
+                RemoteKind::Module
+            } else {
+                RemoteKind::ProgramUnit
+            }
+        } else if self.at_keyword(Keyword::Spec) {
+            self.advance();
+            self.expect_keyword(Keyword::Remote)?;
+            RemoteKind::SpecModule
+        } else {
+            return Err(self.error_here("expected REMOTE or SPEC REMOTE"));
+        };
+
+        let designator = self.parse_piece_designator(true)?;
+        let end = self.expect_semicolon()?;
+        Ok(RemoteUnit {
+            kind,
+            name,
+            designator,
+            span: Span::new(self.source, start.start, end.end),
+        })
+    }
+
+    fn parse_piece_designator(&mut self, allow_empty: bool) -> Result<PieceDesignator, Error> {
+        let span = self.current_span();
+        match self.kind() {
+            Some(TokenKind::String(value)) => {
+                let value = value.clone();
+                self.advance();
+                Ok(PieceDesignator {
+                    kind: PieceDesignatorKind::Literal(value),
+                    span,
+                })
+            }
+            Some(TokenKind::Identifier(name)) => {
+                let name = name.clone();
+                self.advance();
+                Ok(PieceDesignator {
+                    kind: PieceDesignatorKind::TextRef(name),
+                    span,
+                })
+            }
+            _ if allow_empty => Ok(PieceDesignator {
+                kind: PieceDesignatorKind::Empty,
+                span,
+            }),
+            _ => Err(self.expected("a piece designator")),
+        }
     }
 
     fn parse_context_list(&mut self) -> Result<Vec<Context>, Error> {
@@ -75,6 +188,12 @@ impl<'a> Parser<'a> {
         while self.at_keyword(Keyword::Context) {
             let start = self.current_span();
             self.advance();
+            let remote = if self.at_keyword(Keyword::Remote) {
+                self.advance();
+                Some(self.parse_piece_designator(true)?)
+            } else {
+                None
+            };
             let declarations = self.parse_declarations(true, true)?;
             for declaration in &declarations {
                 match declaration {
@@ -109,6 +228,7 @@ impl<'a> Parser<'a> {
             let end = self.expect_keyword(Keyword::For)?;
             contexts.push(Context {
                 declarations,
+                remote,
                 span: Span::new(self.source, start.start, end.end),
             });
         }
@@ -1841,6 +1961,48 @@ END M;
         let module = &program.modules[0];
         assert_eq!(module.contexts.len(), 1);
         assert_eq!(module.contexts[0].declarations.len(), 2);
+    }
+
+    #[test]
+    fn parses_remote_units_and_contexts() {
+        let program = parse_source(
+            r#"
+REMOTE "pieces/a.ch";
+M: REMOTE counter;
+S: SPEC REMOTE "pieces/s.ch";
+SPEC REMOTE;
+CONTEXT MODULE REMOTE "pieces/m.ch";
+CONTEXT REMOTE "pieces/c.ch"
+  DCL x INT;
+FOR
+C: MODULE
+END C;
+"#,
+        );
+
+        assert_eq!(program.remotes.len(), 5);
+        assert_eq!(program.remotes[0].kind, RemoteKind::ProgramUnit);
+        assert!(matches!(
+            program.remotes[0].designator.kind,
+            PieceDesignatorKind::Literal(ref path) if path == "pieces/a.ch"
+        ));
+        assert_eq!(program.remotes[1].kind, RemoteKind::Module);
+        assert_eq!(program.remotes[1].name.as_deref(), Some("M"));
+        assert!(matches!(
+            program.remotes[1].designator.kind,
+            PieceDesignatorKind::TextRef(ref name) if name == "counter"
+        ));
+        assert_eq!(program.remotes[2].kind, RemoteKind::SpecModule);
+        assert!(matches!(
+            program.remotes[3].designator.kind,
+            PieceDesignatorKind::Empty
+        ));
+        assert_eq!(program.remotes[4].kind, RemoteKind::ContextModule);
+
+        assert_eq!(program.modules.len(), 1);
+        let context = &program.modules[0].contexts[0];
+        assert!(context.remote.is_some());
+        assert_eq!(context.declarations.len(), 1);
     }
 
     #[test]

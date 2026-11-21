@@ -1,8 +1,10 @@
 # Piecewise compilation (design)
 
-Status: **design only, not implemented.** This covers remote pieces, piece designators,
-nested spec modules/regions, and the remaining context interactions. Regions are a
-separate prerequisite and are not implemented yet.
+Status: **Phase 0 implemented.** Remote syntax, piece designators, manifest `[pieces]`,
+and the resolver exist; remote nodes are validated and then rejected as “not expanded
+yet”. This document also designs the remaining expansion, nested spec modules/regions,
+and context interactions. Regions are a separate prerequisite and are not implemented
+yet.
 
 ## Normative model
 
@@ -221,13 +223,15 @@ Diagnostics should carry both the referencing span and the resolved piece path.
 
 ## Phased implementation
 
-### Phase 0 — Manifest and resolver
+### Phase 0 — Manifest and resolver (implemented)
 
-- Add `[pieces]` to the manifest.
-- AST `PieceDesignator`; parse `REMOTE`, `SPEC REMOTE`, `CONTEXT REMOTE`,
+- `[pieces]` text-reference table in `Chill.toml`.
+- AST `PieceDesignator`/`RemoteUnit`; parse `REMOTE`, `SPEC REMOTE`, `CONTEXT REMOTE`,
   `CONTEXT MODULE REMOTE`.
-- Resolver with literal/text-ref/empty rules, cycle detection, and tests.
-- No expansion yet; remote nodes produce a clear “not expanded” diagnostic.
+- `src/pieces.rs` resolves literal, text-reference, and empty designators; rejects
+  absolute/escaping paths; detects cycles via `resolve_checked`.
+- Loader validates that referenced pieces exist (`E0700`).
+- No expansion yet; remote nodes produce `E0701` “remote pieces are not expanded yet”.
 
 ### Phase 1 — Remote modules, specs, and program units
 

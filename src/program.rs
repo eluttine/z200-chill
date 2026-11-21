@@ -255,6 +255,23 @@ pub struct ProgramInfo {
 }
 
 pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
+    if let Some(remote) = program.remotes.first() {
+        return Err(Error::coded(
+            "E0701",
+            remote.span,
+            "remote pieces are not expanded yet",
+        ));
+    }
+    for module in &program.modules {
+        if let Some(context) = find_remote_context(module) {
+            return Err(Error::coded(
+                "E0701",
+                context.span,
+                "remote context pieces are not expanded yet",
+            ));
+        }
+    }
+
     let (mut modes, module_modes, module_modes_by_span) = build_modes(program)?;
     let interfaces: Vec<ModuleInterface> = program
         .modules
@@ -717,6 +734,24 @@ fn process_module_modes(
             span_maps,
         )
     })
+}
+
+fn find_remote_context(module: &Module) -> Option<&crate::ast::Context> {
+    if let Some(context) = module
+        .contexts
+        .iter()
+        .find(|context| context.remote.is_some())
+    {
+        return Some(context);
+    }
+    let mut found = None;
+    let _ = walk_nested_modules(&module.actions, &mut |child| {
+        if found.is_none() {
+            found = find_remote_context(child);
+        }
+        Ok(())
+    });
+    found
 }
 
 fn walk_nested_modules<'a>(

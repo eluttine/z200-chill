@@ -114,6 +114,8 @@ pub struct Manifest {
     pub package: Package,
     pub build: Build,
     pub dependencies: HashMap<String, PathBuf>,
+    /// Text-reference names for remote piece designators.
+    pub pieces: HashMap<String, PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +138,8 @@ struct RawManifest {
     build: RawBuild,
     #[serde(default)]
     dependencies: HashMap<String, String>,
+    #[serde(default)]
+    pieces: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -203,6 +207,19 @@ impl Manifest {
             dependencies.insert(name.to_owned(), PathBuf::from(path));
         }
 
+        let mut pieces = HashMap::new();
+        for (name, path) in raw.pieces {
+            let name = name.trim();
+            let path = path.trim();
+            if name.is_empty() {
+                return Err("piece text-reference name must not be empty".to_owned());
+            }
+            if path.is_empty() {
+                return Err(format!("piece `{name}` must have a path"));
+            }
+            pieces.insert(name.to_owned(), PathBuf::from(path));
+        }
+
         Ok(Self {
             package: Package {
                 name: raw.package.name.trim().to_owned(),
@@ -215,6 +232,7 @@ impl Manifest {
                 int_widths,
             },
             dependencies,
+            pieces,
         })
     }
 }

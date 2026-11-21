@@ -194,6 +194,9 @@ struct LoadedPackage {
 struct Loader {
     source_map: SourceMap,
     modules: Vec<crate::ast::Module>,
+    remotes: Vec<crate::ast::RemoteUnit>,
+    package_dirs: Vec<std::path::PathBuf>,
+    package_pieces: Vec<std::collections::HashMap<String, std::path::PathBuf>>,
     token_count: usize,
     external: Vec<program::ExternalInterface>,
     visiting: HashSet<PathBuf>,
@@ -218,6 +221,9 @@ fn load_package(target: &Path, link_grant_sources: bool) -> Result<LoadedPackage
     let mut loader = Loader {
         source_map: SourceMap::default(),
         modules: Vec::new(),
+        remotes: Vec::new(),
+        package_dirs: Vec::new(),
+        package_pieces: Vec::new(),
         token_count: 0,
         external: Vec::new(),
         visiting: HashSet::new(),
@@ -237,6 +243,7 @@ fn load_package(target: &Path, link_grant_sources: bool) -> Result<LoadedPackage
         token_count: loader.token_count,
         program: Program {
             modules: loader.modules,
+            remotes: loader.remotes,
         },
         external: loader.external,
     })
@@ -289,6 +296,8 @@ impl Loader {
         let package = self.next_package;
         self.next_package += 1;
         let package_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+        self.package_dirs.push(package_dir.to_path_buf());
+        self.package_pieces.push(manifest.pieces.clone());
 
         for (name, path) in &manifest.dependencies {
             let dependency = if path.is_absolute() {
@@ -353,10 +362,39 @@ impl Loader {
             self.source_map
                 .format_diagnostic(error.code, error.span, &error.message)
         })?;
+        self.validate_remotes(&program, path, package)?;
         for mut module in program.modules {
             module.package = package;
             module.package_name = Some(package_name.to_owned());
             self.modules.push(module);
+        }
+        self.remotes.extend(program.remotes);
+        Ok(())
+    }
+
+    fn validate_remotes(
+        &self,
+        program: &Program,
+        containing_file: &Path,
+        package: usize,
+    ) -> Result<(), String> {
+        let pieces = crate::pieces::PieceResolver::new(
+            &self.package_dirs[package],
+            &self.package_pieces[package],
+        );
+        for remote in &program.remotes {
+            pieces
+                .resolve_existing(&remote.designator, remote.name.as_deref(), containing_file)
+                .map_err(|error| format!("error[E0700]: {error}"))?;
+        }
+        for module in &program.modules {
+            for context in &module.contexts {
+                if let Some(designator) = &context.remote {
+                    pieces
+                        .resolve_existing(designator, module.name.as_deref(), containing_file)
+                        .map_err(|error| format!("error[E0700]: {error}"))?;
+                }
+            }
         }
         Ok(())
     }

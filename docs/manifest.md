@@ -14,6 +14,9 @@ int_widths = "16-32-64"
 
 [dependencies]
 lib = "../lib/target/z200c/lib.grt.toml"
+
+[pieces]
+counter = "pieces/counter.ch"
 ```
 
 ## `[package]`
@@ -37,6 +40,13 @@ lib = "../lib/target/z200c/lib.grt.toml"
 entry = "src/main.ch"
 sources = ["src/library.ch"]
 ```
+
+## `[pieces]`
+
+Text-reference names for remote piece designators (`REMOTE counter;`). Values are
+package-relative paths. Literal designators (`REMOTE "pieces/a.ch";`) do not need an
+entry; empty designators resolve to `pieces/<unit-name>.ch`. See
+[piecewise.md](piecewise.md).
 
 ## Integer width profiles
 

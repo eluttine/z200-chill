@@ -3,6 +3,37 @@ use crate::lexer::Span;
 #[derive(Debug, Clone)]
 pub struct Program {
     pub modules: Vec<Module>,
+    /// Remote program units parsed from `REMOTE`/`SPEC REMOTE`.
+    pub remotes: Vec<RemoteUnit>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PieceDesignator {
+    pub kind: PieceDesignatorKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum PieceDesignatorKind {
+    Empty,
+    Literal(String),
+    TextRef(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteKind {
+    Module,
+    SpecModule,
+    ProgramUnit,
+    ContextModule,
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoteUnit {
+    pub kind: RemoteKind,
+    pub name: Option<String>,
+    pub designator: PieceDesignator,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -23,6 +54,8 @@ pub struct Module {
 #[derive(Debug, Clone)]
 pub struct Context {
     pub declarations: Vec<Declaration>,
+    /// `CONTEXT REMOTE <designator> ... FOR`
+    pub remote: Option<PieceDesignator>,
     pub span: Span,
 }
 
