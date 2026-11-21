@@ -354,7 +354,6 @@ mod tests {
             r#"
 [package]
 name = "dup"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -397,7 +396,6 @@ END B;
             r#"
 [package]
 name = "pref"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -462,7 +460,6 @@ END A;
             r#"
 [package]
 name = "structs"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -529,7 +526,6 @@ END A;
             r#"
 [package]
 name = "regrant"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"

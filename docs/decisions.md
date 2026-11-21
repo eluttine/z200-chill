@@ -73,6 +73,15 @@ expression and statement nodes (`ir::Expr`, `ir::Stmt`) that the interpreter con
 This removes expression-level re-inference and AST action traversal from the interpreter.
 See [ir.md](ir.md).
 
+## 10.12 Manifest minimalism (resolved)
+
+`Chill.toml` is a non-normative build artifact. It is kept small: `package.name` is
+optional and defaults to the directory name, `build.entry` defaults to
+`src/main.ch`, and `build.sources` auto-discovers other `.ch` files in the entry
+directory when omitted. Package version, edition, and integer widths are not manifest
+configuration. `[dependencies]` and `[pieces]` remain because they are genuine build
+graph/piece lookup data.
+
 ## 10.11 Piecewise compilation (design)
 
 Remote pieces, piece designators, nested spec modules, and regions are a separate

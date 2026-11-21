@@ -5,7 +5,6 @@ A z200-chill package is described by a `Chill.toml` next to its sources.
 ```toml
 [package]
 name = "hello"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -18,15 +17,18 @@ counter = "pieces/counter.ch"
 
 ## `[package]`
 
-- `name` — non-empty package name.
-- `version` — non-empty package version string.
+- `name` — package name. Optional in `Chill.toml`; defaults to the package directory
+  name. Used for grant files and `package!Module!name` qualification.
 
 ## `[build]`
 
-- `entry` — the CHILL entry file. It is compiled last, after `sources`.
+- `entry` — the CHILL entry file. It is compiled last, after `sources`. Defaults to
+  `src/main.ch`.
 - `sources` — additional CHILL source files, compiled in listed order before the
-  entry. Modules from all files are siblings in the program, so `GRANT`/`SEIZE` works
-  across them.
+  entry. If omitted, every other `.ch` file in the entry file's directory is
+  discovered and compiled in sorted order. Use `sources = []` or an explicit list to
+  disable or control discovery. Modules from all files are siblings in the program,
+  so `GRANT`/`SEIZE` works across them.
 
 ```toml
 [build]

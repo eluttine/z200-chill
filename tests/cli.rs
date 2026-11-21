@@ -167,7 +167,6 @@ result = "INT"
         r#"
 [package]
 name = "client"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -230,7 +229,6 @@ mode = "INT"
         r#"
 [package]
 name = "client"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -273,7 +271,6 @@ fn check_reports_multiple_semantic_errors() {
         r#"
 [package]
 name = "multi"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -331,7 +328,6 @@ fn run_links_grant_file_with_source_metadata() {
             r#"
 [package]
 name = "client"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -395,7 +391,6 @@ fn check_resolves_qualified_grant_exports() {
             r#"
 [package]
 name = "client"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -443,7 +438,6 @@ fn duplicate_module_names_across_packages_are_allowed() {
                 r#"
 [package]
 name = "{name}"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -472,7 +466,6 @@ END Library;
         r#"
 [package]
 name = "client"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -518,7 +511,6 @@ fn runs_with_structure_mode_from_grant_file() {
         r#"
 [package]
 name = "structlib"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -557,7 +549,6 @@ END A;
             r#"
 [package]
 name = "client"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -610,6 +601,34 @@ END Client;
 }
 
 #[test]
+fn minimal_manifest_defaults_name_entry_and_sources() {
+    let dir = std::env::temp_dir().join(format!("z200-minimal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("Chill.toml"), "").unwrap();
+    std::fs::write(
+        dir.join("src/lib.ch"),
+        "Lib: MODULE\n  GRANT x;\n  DCL x INT INIT := 1;\nEND Lib;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        "Main: MODULE\n  SEIZE x;\n  ASSERT x = 1;\nEND Main;\n",
+    )
+    .unwrap();
+
+    let output = z200c().arg("run").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn remote_piece_must_exist() {
     let dir = std::env::temp_dir().join(format!("z200-piece-missing-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -619,7 +638,6 @@ fn remote_piece_must_exist() {
         r#"
 [package]
 name = "remote"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -649,7 +667,6 @@ fn remote_piece_is_expanded() {
         r#"
 [package]
 name = "remote"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -692,7 +709,6 @@ END Helper;
         r#"
 [package]
 name = "remote"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -736,7 +752,6 @@ END Counter;
         r#"
 [package]
 name = "remote"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -776,7 +791,6 @@ fn nested_spec_grants_become_virtual_grants() {
         r#"
 [package]
 name = "nested"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -824,7 +838,6 @@ fn spec_region_pairs_with_a_region_body() {
         r#"
 [package]
 name = "region"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -882,7 +895,6 @@ END R;
         r#"
 [package]
 name = "region"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -912,7 +924,6 @@ fn nested_spec_in_a_context_pairs_with_the_body_module() {
         r#"
 [package]
 name = "nested"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -959,7 +970,6 @@ fn nested_specs_are_checked_recursively() {
         r#"
 [package]
 name = "nested"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -1012,7 +1022,6 @@ fn nested_spec_interface_must_match_its_body() {
         r#"
 [package]
 name = "nested"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -1067,7 +1076,6 @@ FOR
         r#"
 [package]
 name = "remote"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -1124,7 +1132,6 @@ FOR
         r#"
 [package]
 name = "remote"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -1167,7 +1174,6 @@ fn remote_context_target_must_be_a_context_list() {
         r#"
 [package]
 name = "remote"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -1208,7 +1214,6 @@ fn remote_piece_kind_mismatch_is_reported() {
         r#"
 [package]
 name = "remote"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"

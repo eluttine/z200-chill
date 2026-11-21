@@ -40,18 +40,20 @@ pub struct Manifest {
 #[derive(Debug, Clone)]
 pub struct Package {
     pub name: String,
-    pub version: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct Build {
     pub entry: PathBuf,
-    pub sources: Vec<PathBuf>,
+    /// `None` means auto-discover `.ch` files next to the entry.
+    pub sources: Option<Vec<PathBuf>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawManifest {
+    #[serde(default)]
     package: RawPackage,
+    #[serde(default)]
     build: RawBuild,
     #[serde(default)]
     dependencies: HashMap<String, String>,
@@ -59,48 +61,75 @@ struct RawManifest {
     pieces: HashMap<String, String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct RawPackage {
-    name: String,
-    version: String,
+    #[serde(default)]
+    name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct RawBuild {
-    entry: String,
     #[serde(default)]
-    sources: Vec<String>,
+    entry: Option<String>,
+    #[serde(default)]
+    sources: Option<Vec<String>>,
 }
 
 impl Manifest {
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = fs::read_to_string(path)
             .map_err(|err| format!("cannot read manifest {}: {err}", path.display()))?;
-        Self::parse(&text).map_err(|err| format!("{}: {err}", path.display()))
+        let default_name = path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .map(str::to_owned);
+        Self::parse_with_default_name(&text, default_name.as_deref())
+            .map_err(|err| format!("{}: {err}", path.display()))
     }
 
     pub fn parse(text: &str) -> Result<Self, String> {
+        Self::parse_with_default_name(text, None)
+    }
+
+    fn parse_with_default_name(text: &str, default_name: Option<&str>) -> Result<Self, String> {
         let raw: RawManifest =
             toml::from_str(text).map_err(|err| format!("invalid TOML: {err}"))?;
 
-        if raw.package.name.trim().is_empty() {
-            return Err("package.name must not be empty".to_owned());
-        }
-        if raw.package.version.trim().is_empty() {
-            return Err("package.version must not be empty".to_owned());
-        }
-        if raw.build.entry.trim().is_empty() {
+        let name = raw
+            .package
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .or_else(|| default_name.map(str::to_owned))
+            .ok_or_else(|| "package.name must not be empty".to_owned())?;
+
+        let entry = raw
+            .build
+            .entry
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("src/main.ch");
+        if entry.is_empty() {
             return Err("build.entry must not be empty".to_owned());
         }
 
-        let mut sources = Vec::with_capacity(raw.build.sources.len());
-        for source in raw.build.sources {
-            let source = source.trim();
-            if source.is_empty() {
-                return Err("build.sources entries must not be empty".to_owned());
+        let sources = match raw.build.sources {
+            None => None,
+            Some(sources) => {
+                let mut paths = Vec::with_capacity(sources.len());
+                for source in sources {
+                    let source = source.trim();
+                    if source.is_empty() {
+                        return Err("build.sources entries must not be empty".to_owned());
+                    }
+                    paths.push(PathBuf::from(source));
+                }
+                Some(paths)
             }
-            sources.push(PathBuf::from(source));
-        }
+        };
 
         let mut dependencies = HashMap::new();
         for (name, path) in raw.dependencies {
@@ -129,12 +158,9 @@ impl Manifest {
         }
 
         Ok(Self {
-            package: Package {
-                name: raw.package.name.trim().to_owned(),
-                version: raw.package.version.trim().to_owned(),
-            },
+            package: Package { name },
             build: Build {
-                entry: PathBuf::from(raw.build.entry.trim()),
+                entry: PathBuf::from(entry),
                 sources,
             },
             dependencies,
@@ -150,7 +176,6 @@ mod tests {
     const MANIFEST: &str = r#"
 [package]
 name = "hello"
-version = "0.1.0"
 
 [build]
 entry = "src/main.ch"
@@ -172,10 +197,10 @@ entry = "src/main.ch"
         let manifest = Manifest::parse(&text).unwrap();
         assert_eq!(
             manifest.build.sources,
-            vec![
+            Some(vec![
                 PathBuf::from("src/library.ch"),
                 PathBuf::from("src/extra.ch")
-            ]
+            ])
         );
     }
 

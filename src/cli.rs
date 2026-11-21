@@ -305,8 +305,15 @@ impl Loader {
             }
         }
 
-        for source in &manifest.build.sources {
-            self.load_source(&package_dir.join(source), package, &manifest.package.name)?;
+        let source_paths = match &manifest.build.sources {
+            Some(sources) => sources
+                .iter()
+                .map(|source| package_dir.join(source))
+                .collect::<Vec<_>>(),
+            None => discover_sources(&package_dir, &manifest.build.entry)?,
+        };
+        for source in source_paths {
+            self.load_source(&source, package, &manifest.package.name)?;
         }
         self.load_source(
             &package_dir.join(&manifest.build.entry),
@@ -685,6 +692,34 @@ impl Loader {
         );
         Ok(())
     }
+}
+
+fn discover_sources(package_dir: &Path, entry: &Path) -> Result<Vec<PathBuf>, String> {
+    let entry_path = package_dir.join(entry);
+    let Some(directory) = entry_path.parent() else {
+        return Ok(Vec::new());
+    };
+    if !directory.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut sources = Vec::new();
+    for entry in std::fs::read_dir(directory)
+        .map_err(|error| format!("error[E0300]: cannot read {}: {error}", directory.display()))?
+    {
+        let path = entry
+            .map_err(|error| format!("error[E0300]: cannot read {}: {error}", directory.display()))?
+            .path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("ch") {
+            continue;
+        }
+        if path.file_name() == entry_path.file_name() && path.parent() == entry_path.parent() {
+            continue;
+        }
+        sources.push(path);
+    }
+    sources.sort();
+    Ok(sources)
 }
 
 fn assign_package(module: &mut crate::ast::Module, package: usize, package_name: &str) {
