@@ -253,10 +253,9 @@ struct ProcRef<'a> {
 }
 
 #[derive(Clone)]
-struct ReachExport<'a> {
+struct ReachBinding<'a> {
+    meta: crate::reach::ExportMeta,
     kind: ReachKind<'a>,
-    prefix: Vec<String>,
-    friends: Option<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -266,31 +265,13 @@ enum ReachKind<'a> {
     Mode(Type),
 }
 
-impl ReachExport<'_> {
-    fn is_accessible_to(&self, package: Option<&str>, module: Option<&str>) -> bool {
-        let Some(friends) = &self.friends else {
-            return true;
-        };
-        let Some(module) = module else {
-            return false;
-        };
-        let qualified = match package {
-            Some(package) => format!("{package}!{module}"),
-            None => module.to_owned(),
-        };
-        friends
-            .iter()
-            .any(|friend| friend == module || friend == &qualified)
-    }
-}
-
 #[derive(Default, Clone)]
 struct Scope<'a> {
     vars: HashMap<String, VarCell>,
     procs: HashMap<String, ProcRef<'a>>,
     modes: HashMap<String, Type>,
     /// Names granted into this reach by directly enclosed modules.
-    exports: HashMap<String, Vec<ReachExport<'a>>>,
+    exports: HashMap<String, Vec<ReachBinding<'a>>>,
     /// Whether hoisted-module `SEIZE`s have been applied.
     seizes_applied: bool,
     /// Span of the nested module that owns this scope, if any.
@@ -522,7 +503,7 @@ impl<'a> Interpreter<'a> {
                         .get(&name)
                         .or_else(|| match self.modules[source].exports.get(&name) {
                             Some(exports) => match exports.as_slice() {
-                                [ReachExport {
+                                [ReachBinding {
                                     kind: ReachKind::Proc(proc_ref),
                                     ..
                                 }] => Some(proc_ref),
@@ -545,7 +526,7 @@ impl<'a> Interpreter<'a> {
                         .cloned()
                         .or_else(|| match self.modules[source].exports.get(&name) {
                             Some(exports) => match exports.as_slice() {
-                                [ReachExport {
+                                [ReachBinding {
                                     kind: ReachKind::Var(cell),
                                     ..
                                 }] => Some(cell.clone()),
@@ -1005,18 +986,20 @@ impl<'a> Interpreter<'a> {
                     }
                 }
                 for (name, exports) in &parent.exports {
-                    let matching: Vec<&ReachExport<'a>> = exports
+                    let matching: Vec<&ReachBinding<'a>> = exports
                         .iter()
-                        .filter(|export| {
-                            export.prefix == old_prefix
-                                && export
-                                    .is_accessible_to(package.as_deref(), module_name.as_deref())
+                        .filter(|binding| {
+                            binding.meta.matches(
+                                old_prefix,
+                                package.as_deref(),
+                                module_name.as_deref(),
+                            )
                         })
                         .collect();
                     match matching.as_slice() {
                         [] => {}
                         [export] => {
-                            self.insert_reach_export(name, (*export).clone(), visibility.span)?
+                            self.insert_reach_binding(name, (*export).clone(), visibility.span)?
                         }
                         _ => {
                             return Err(Error::new(
@@ -1059,15 +1042,21 @@ impl<'a> Interpreter<'a> {
                         ),
                     ));
                 };
-                let matching: Vec<&ReachExport<'a>> = exports
-                    .iter()
-                    .filter(|export| {
-                        export.prefix == source_prefix
-                            && export.is_accessible_to(package.as_deref(), module_name.as_deref())
-                    })
-                    .collect();
-                match matching.as_slice() {
-                    [] => {
+                let selected = crate::reach::select(
+                    exports.iter().map(|binding| (&binding.meta, &binding.kind)),
+                    &source_prefix,
+                    package.as_deref(),
+                    module_name.as_deref(),
+                );
+                match selected {
+                    Ok(kind) => {
+                        let binding = ReachBinding {
+                            meta: crate::reach::ExportMeta::default(),
+                            kind: kind.clone(),
+                        };
+                        self.insert_reach_binding(&name.name, binding, name.span)?;
+                    }
+                    Err(crate::reach::SelectError::NotFound) => {
                         return Err(Error::new(
                             name.span,
                             format!(
@@ -1076,10 +1065,7 @@ impl<'a> Interpreter<'a> {
                             ),
                         ));
                     }
-                    [export] => {
-                        self.insert_reach_export(&name.name, (*export).clone(), name.span)?
-                    }
-                    _ => {
+                    Err(crate::reach::SelectError::Ambiguous) => {
                         return Err(Error::new(
                             name.span,
                             format!(
@@ -1144,10 +1130,10 @@ impl<'a> Interpreter<'a> {
         Ok(())
     }
 
-    fn insert_reach_export(
+    fn insert_reach_binding(
         &mut self,
         name: &str,
-        export: ReachExport<'a>,
+        binding: ReachBinding<'a>,
         span: Span,
     ) -> Result<(), Error> {
         let scope = self.locals.last_mut().expect("nested module scope");
@@ -1161,7 +1147,7 @@ impl<'a> Interpreter<'a> {
                 format!("duplicate declaration of `{name}`"),
             ));
         }
-        match export.kind {
+        match binding.kind {
             ReachKind::Var(cell) => {
                 scope.vars.insert(name.to_owned(), cell);
             }
@@ -1197,7 +1183,7 @@ impl<'a> Interpreter<'a> {
         }
         for (name, exports) in &scope.exports {
             if let [export] = exports.as_slice() {
-                if export.prefix.is_empty() {
+                if export.meta.prefix.is_empty() {
                     grantable
                         .entry(name.clone())
                         .or_insert_with(|| export.kind.clone());
@@ -1244,10 +1230,12 @@ impl<'a> Interpreter<'a> {
                         format!("cannot GRANT `{name}`: not a declaration of this module"),
                     ));
                 };
-                let export = ReachExport {
+                let binding = ReachBinding {
                     kind,
-                    prefix: prefix.clone(),
-                    friends: friends.clone(),
+                    meta: crate::reach::ExportMeta {
+                        prefix: prefix.clone(),
+                        friends: friends.clone(),
+                    },
                 };
                 let parent_index = self.locals.len().checked_sub(2);
                 let parent_scope = if parent_is_local {
@@ -1260,7 +1248,7 @@ impl<'a> Interpreter<'a> {
                     .exports
                     .entry(name.clone())
                     .or_default()
-                    .push(export);
+                    .push(binding);
             }
         }
         Ok(())
@@ -1824,13 +1812,13 @@ impl<'a> Interpreter<'a> {
                 return Ok(*ty);
             }
             if let Some(exports) = scope.exports.get(&mode.name) {
-                if let [ReachExport {
+                if let [ReachBinding {
                     kind: ReachKind::Mode(ty),
-                    prefix,
+                    meta,
                     ..
                 }] = exports.as_slice()
                 {
-                    if prefix.is_empty() {
+                    if meta.prefix.is_empty() {
                         return Ok(*ty);
                     }
                 }
@@ -1931,13 +1919,13 @@ impl<'a> Interpreter<'a> {
                 return Some(cell.clone());
             }
             if let Some(exports) = scope.exports.get(name) {
-                if let [ReachExport {
+                if let [ReachBinding {
                     kind: ReachKind::Var(cell),
-                    prefix,
+                    meta,
                     ..
                 }] = exports.as_slice()
                 {
-                    if prefix.is_empty() {
+                    if meta.prefix.is_empty() {
                         return Some(cell.clone());
                     }
                 }
@@ -1948,7 +1936,7 @@ impl<'a> Interpreter<'a> {
             return Some(cell.clone());
         }
         if let Some(exports) = module.exports.get(name) {
-            if let [ReachExport {
+            if let [ReachBinding {
                 kind: ReachKind::Var(cell),
                 ..
             }] = exports.as_slice()
@@ -1971,13 +1959,13 @@ impl<'a> Interpreter<'a> {
             return Some(*proc_ref);
         }
         if let Some(exports) = scope.exports.get(name) {
-            if let [ReachExport {
+            if let [ReachBinding {
                 kind: ReachKind::Proc(proc_ref),
-                prefix,
+                meta,
                 ..
             }] = exports.as_slice()
             {
-                if prefix.is_empty() {
+                if meta.prefix.is_empty() {
                     return Some(*proc_ref);
                 }
             }
@@ -2127,7 +2115,7 @@ fn register_grants<'a>(
     }
     for (name, exports) in &scope.exports {
         if let [export] = exports.as_slice() {
-            if export.prefix.is_empty() {
+            if export.meta.prefix.is_empty() {
                 grantable
                     .entry(name.clone())
                     .or_insert_with(|| export.kind.clone());
@@ -2175,10 +2163,12 @@ fn register_grants<'a>(
                     ),
                 ));
             };
-            parent.exports.entry(name).or_default().push(ReachExport {
+            parent.exports.entry(name).or_default().push(ReachBinding {
                 kind,
-                prefix: prefix.clone(),
-                friends: friends.clone(),
+                meta: crate::reach::ExportMeta {
+                    prefix: prefix.clone(),
+                    friends: friends.clone(),
+                },
             });
         }
     }

@@ -10,6 +10,7 @@ pub mod modes;
 pub mod parser;
 pub mod pieces;
 pub mod program;
+pub mod reach;
 pub mod sema;
 pub mod source;
 pub mod types;
