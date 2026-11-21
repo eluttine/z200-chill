@@ -114,9 +114,9 @@ all existing tests pass with no new special cases.
       `ISASSOCIATED`, `CREATE`, `DELETE`, `CONNECT`, `DISCONNECT`, `READRECORD`, and
       `WRITERECORD` over sequential line records.
 - [x] Parenthesized text-format clauses with repetition.
-- [ ] Advanced text-format clauses (variable/fractional/exponent widths, I/O control
-      clauses) and the remaining association attributes/modify parameters/indexed
-      access.
+- [x] Variable format widths (`V`) for conversions and editing clauses.
+- [ ] Fractional/exponent widths, `%F`, I/O control clauses, and the remaining
+      association attributes/modify parameters/indexed access.
 - [ ] Processes, signals, and timers.
 - [ ] Sets/powersets, moreta modes, templates.
 

@@ -27,7 +27,7 @@ pub fn lookup(name: &str) -> Option<Builtin> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConversionCode {
     Binary,
     Octal,
@@ -35,10 +35,16 @@ pub enum ConversionCode {
     Default,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClauseWidth {
+    Fixed(usize),
+    Variable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conversion {
     pub code: ConversionCode,
-    pub width: usize,
+    pub width: ClauseWidth,
     pub left: bool,
     pub overflow: bool,
     pub pad: char,
@@ -55,7 +61,7 @@ pub enum EditingCode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Editing {
     pub code: EditingCode,
-    pub width: usize,
+    pub width: ClauseWidth,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,21 +154,25 @@ pub fn parse_format(text: &str) -> Result<Vec<FormatOp>, String> {
                         _ => break,
                     }
                 }
-                if index < chars.len() && chars[index] == 'V' {
-                    return Err("variable format widths are not implemented yet".to_owned());
-                }
-                let width_start = index;
-                while index < chars.len() && chars[index].is_ascii_digit() {
+                let width = if index < chars.len() && chars[index] == 'V' {
                     index += 1;
-                }
-                let width = if index == width_start {
-                    0
+                    ClauseWidth::Variable
                 } else {
-                    chars[width_start..index]
-                        .iter()
-                        .collect::<String>()
-                        .parse::<usize>()
-                        .map_err(|_| "invalid format width".to_owned())?
+                    let width_start = index;
+                    while index < chars.len() && chars[index].is_ascii_digit() {
+                        index += 1;
+                    }
+                    if index == width_start {
+                        ClauseWidth::Fixed(0)
+                    } else {
+                        ClauseWidth::Fixed(
+                            chars[width_start..index]
+                                .iter()
+                                .collect::<String>()
+                                .parse::<usize>()
+                                .map_err(|_| "invalid format width".to_owned())?,
+                        )
+                    }
                 };
                 if index + 1 < chars.len()
                     && matches!(chars[index], '.' | ':')
@@ -191,22 +201,29 @@ pub fn parse_format(text: &str) -> Result<Vec<FormatOp>, String> {
                     '<' => EditingCode::SkipLeft,
                     _ => EditingCode::Tab,
                 };
-                let width_start = index;
-                while index < chars.len() && chars[index].is_ascii_digit() {
+                let width = if index < chars.len() && chars[index] == 'V' {
                     index += 1;
-                }
-                let width = if index == width_start {
-                    if matches!(code, EditingCode::Tab) {
-                        0
-                    } else {
-                        1
-                    }
+                    ClauseWidth::Variable
                 } else {
-                    chars[width_start..index]
-                        .iter()
-                        .collect::<String>()
-                        .parse::<usize>()
-                        .map_err(|_| "invalid format width".to_owned())?
+                    let width_start = index;
+                    while index < chars.len() && chars[index].is_ascii_digit() {
+                        index += 1;
+                    }
+                    if index == width_start {
+                        if matches!(code, EditingCode::Tab) {
+                            ClauseWidth::Fixed(0)
+                        } else {
+                            ClauseWidth::Fixed(1)
+                        }
+                    } else {
+                        ClauseWidth::Fixed(
+                            chars[width_start..index]
+                                .iter()
+                                .collect::<String>()
+                                .parse::<usize>()
+                                .map_err(|_| "invalid format width".to_owned())?,
+                        )
+                    }
                 };
                 let editing = Editing { code, width };
                 for _ in 0..repetition {
@@ -263,6 +280,33 @@ pub fn parse_format(text: &str) -> Result<Vec<FormatOp>, String> {
     }
     flush(&mut literal, &mut ops);
     Ok(ops)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatItem {
+    Conversion(ConversionCode),
+    Width,
+}
+
+pub fn format_items(ops: &[FormatOp]) -> Vec<FormatItem> {
+    let mut items = Vec::new();
+    for op in ops {
+        match op {
+            FormatOp::Text(_) => {}
+            FormatOp::Convert(conversion) => {
+                if conversion.width == ClauseWidth::Variable {
+                    items.push(FormatItem::Width);
+                }
+                items.push(FormatItem::Conversion(conversion.code));
+            }
+            FormatOp::Edit(editing) => {
+                if editing.width == ClauseWidth::Variable {
+                    items.push(FormatItem::Width);
+                }
+            }
+        }
+    }
+    items
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

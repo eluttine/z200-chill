@@ -443,15 +443,19 @@ text**:
   - conversions `%B` (binary), `%O` (octal), `%H` (hexadecimal), and `%C` (default);
   - conversion qualifiers `L` (left justification), `E` (overflow `*`), and
     `P<char>` (padding character);
-  - fixed clause widths such as `%C5`, and repetition factors such as `%3C`;
+  - fixed clause widths such as `%C5`, variable widths `%CV` / `%XV`, and repetition
+    factors such as `%3C`;
   - editing clauses `%X` (space), `%>` (skip right), `%<` (skip left), and `%T`
     (tabulate), with optional widths;
   - `%%` for a literal percent and ordinary format text;
-  - io lists after the format argument, one value/location per conversion.
+  - io lists after the format argument. Each conversion takes one value/location
+    (or a width value first when its width is variable).
 - `READTEXT` io list elements are locations; `WRITETEXT` io list elements are values.
 - Parenthesized clauses are supported, e.g. `%2(%C:%C %)`.
-- Not implemented yet: variable widths (`V`), fractional/exponent widths, `%F`
-  scientific conversion, and I/O control clauses (`%/`, `%+`, etc.).
+- Variable widths are taken from the io list in format order; for example
+  `WRITETEXT(s, "%CV", 5, 42)` uses width 5 and value 42.
+- Not implemented yet: fractional/exponent widths, `%F` scientific conversion, and
+  I/O control clauses (`%/`, `%+`, etc.).
 - Text locations must have a varying string mode (`CHARS` or `CHARS(n) VARYING`).
 
 ### 5.6 Text modes

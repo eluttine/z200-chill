@@ -967,6 +967,30 @@ impl<'a> Interpreter<'a> {
         Ok(Flow::Normal)
     }
 
+    fn resolve_text_width(
+        &mut self,
+        width: crate::builtins::ClauseWidth,
+        io: &[ir::TextIoArg],
+        io_index: &mut usize,
+        span: Span,
+    ) -> Result<usize, Error> {
+        match width {
+            crate::builtins::ClauseWidth::Fixed(width) => Ok(width),
+            crate::builtins::ClauseWidth::Variable => {
+                let Some(ir::TextIoArg::Value(argument)) = io.get(*io_index) else {
+                    return Err(textfail(span, "missing variable width value"));
+                };
+                *io_index += 1;
+                let value = self.eval_ir(argument)?;
+                let (value, _) = self.expect_int(value, argument.span())?;
+                if value < 0 {
+                    return Err(textfail(span, "negative variable width"));
+                }
+                Ok(value as usize)
+            }
+        }
+    }
+
     fn exec_association(
         &mut self,
         op: crate::builtins::AssociationOp,
@@ -1791,6 +1815,12 @@ impl<'a> Interpreter<'a> {
                                     write_text_at(&mut chars, &mut cursor, text, *span)?;
                                 }
                                 crate::builtins::FormatOp::Convert(conversion) => {
+                                    let width = self.resolve_text_width(
+                                        conversion.width,
+                                        io,
+                                        &mut io_index,
+                                        *span,
+                                    )?;
                                     let Some(crate::ir::TextIoArg::Value(argument)) =
                                         io.get(io_index)
                                     else {
@@ -1798,11 +1828,24 @@ impl<'a> Interpreter<'a> {
                                     };
                                     io_index += 1;
                                     let value = self.eval_ir(argument)?;
-                                    let representation = format_value(&value, conversion, *span)?;
+                                    let representation =
+                                        format_value(&value, conversion, width, *span)?;
                                     write_text_at(&mut chars, &mut cursor, &representation, *span)?;
                                 }
                                 crate::builtins::FormatOp::Edit(editing) => {
-                                    apply_editing_write(&mut chars, &mut cursor, editing, *span)?;
+                                    let width = self.resolve_text_width(
+                                        editing.width,
+                                        io,
+                                        &mut io_index,
+                                        *span,
+                                    )?;
+                                    apply_editing_write(
+                                        &mut chars,
+                                        &mut cursor,
+                                        editing,
+                                        width,
+                                        *span,
+                                    )?;
                                 }
                             }
                         }
@@ -1819,6 +1862,12 @@ impl<'a> Interpreter<'a> {
                                     read_text_exact(&chars, &mut cursor, text, *span)?;
                                 }
                                 crate::builtins::FormatOp::Convert(conversion) => {
+                                    let width = self.resolve_text_width(
+                                        conversion.width,
+                                        io,
+                                        &mut io_index,
+                                        *span,
+                                    )?;
                                     let Some(crate::ir::TextIoArg::Location(name)) =
                                         io.get(io_index)
                                     else {
@@ -1835,13 +1884,20 @@ impl<'a> Interpreter<'a> {
                                         &chars,
                                         &mut cursor,
                                         conversion,
+                                        width,
                                         target_ty,
                                         *span,
                                     )?;
                                     self.assign_var(name, value, *span)?;
                                 }
                                 crate::builtins::FormatOp::Edit(editing) => {
-                                    apply_editing_read(&chars, &mut cursor, editing, *span)?;
+                                    let width = self.resolve_text_width(
+                                        editing.width,
+                                        io,
+                                        &mut io_index,
+                                        *span,
+                                    )?;
+                                    apply_editing_read(&chars, &mut cursor, editing, width, *span)?;
                                 }
                             }
                         }
@@ -3122,26 +3178,27 @@ fn apply_editing_write(
     chars: &mut Vec<char>,
     cursor: &mut i128,
     editing: &crate::builtins::Editing,
+    width: usize,
     span: Span,
 ) -> Result<(), Error> {
     match editing.code {
         crate::builtins::EditingCode::Space => {
-            write_text_at(chars, cursor, &" ".repeat(editing.width), span)
+            write_text_at(chars, cursor, &" ".repeat(width), span)
         }
         crate::builtins::EditingCode::SkipRight => {
-            *cursor += editing.width as i128;
+            *cursor += width as i128;
             pad_to(chars, *cursor as usize);
             Ok(())
         }
         crate::builtins::EditingCode::SkipLeft => {
-            *cursor -= editing.width as i128;
+            *cursor -= width as i128;
             if *cursor < 0 {
                 return Err(textfail(span, "text index moved before the text"));
             }
             Ok(())
         }
         crate::builtins::EditingCode::Tab => {
-            *cursor = editing.width as i128;
+            *cursor = width as i128;
             pad_to(chars, *cursor as usize);
             Ok(())
         }
@@ -3152,12 +3209,13 @@ fn apply_editing_read(
     chars: &[char],
     cursor: &mut i128,
     editing: &crate::builtins::Editing,
+    width: usize,
     span: Span,
 ) -> Result<(), Error> {
     match editing.code {
         crate::builtins::EditingCode::Space => {
             let start = *cursor as usize;
-            let end = start.saturating_add(editing.width);
+            let end = start.saturating_add(width);
             if end > chars.len() || !chars[start..end].iter().all(|ch| matches!(ch, ' ' | '\t')) {
                 return Err(textfail(span, "expected space characters"));
             }
@@ -3165,21 +3223,21 @@ fn apply_editing_read(
             Ok(())
         }
         crate::builtins::EditingCode::SkipRight => {
-            *cursor += editing.width as i128;
+            *cursor += width as i128;
             if *cursor as usize > chars.len() {
                 return Err(textfail(span, "text index moved past the text"));
             }
             Ok(())
         }
         crate::builtins::EditingCode::SkipLeft => {
-            *cursor -= editing.width as i128;
+            *cursor -= width as i128;
             if *cursor < 0 {
                 return Err(textfail(span, "text index moved before the text"));
             }
             Ok(())
         }
         crate::builtins::EditingCode::Tab => {
-            *cursor = editing.width as i128;
+            *cursor = width as i128;
             if *cursor as usize > chars.len() {
                 return Err(textfail(span, "text index moved past the text"));
             }
@@ -3191,9 +3249,10 @@ fn apply_editing_read(
 fn format_value(
     value: &Value,
     conversion: &crate::builtins::Conversion,
+    width: usize,
     span: Span,
 ) -> Result<String, Error> {
-    let representation = match (conversion.code.clone(), value) {
+    let representation = match (conversion.code, value) {
         (crate::builtins::ConversionCode::Default, Value::Int { value, .. }) => value.to_string(),
         (crate::builtins::ConversionCode::Binary, Value::Int { value, .. }) => {
             format_integer_base(*value, 2)
@@ -3216,7 +3275,7 @@ fn format_value(
             ));
         }
     };
-    Ok(fit_width(representation, conversion))
+    Ok(fit_width(representation, width, conversion))
 }
 
 fn format_integer_base(value: i128, base: u32) -> String {
@@ -3230,26 +3289,27 @@ fn format_integer_base(value: i128, base: u32) -> String {
     format!("{sign}{digits}")
 }
 
-fn fit_width(mut representation: String, conversion: &crate::builtins::Conversion) -> String {
-    if conversion.width == 0 {
+fn fit_width(
+    mut representation: String,
+    width: usize,
+    conversion: &crate::builtins::Conversion,
+) -> String {
+    if width == 0 {
         return representation;
     }
     let length = representation.chars().count();
-    if length > conversion.width {
+    if length > width {
         if conversion.overflow {
-            return "*".repeat(conversion.width);
+            return "*".repeat(width);
         }
         let truncated: String = if conversion.left {
-            representation.chars().take(conversion.width).collect()
+            representation.chars().take(width).collect()
         } else {
-            representation
-                .chars()
-                .skip(length - conversion.width)
-                .collect()
+            representation.chars().skip(length - width).collect()
         };
         return truncated;
     }
-    let padding = conversion.width - length;
+    let padding = width - length;
     if conversion.left {
         representation.extend(std::iter::repeat_n(conversion.pad, padding));
         representation
@@ -3276,6 +3336,7 @@ fn read_conversion(
     chars: &[char],
     cursor: &mut i128,
     conversion: &crate::builtins::Conversion,
+    width: usize,
     target: Type,
     span: Span,
 ) -> Result<Value, Error> {
@@ -3283,8 +3344,8 @@ fn read_conversion(
     if start > chars.len() {
         return Err(textfail(span, "text index is past the text"));
     }
-    if conversion.width > 0 {
-        let end = start.saturating_add(conversion.width);
+    if width > 0 {
+        let end = start.saturating_add(width);
         if end > chars.len() {
             return Err(textfail(span, "text slice is out of bounds"));
         }

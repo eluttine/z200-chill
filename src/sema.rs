@@ -2221,46 +2221,58 @@ impl Checker {
             };
             let ops = crate::builtins::parse_format(value)
                 .map_err(|message| Error::new(format.span(), message))?;
-            let conversions: Vec<&crate::builtins::Conversion> = ops
-                .iter()
-                .filter_map(|op| match op {
-                    crate::builtins::FormatOp::Convert(conversion) => Some(conversion),
-                    _ => None,
-                })
-                .collect();
-            if conversions.len() != io_args.len() {
+            let items = crate::builtins::format_items(&ops);
+            if items.len() != io_args.len() {
                 return Err(Error::new(
                     span,
                     format!(
-                        "`{name}` has {} conversion(s) but {} io list argument(s)",
-                        conversions.len(),
+                        "`{name}` requires {} io list argument(s), found {}",
+                        items.len(),
                         io_args.len()
                     ),
                 ));
             }
-            for (conversion, argument) in conversions.iter().zip(io_args) {
-                if matches!(kind, crate::builtins::TextIo::Read)
-                    && !matches!(argument, Expr::Name { .. })
-                {
-                    return Err(Error::new(
-                        argument.span(),
-                        "READTEXT io list arguments must be locations",
-                    ));
-                }
-                let ty = self.check_expr(argument)?;
-                let valid = match conversion.code {
-                    crate::builtins::ConversionCode::Binary
-                    | crate::builtins::ConversionCode::Octal
-                    | crate::builtins::ConversionCode::Hex => ty.is_int(),
-                    crate::builtins::ConversionCode::Default => {
-                        ty.is_int() || matches!(ty, Type::Bool | Type::Char) || is_string_type(ty)
+            for (item, argument) in items.iter().zip(io_args) {
+                match item {
+                    crate::builtins::FormatItem::Width => {
+                        let ty = self.check_expr(argument)?;
+                        if !ty.is_int() {
+                            return Err(Error::new(
+                                argument.span(),
+                                "variable format width must be an integer",
+                            ));
+                        }
                     }
-                };
-                if !valid {
-                    return Err(Error::new(
-                        argument.span(),
-                        format!("format conversion is not compatible with {}", ty.describe()),
-                    ));
+                    crate::builtins::FormatItem::Conversion(code) => {
+                        if matches!(kind, crate::builtins::TextIo::Read)
+                            && !matches!(argument, Expr::Name { .. })
+                        {
+                            return Err(Error::new(
+                                argument.span(),
+                                "READTEXT conversion arguments must be locations",
+                            ));
+                        }
+                        let ty = self.check_expr(argument)?;
+                        let valid = match code {
+                            crate::builtins::ConversionCode::Binary
+                            | crate::builtins::ConversionCode::Octal
+                            | crate::builtins::ConversionCode::Hex => ty.is_int(),
+                            crate::builtins::ConversionCode::Default => {
+                                ty.is_int()
+                                    || matches!(ty, Type::Bool | Type::Char)
+                                    || is_string_type(ty)
+                            }
+                        };
+                        if !valid {
+                            return Err(Error::new(
+                                argument.span(),
+                                format!(
+                                    "format conversion is not compatible with {}",
+                                    ty.describe()
+                                ),
+                            ));
+                        }
+                    }
                 }
             }
             self.resolutions.insert(

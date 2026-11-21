@@ -823,16 +823,26 @@ impl Lowerer<'_> {
                     let io = match kind {
                         crate::builtins::TextIo::Read => {
                             let io_start = if *indexed { 3 } else { 2 };
-                            ast_args[io_start..]
+                            let items = crate::builtins::format_items(format);
+                            items
                                 .iter()
-                                .map(|arg| {
-                                    let AstExpr::Name { name, .. } = arg else {
-                                        return Err(Error::new(
-                                            arg.span(),
-                                            "internal: READTEXT io argument is not a location",
-                                        ));
-                                    };
-                                    Ok(TextIoArg::Location(name.clone()))
+                                .zip(io_values)
+                                .enumerate()
+                                .map(|(offset, (item, node))| match item {
+                                    crate::builtins::FormatItem::Width => {
+                                        Ok(TextIoArg::Value(node))
+                                    }
+                                    crate::builtins::FormatItem::Conversion(_) => {
+                                        let AstExpr::Name { name, .. } =
+                                            &ast_args[io_start + offset]
+                                        else {
+                                            return Err(Error::new(
+                                                ast_args[io_start + offset].span(),
+                                                "internal: READTEXT conversion argument is not a location",
+                                            ));
+                                        };
+                                        Ok(TextIoArg::Location(name.clone()))
+                                    }
                                 })
                                 .collect::<Result<Vec<_>, _>>()?
                         }

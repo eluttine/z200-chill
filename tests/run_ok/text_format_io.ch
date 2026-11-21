@@ -85,6 +85,22 @@ M: MODULE
   ASSERT s = "1:2 3:4 ";
 
   s := "";
+  WRITETEXT(s, "%CV", 5, 42);
+  ASSERT s = "   42";
+
+  s := "";
+  WRITETEXT(s, "%XV%C", 3, 1);
+  ASSERT s = "   1";
+
+  s := "  42";
+  READTEXT(s, "%CV", 4, n);
+  ASSERT n = 42;
+
+  s := "   9";
+  READTEXT(s, "%XV%C", 3, n);
+  ASSERT n = 9;
+
+  s := "";
   WRITETEXT(s, 2, "%C", 7);
   ASSERT s = "  7";
 END M;
