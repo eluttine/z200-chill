@@ -1,0 +1,3 @@
+M: MODULE
+  ASSERT 1 = 2;
+END M;

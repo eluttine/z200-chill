@@ -1,0 +1,4 @@
+M: MODULE
+  DCL a SHORT_INT INIT := 32767;
+  a +:= 1;
+END M;

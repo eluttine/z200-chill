@@ -1,0 +1,3 @@
+M: MODULE
+  CAUSE boom;
+END M;

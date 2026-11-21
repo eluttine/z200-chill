@@ -50,8 +50,12 @@ all existing tests pass with no new special cases.
       nested/region interface mismatches.
 - [x] Add CLI structural assertions for grant-file output (`schema = 4`, no
       `int_widths`/`edition`) and existing diagnostic-code assertions.
-- [ ] Expand fixtures with more direct Z.200 examples and, if useful, full golden
-      snapshots.
+- [x] Expand fixtures with direct Z.200 examples (expressions, control flow,
+      procedures, modes/structures, visibility, arrays, handlers) and a `run_fail`
+      suite for runtime checks (`ASSERTFAIL`, `OVERFLOW`, array bounds, undefined
+      values, `TEXTFAIL`, unhandled exceptions). Full stdout snapshots were not added;
+      the interpreter writes directly to stdout, and the `ASSERT`-based fixtures already
+      assert observable behavior.
 
 ## 4. Decide product direction (resolved: interpreter-first)
 

@@ -89,3 +89,23 @@ fn run_ok_fixtures() {
             .unwrap_or_else(|error| panic!("{}: {}", file.display(), error.message));
     }
 }
+
+#[test]
+fn run_fail_fixtures() {
+    for file in fixtures("run_fail") {
+        let source = fs::read_to_string(&file).unwrap();
+        let program =
+            parse_source(&source).unwrap_or_else(|error| panic!("{}: {error}", file.display()));
+        let error = interp::run(&program, WidthProfile::default())
+            .err()
+            .unwrap_or_else(|| panic!("{}: expected a runtime error", file.display()));
+        if let Some(expected) = expected_error(&file) {
+            assert!(
+                error.message.contains(&expected),
+                "{}: expected `{expected}`, got `{}`",
+                file.display(),
+                error.message
+            );
+        }
+    }
+}
