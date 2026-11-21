@@ -211,8 +211,8 @@ pub enum InitKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModeRef {
     pub name: String,
-    /// Inline `ARRAY (low:high) mode` bounds.
-    pub array: Option<ArrayBounds>,
+    /// Inline `ARRAY (low:high, ...) mode` bounds.
+    pub arrays: Vec<ArrayBounds>,
     pub span: Span,
 }
 

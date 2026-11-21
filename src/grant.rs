@@ -280,34 +280,46 @@ fn parse_external_type(
         let (bounds, element) = rest
             .split_once(')')
             .ok_or_else(|| format!("invalid array mode `{name}` in grant file"))?;
-        let (low, high) = bounds
-            .split_once(':')
-            .ok_or_else(|| format!("invalid array mode `{name}` in grant file"))?;
-        let low = low
-            .trim()
-            .parse::<i128>()
-            .map_err(|_| format!("invalid array lower bound in `{name}`"))?;
-        let high = high
-            .trim()
-            .parse::<i128>()
-            .map_err(|_| format!("invalid array upper bound in `{name}`"))?;
-        if low > high {
-            return Err(format!("invalid array bounds in `{name}`"));
+        let mut dims = Vec::new();
+        for bound in bounds.split(',') {
+            let (low, high) = bound
+                .split_once(':')
+                .ok_or_else(|| format!("invalid array mode `{name}` in grant file"))?;
+            let low = low
+                .trim()
+                .parse::<i128>()
+                .map_err(|_| format!("invalid array lower bound in `{name}`"))?;
+            let high = high
+                .trim()
+                .parse::<i128>()
+                .map_err(|_| format!("invalid array upper bound in `{name}`"))?;
+            if low > high {
+                return Err(format!("invalid array bounds in `{name}`"));
+            }
+            dims.push(types::ArrayDimension { low, high });
         }
         let element = parse_external_type(element.trim(), definitions)?;
         if matches!(
             element,
-            program::ExternalType::Array { .. } | program::ExternalType::Builtin(Type::Array(_))
+            program::ExternalType::Array { .. }
+                | program::ExternalType::MultiArray { .. }
+                | program::ExternalType::Builtin(Type::Array(_) | Type::MultiArray(_))
         ) {
             return Err(format!(
                 "nested array elements are not implemented in `{name}`"
             ));
         }
-        return Ok(program::ExternalType::Array {
-            low,
-            high,
-            element: Box::new(element),
-        });
+        return match dims.as_slice() {
+            [dim] => Ok(program::ExternalType::Array {
+                low: dim.low,
+                high: dim.high,
+                element: Box::new(element),
+            }),
+            _ => Ok(program::ExternalType::MultiArray {
+                dims,
+                element: Box::new(element),
+            }),
+        };
     }
     if let Some(ty) = types::resolve_mode(name) {
         return Ok(program::ExternalType::Builtin(ty));
@@ -330,6 +342,14 @@ fn external_type_name(ty: &program::ExternalType) -> String {
         program::ExternalType::Array { low, high, element } => {
             format!("ARRAY({low}:{high}) {}", external_type_name(element))
         }
+        program::ExternalType::MultiArray { dims, element } => {
+            let bounds = dims
+                .iter()
+                .map(|dim| format!("{}:{}", dim.low, dim.high))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("ARRAY({bounds}) {}", external_type_name(element))
+        }
     }
 }
 
@@ -350,6 +370,15 @@ fn type_name(ty: Type) -> String {
         ),
         // Expression-only classes; they cannot occur in a declared signature.
         Type::IntLiteral => "INT".to_owned(),
+        Type::MultiArray(array) => {
+            let bounds = array
+                .dimensions()
+                .iter()
+                .map(|dim| format!("{}:{}", dim.low, dim.high))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("ARRAY({bounds}) {}", type_name(array.element.ty()))
+        }
         Type::ArrayTuple | Type::DynamicArray { .. } => "ARRAY".to_owned(),
     }
 }
@@ -620,6 +649,25 @@ END M;
                     types::IntKind::Int
                 ))),
             }
+        );
+    }
+
+    #[test]
+    fn multidimensional_array_types_round_trip() {
+        let ty = program::ExternalType::MultiArray {
+            dims: vec![
+                types::ArrayDimension { low: 1, high: 2 },
+                types::ArrayDimension { low: 0, high: 3 },
+            ],
+            element: Box::new(program::ExternalType::Builtin(Type::Int(
+                types::IntKind::Int,
+            ))),
+        };
+        let text = external_type_name(&ty);
+        assert_eq!(text, "ARRAY(1:2, 0:3) INT");
+        assert_eq!(
+            parse_external_type(&text, &std::collections::HashMap::new()).unwrap(),
+            ty
         );
     }
 

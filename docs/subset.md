@@ -221,11 +221,13 @@ invariant `width(SHORT_INT) <= width(INT) <= width(LONG_INT)` holds by construct
 
 ### 4.3 Arrays
 
-`ARRAY (low:high) element-mode` declares a one-dimensional array with constant integer
-bounds. The element mode may be scalar (`SHORT_INT`/`INT`/`LONG_INT`, `BOOL`, `CHAR`,
-or `CHARS`) or a structure mode.
+`ARRAY (low:high, ...) element-mode` declares an array with one or more constant
+integer index ranges. Up to four dimensions are supported. The element mode may be
+scalar (`SHORT_INT`/`INT`/`LONG_INT`, `BOOL`, `CHAR`, or `CHARS`) or a structure mode.
 
-- `a(i)` selects an element, and may be read or used as an assignment target.
+- `a(i)` selects an element from a one-dimensional array; `a(i, j, ...)` selects an
+  element from a multidimensional array. Both may be read or used as assignment
+  targets.
 - Structure elements support field selection and field assignment:
   `a(i).field`, including nested fields.
 - Bounds are checked at runtime.
@@ -249,7 +251,14 @@ or `CHARS`) or a structure mode.
   slice length matches the target. It can be compared with a fixed array of the same
   lower bound and element mode.
 - Slice assignment copies elements into the source range at runtime.
-- Not implemented yet: multidimensional arrays and labelled array tuples.
+- Whole-array assignment and equality work for multidimensional arrays with the same
+  shape and element mode.
+- Multidimensional array elements can be read through field selection
+  (`a(i, j).field`); assigning through a field of a multidimensional element is not
+  implemented yet.
+- Array slices currently apply to one-dimensional arrays only.
+- Array literals currently apply to one-dimensional arrays only.
+- Not implemented yet: labelled array tuples.
 
 ### 4.4 Runtime checks
 

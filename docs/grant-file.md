@@ -126,9 +126,10 @@ kind = "variable"
 mode = "INT"
 ```
 
-Array types are encoded as `ARRAY(low:high) element-mode` in grant signatures. The
-element mode may be scalar or a symbolic structure-mode reference
-(`package!Module!Mode`).
+Array types are encoded as `ARRAY(low:high)` for one dimension or
+`ARRAY(low:high, low:high, ...)` for multidimensional arrays. The element mode may be
+scalar or a symbolic structure-mode reference (`package!Module!Mode`). Up to four
+dimensions are supported.
 Structure modes use the symbolic identity `package!Module!Mode`; local `ModeId`s are never
 written. All structure modes declared by named modules are recorded so field types can be
 resolved, even if a nested mode is not granted itself. `forbid` is per grant, matching

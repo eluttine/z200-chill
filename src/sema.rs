@@ -82,7 +82,7 @@ impl std::error::Error for Error {}
 pub enum ApplyResolution {
     Conversion(IntKind),
     Procedure,
-    ArrayIndex,
+    ArrayIndex(Type),
     Builtin(crate::builtins::Builtin),
     TextIo(crate::builtins::TextIo),
 }
@@ -1179,10 +1179,10 @@ impl Checker {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
-        if let Some(bounds) = mode.array {
+        if !mode.arrays.is_empty() {
             let element_mode = ModeRef {
                 name: mode.name.clone(),
-                array: None,
+                arrays: Vec::new(),
                 span: mode.span,
             };
             let base = self.resolve_mode(&element_mode)?;
@@ -1195,11 +1195,8 @@ impl Checker {
                     ),
                 ));
             };
-            return Ok(Type::Array(crate::types::ArrayType {
-                low: bounds.low,
-                high: bounds.high,
-                element,
-            }));
+            return crate::types::array_type_from_bounds(&mode.arrays, element)
+                .ok_or_else(|| Error::new(mode.span, "unsupported array dimensions"));
         }
         for scope in self.scopes[self.module_floor..].iter().rev() {
             if let Some(ty) = scope.modes.get(&mode.name) {
@@ -1576,30 +1573,19 @@ impl Checker {
                 self.check_slice(name, first, last, *up, *span)
             }
             Expr::Apply { name, args, span } => {
-                let Some(Type::Array(array)) = self.lookup_var(name) else {
+                let Some(array) = self.lookup_var(name) else {
                     return Err(Error::new(
                         *span,
                         "assignment target must be a name, field, or array element",
                     ));
                 };
-                if args.len() != 1 {
+                if !matches!(array, Type::Array(_) | Type::MultiArray(_)) {
                     return Err(Error::new(
                         *span,
-                        format!("array `{name}` requires exactly one index"),
+                        "assignment target must be a name, field, or array element",
                     ));
                 }
-                let index_ty = self.check_expr(&args[0])?;
-                if !index_ty.is_int() {
-                    return Err(Error::new(
-                        args[0].span(),
-                        format!(
-                            "array index must be an integer, found {}",
-                            index_ty.describe()
-                        ),
-                    ));
-                }
-                self.resolutions.insert(*span, ApplyResolution::ArrayIndex);
-                Ok(array.element.ty())
+                self.check_array_index(name, args, array, *span)
             }
             Expr::Name { name, span } => {
                 if self.is_readonly(name) {
@@ -1626,11 +1612,20 @@ impl Checker {
         up: bool,
         span: Span,
     ) -> Result<Type, Error> {
-        let Some(Type::Array(array)) = self.lookup_var(name) else {
-            return Err(Error::new(
-                span,
-                format!("array slice requires an array, but `{name}` is not one"),
-            ));
+        let array = match self.lookup_var(name) {
+            Some(Type::Array(array)) => array,
+            Some(Type::MultiArray(_)) => {
+                return Err(Error::new(
+                    span,
+                    "array slices of multidimensional arrays are not implemented yet",
+                ));
+            }
+            _ => {
+                return Err(Error::new(
+                    span,
+                    format!("array slice requires an array, but `{name}` is not one"),
+                ));
+            }
         };
         let first_ty = self.check_expr(first)?;
         let last_ty = self.check_expr(last)?;
@@ -2084,25 +2079,8 @@ impl Checker {
             return Ok(result);
         }
 
-        if let Some(Type::Array(array)) = self.lookup_var(name) {
-            if args.len() != 1 {
-                return Err(Error::new(
-                    span,
-                    format!("array `{name}` requires exactly one index"),
-                ));
-            }
-            let index_ty = self.check_expr(&args[0])?;
-            if !index_ty.is_int() {
-                return Err(Error::new(
-                    args[0].span(),
-                    format!(
-                        "array index must be an integer, found {}",
-                        index_ty.describe()
-                    ),
-                ));
-            }
-            self.resolutions.insert(span, ApplyResolution::ArrayIndex);
-            return Ok(Some(array.element.ty()));
+        if let Some(array @ (Type::Array(_) | Type::MultiArray(_))) = self.lookup_var(name) {
+            return self.check_array_index(name, args, array, span).map(Some);
         }
 
         if let Some(mode) = types::resolve_mode(name) {
@@ -2168,6 +2146,45 @@ impl Checker {
         Ok(signature.result)
     }
 
+    fn check_array_index(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        array: Type,
+        span: Span,
+    ) -> Result<Type, Error> {
+        let (rank, element) = match array {
+            Type::Array(array) => (1, array.element),
+            Type::MultiArray(array) => (array.rank(), array.element),
+            _ => {
+                return Err(Error::new(span, format!("`{name}` is not an array")));
+            }
+        };
+        if args.len() != rank {
+            let message = if rank == 1 {
+                format!("array `{name}` requires exactly one index")
+            } else {
+                format!("array `{name}` requires {rank} indices")
+            };
+            return Err(Error::new(span, message));
+        }
+        for arg in args {
+            let index_ty = self.check_expr(arg)?;
+            if !index_ty.is_int() {
+                return Err(Error::new(
+                    arg.span(),
+                    format!(
+                        "array index must be an integer, found {}",
+                        index_ty.describe()
+                    ),
+                ));
+            }
+        }
+        self.resolutions
+            .insert(span, ApplyResolution::ArrayIndex(array));
+        Ok(element.ty())
+    }
+
     /// Check a value expression in a context where the target mode is known.
     /// This is what gives array tuples their element and bounds modes.
     fn check_expr_for_mode(&mut self, value: &Expr, target: Type) -> Result<Type, Error> {
@@ -2220,6 +2237,7 @@ impl Checker {
                 Type::DynamicArray { low, element } => low == array.low && element == array.element,
                 _ => false,
             },
+            Type::MultiArray(array) => value == Type::MultiArray(array),
             Type::DynamicArray { low, element } => match value {
                 Type::Array(array) => array.low == low && array.element == element,
                 Type::DynamicArray {
@@ -2322,6 +2340,7 @@ fn arrays_compatible(left: Type, right: Type) -> bool {
         | (Type::DynamicArray { low, element }, Type::Array(array)) => {
             array.low == low && array.element == element
         }
+        (Type::MultiArray(left), Type::MultiArray(right)) => left == right,
         (
             Type::DynamicArray {
                 low: left_low,

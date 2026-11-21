@@ -70,7 +70,8 @@ pub enum Expr {
     },
     Index {
         name: String,
-        index: Node,
+        indices: Vec<Node>,
+        array: Type,
         ty: Type,
         span: Span,
     },
@@ -170,7 +171,8 @@ pub enum AssignTarget {
     },
     Index {
         name: String,
-        index: Node,
+        indices: Vec<Node>,
+        array: Type,
         ty: Type,
     },
     Slice {
@@ -190,6 +192,7 @@ pub enum AssignTarget {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Stmt {
     Assign {
         target: AssignTarget,
@@ -640,24 +643,24 @@ impl Lowerer<'_> {
         match target {
             AstExpr::Name { name, .. } => Ok(AssignTarget::Var(name.clone())),
             AstExpr::Apply { name, args, span } => {
-                if !matches!(
-                    self.check.resolutions.get(span),
-                    Some(ApplyResolution::ArrayIndex)
-                ) {
+                let Some(ApplyResolution::ArrayIndex(array)) = self.check.resolutions.get(span)
+                else {
                     return Err(Error::new(
                         *span,
                         "assignment target must be a variable, field, or array element",
                     ));
-                }
+                };
                 let ty = self.check.types.get(span).copied().ok_or_else(|| {
                     Error::new(*span, "internal: array element has no checked mode")
                 })?;
-                let index = args
-                    .first()
-                    .ok_or_else(|| Error::new(*span, "array index has no operand"))?;
+                let indices = args
+                    .iter()
+                    .map(|index| self.lower_expr(index))
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(AssignTarget::Index {
                     name: name.clone(),
-                    index: self.lower_expr(index)?,
+                    indices,
+                    array: *array,
                     ty,
                 })
             }
@@ -802,16 +805,14 @@ impl Lowerer<'_> {
                     ty,
                     span,
                 }),
-                Some(ApplyResolution::ArrayIndex) => {
+                Some(ApplyResolution::ArrayIndex(array)) => {
                     let ty = ty.ok_or_else(|| {
                         Error::new(span, "internal: array index has no checked mode")
                     })?;
                     Rc::new(Expr::Index {
                         name: name.clone(),
-                        index: args
-                            .into_iter()
-                            .next()
-                            .ok_or_else(|| Error::new(span, "array index has no operand"))?,
+                        indices: args,
+                        array: *array,
                         ty,
                         span,
                     })

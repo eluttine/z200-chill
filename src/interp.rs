@@ -1605,12 +1605,21 @@ impl<'a> Interpreter<'a> {
                 read_array_slice(value, offset, count, *low, *span)
             }
             ir::Expr::Index {
-                name, index, span, ..
+                name,
+                indices,
+                array,
+                span,
+                ..
             } => {
                 let value = self.read_var(name, *span)?;
-                let index_value = self.eval_ir(index)?;
-                let (index, _) = self.expect_int(index_value, index.span())?;
-                read_array_element(value, index, *span)
+                let mut index_values = Vec::with_capacity(indices.len());
+                for index in indices {
+                    let index_value = self.eval_ir(index)?;
+                    let (index, _) = self.expect_int(index_value, index.span())?;
+                    index_values.push(index);
+                }
+                let offset = array_offset(*array, &index_values, *span)?;
+                read_array_at(value, offset, *span)
             }
             ir::Expr::Conversion {
                 kind, arg, span, ..
@@ -2023,6 +2032,15 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => Err(Error::new(span, "expected an array value")),
             },
+            Type::MultiArray(array) => match value {
+                Value::Array { low, values }
+                    if low == array.dimensions()[0].low
+                        && values.len() == array.total_len() as usize =>
+                {
+                    Ok(Value::Array { low, values })
+                }
+                _ => Err(Error::new(span, "expected a multidimensional array value")),
+            },
             Type::DynamicArray { low, .. } => match value {
                 Value::Array {
                     low: value_low,
@@ -2039,10 +2057,10 @@ impl<'a> Interpreter<'a> {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
-        if let Some(bounds) = mode.array {
+        if !mode.arrays.is_empty() {
             let element_mode = ModeRef {
                 name: mode.name.clone(),
-                array: None,
+                arrays: Vec::new(),
                 span: mode.span,
             };
             let base = self.resolve_mode(&element_mode)?;
@@ -2055,11 +2073,8 @@ impl<'a> Interpreter<'a> {
                     ),
                 ));
             };
-            return Ok(Type::Array(crate::types::ArrayType {
-                low: bounds.low,
-                high: bounds.high,
-                element,
-            }));
+            return crate::types::array_type_from_bounds(&mode.arrays, element)
+                .ok_or_else(|| Error::new(mode.span, "unsupported array dimensions"));
         }
         let floor = self.local_floor();
         for scope in self.locals[floor..].iter().rev() {
@@ -2133,11 +2148,21 @@ impl<'a> Interpreter<'a> {
                 };
                 read_path(value, path, span)
             }
-            ir::AssignTarget::Index { name, index, .. } => {
+            ir::AssignTarget::Index {
+                name,
+                indices,
+                array,
+                ..
+            } => {
                 let value = self.read_var(name, span)?;
-                let index_value = self.eval_ir(index)?;
-                let (index, _) = self.expect_int(index_value, index.span())?;
-                read_array_element(value, index, span)
+                let mut index_values = Vec::with_capacity(indices.len());
+                for index in indices {
+                    let index_value = self.eval_ir(index)?;
+                    let (index, _) = self.expect_int(index_value, index.span())?;
+                    index_values.push(index);
+                }
+                let offset = array_offset(*array, &index_values, span)?;
+                read_array_at(value, offset, span)
             }
             ir::AssignTarget::Slice {
                 name,
@@ -2205,15 +2230,25 @@ impl<'a> Interpreter<'a> {
                 };
                 assign_path(target, path, value, span)
             }
-            ir::AssignTarget::Index { name, index, ty } => {
+            ir::AssignTarget::Index {
+                name,
+                indices,
+                array,
+                ty,
+            } => {
                 let value = self.convert(value, *ty, span)?;
-                let index_value = self.eval_ir(index)?;
-                let (index, _) = self.expect_int(index_value, index.span())?;
+                let mut index_values = Vec::with_capacity(indices.len());
+                for index in indices {
+                    let index_value = self.eval_ir(index)?;
+                    let (index, _) = self.expect_int(index_value, index.span())?;
+                    index_values.push(index);
+                }
+                let offset = array_offset(*array, &index_values, span)?;
                 let cell = self
                     .find_var_cell(name)
                     .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
-                let mut var = cell.borrow_mut();
-                assign_array_element(&mut var.value, index, value, span)
+                let mut cell = cell.borrow_mut();
+                assign_array_at(&mut cell.value, offset, value, span)
             }
             ir::AssignTarget::Slice {
                 name,
@@ -2454,6 +2489,44 @@ fn declare_into_scope<'a>(
     Ok(())
 }
 
+fn array_offset(array: Type, indices: &[i128], span: Span) -> Result<i128, Error> {
+    match array {
+        Type::Array(array) => {
+            if indices.len() != 1 {
+                return Err(Error::new(span, "array element requires one index"));
+            }
+            let index = indices[0];
+            if index < array.low || index > array.high {
+                return Err(Error::new(
+                    span,
+                    format!("array index `{index}` is out of bounds"),
+                ));
+            }
+            Ok(index - array.low)
+        }
+        Type::MultiArray(array) => {
+            if indices.len() != array.rank() {
+                return Err(Error::new(
+                    span,
+                    format!("array element requires {} indices", array.rank()),
+                ));
+            }
+            let mut offset = 0;
+            for (index, dim) in indices.iter().zip(array.dimensions()) {
+                if *index < dim.low || *index > dim.high {
+                    return Err(Error::new(
+                        span,
+                        format!("array index `{index}` is out of bounds"),
+                    ));
+                }
+                offset = offset * dim.length() + (*index - dim.low);
+            }
+            Ok(offset)
+        }
+        _ => Err(Error::new(span, "expected an array value")),
+    }
+}
+
 fn array_len(value: &Value, span: Span) -> Result<usize, Error> {
     match value {
         Value::Array { values, .. } => Ok(values.len()),
@@ -2507,6 +2580,35 @@ fn read_array_slice(
         low,
         values: values[start..end].to_vec(),
     })
+}
+
+fn read_array_at(value: Value, offset: i128, span: Span) -> Result<Value, Error> {
+    let Value::Array { values, .. } = value else {
+        return Err(Error::new(span, "expected an array value"));
+    };
+    if offset < 0 || offset as usize >= values.len() {
+        return Err(Error::new(span, "array index is out of bounds"));
+    }
+    match &values[offset as usize] {
+        Value::Undefined => Err(Error::new(span, "use of undefined array element")),
+        value => Ok(value.clone()),
+    }
+}
+
+fn assign_array_at(
+    value: &mut Value,
+    offset: i128,
+    new_value: Value,
+    span: Span,
+) -> Result<(), Error> {
+    let Value::Array { values, .. } = value else {
+        return Err(Error::new(span, "expected an array value"));
+    };
+    if offset < 0 || offset as usize >= values.len() {
+        return Err(Error::new(span, "array index is out of bounds"));
+    }
+    values[offset as usize] = new_value;
+    Ok(())
 }
 
 fn assign_array_slice(
@@ -2571,26 +2673,6 @@ fn array_element_mut(value: &mut Value, index: i128, span: Span) -> Result<&mut 
         ));
     }
     Ok(&mut values[offset as usize])
-}
-
-fn assign_array_element(
-    value: &mut Value,
-    index: i128,
-    new_value: Value,
-    span: Span,
-) -> Result<(), Error> {
-    let Value::Array { low, values } = value else {
-        return Err(Error::new(span, "expected an array value"));
-    };
-    let offset = index - *low;
-    if offset < 0 || offset as usize >= values.len() {
-        return Err(Error::new(
-            span,
-            format!("array index `{index}` is out of bounds"),
-        ));
-    }
-    values[offset as usize] = new_value;
-    Ok(())
 }
 
 fn read_field(value: Value, field: &str, span: Span) -> Result<Value, Error> {
@@ -2666,6 +2748,18 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
             Value::Array {
                 low: array.low,
                 values: vec![value; (array.high - array.low + 1).max(0) as usize],
+            }
+        }
+        Type::MultiArray(array) => {
+            let element = array.element.ty();
+            let value = if matches!(element, Type::Struct(_)) {
+                default_value(modes, element)
+            } else {
+                Value::Undefined
+            };
+            Value::Array {
+                low: array.dimensions()[0].low,
+                values: vec![value; array.total_len().max(0) as usize],
             }
         }
         _ => Value::Undefined,

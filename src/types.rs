@@ -1,4 +1,4 @@
-use crate::ast::ModeRef;
+use crate::ast::{ArrayBounds, ModeRef};
 use crate::manifest::WidthProfile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,9 +51,11 @@ impl ArrayElement {
             Type::Char => Some(Self::Scalar(Scalar::Char)),
             Type::String => Some(Self::Scalar(Scalar::String)),
             Type::Struct(id) => Some(Self::Struct(id)),
-            Type::IntLiteral | Type::Array(_) | Type::DynamicArray { .. } | Type::ArrayTuple => {
-                None
-            }
+            Type::IntLiteral
+            | Type::Array(_)
+            | Type::MultiArray(_)
+            | Type::DynamicArray { .. }
+            | Type::ArrayTuple => None,
         }
     }
 
@@ -72,6 +74,54 @@ pub struct ArrayType {
     pub element: ArrayElement,
 }
 
+pub const MAX_ARRAY_RANK: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ArrayDimension {
+    pub low: i128,
+    pub high: i128,
+}
+
+impl ArrayDimension {
+    pub fn length(self) -> i128 {
+        self.high - self.low + 1
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MultiArrayType {
+    dims: [ArrayDimension; MAX_ARRAY_RANK],
+    rank: usize,
+    pub element: ArrayElement,
+}
+
+impl MultiArrayType {
+    pub fn new(dims: &[ArrayDimension], element: ArrayElement) -> Option<Self> {
+        if dims.is_empty() || dims.len() > MAX_ARRAY_RANK {
+            return None;
+        }
+        let mut slots = [ArrayDimension { low: 0, high: 0 }; MAX_ARRAY_RANK];
+        slots[..dims.len()].copy_from_slice(dims);
+        Some(Self {
+            dims: slots,
+            rank: dims.len(),
+            element,
+        })
+    }
+
+    pub fn dimensions(&self) -> &[ArrayDimension] {
+        &self.dims[..self.rank]
+    }
+
+    pub fn rank(&self) -> usize {
+        self.rank
+    }
+
+    pub fn total_len(&self) -> i128 {
+        self.dimensions().iter().map(|dim| dim.length()).product()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Type {
     Int(IntKind),
@@ -82,6 +132,7 @@ pub enum Type {
     String,
     Struct(ModeId),
     Array(ArrayType),
+    MultiArray(MultiArrayType),
     /// A slice whose upper bound is only known at runtime. The lower bound is
     /// inherited from the source array.
     DynamicArray {
@@ -115,6 +166,7 @@ impl Type {
             Self::IntLiteral
             | Self::Struct(_)
             | Self::Array(_)
+            | Self::MultiArray(_)
             | Self::DynamicArray { .. }
             | Self::ArrayTuple => None,
         }
@@ -138,6 +190,7 @@ impl Type {
             Self::String => "character string",
             Self::Struct(_) => "structure",
             Self::Array(_) => "array",
+            Self::MultiArray(_) => "multidimensional array",
             Self::DynamicArray { .. } => "dynamic array slice",
             Self::ArrayTuple => "array literal",
         }
@@ -157,6 +210,27 @@ pub fn resolve_mode(name: &str) -> Option<Type> {
     }
 }
 
+pub fn array_type_from_bounds(bounds: &[ArrayBounds], element: ArrayElement) -> Option<Type> {
+    match bounds {
+        [] => None,
+        [bounds] => Some(Type::Array(ArrayType {
+            low: bounds.low,
+            high: bounds.high,
+            element,
+        })),
+        bounds => {
+            let dims: Vec<ArrayDimension> = bounds
+                .iter()
+                .map(|bounds| ArrayDimension {
+                    low: bounds.low,
+                    high: bounds.high,
+                })
+                .collect();
+            Some(Type::MultiArray(MultiArrayType::new(&dims, element)?))
+        }
+    }
+}
+
 /// Resolve a mode reference, including an inline `ARRAY (low:high) element` shape.
 pub fn resolve_mode_ref(
     mode: &ModeRef,
@@ -166,16 +240,11 @@ pub fn resolve_mode_ref(
         .get(&mode.name)
         .copied()
         .or_else(|| resolve_mode(&mode.name))?;
-    match mode.array {
-        None => Some(base),
-        Some(bounds) => {
-            let element = ArrayElement::from_type(base)?;
-            Some(Type::Array(ArrayType {
-                low: bounds.low,
-                high: bounds.high,
-                element,
-            }))
-        }
+    if mode.arrays.is_empty() {
+        Some(base)
+    } else {
+        let element = ArrayElement::from_type(base)?;
+        array_type_from_bounds(&mode.arrays, element)
     }
 }
 

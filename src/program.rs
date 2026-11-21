@@ -205,6 +205,10 @@ pub enum ExternalType {
         high: i128,
         element: Box<ExternalType>,
     },
+    MultiArray {
+        dims: Vec<crate::types::ArrayDimension>,
+        element: Box<ExternalType>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -535,6 +539,10 @@ pub fn portable_type(ty: Type, modes: &ModeTable) -> ExternalType {
             high: array.high,
             element: Box::new(portable_type(array.element.ty(), modes)),
         },
+        Type::MultiArray(array) => ExternalType::MultiArray {
+            dims: array.dimensions().to_vec(),
+            element: Box::new(portable_type(array.element.ty(), modes)),
+        },
         other => ExternalType::Builtin(other),
     }
 }
@@ -746,6 +754,16 @@ fn resolve_external_type(ty: &ExternalType, ids: &ExternalModeIds) -> Result<Typ
                 high: *high,
                 element,
             }))
+        }
+        ExternalType::MultiArray { dims, element } => {
+            let element = resolve_external_type(element, ids)?;
+            let Some(element) = crate::types::ArrayElement::from_type(element) else {
+                return Err("array element must be a scalar or structure mode".to_owned());
+            };
+            let Some(array) = crate::types::MultiArrayType::new(dims, element) else {
+                return Err("unsupported multidimensional array shape".to_owned());
+            };
+            Ok(Type::MultiArray(array))
         }
     }
 }

@@ -867,19 +867,38 @@ impl<'a> Parser<'a> {
             let start = self.current_span();
             self.advance();
             self.expect_lparen()?;
-            let low = self.parse_mode_integer()?;
-            self.expect_colon()?;
-            let high = self.parse_mode_integer()?;
+            let mut arrays = Vec::new();
+            loop {
+                let low = self.parse_mode_integer()?;
+                self.expect_colon()?;
+                let high = self.parse_mode_integer()?;
+                if low > high {
+                    return Err(Error::coded(
+                        "E0205",
+                        start,
+                        "array lower bound is greater than its upper bound",
+                    ));
+                }
+                arrays.push(ArrayBounds { low, high });
+                if self.at_comma() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
             self.expect_rparen()?;
-            if low > high {
+            if arrays.len() > crate::types::MAX_ARRAY_RANK {
                 return Err(Error::coded(
                     "E0205",
                     start,
-                    "array lower bound is greater than its upper bound",
+                    format!(
+                        "arrays with more than {} dimensions are not implemented yet",
+                        crate::types::MAX_ARRAY_RANK
+                    ),
                 ));
             }
             let element = self.parse_mode_ref()?;
-            if element.array.is_some() {
+            if !element.arrays.is_empty() {
                 return Err(Error::coded(
                     "E0205",
                     element.span,
@@ -888,7 +907,7 @@ impl<'a> Parser<'a> {
             }
             return Ok(ModeRef {
                 name: element.name,
-                array: Some(ArrayBounds { low, high }),
+                arrays,
                 span: Span::new(self.source, start.start, element.span.end),
             });
         }
@@ -897,14 +916,14 @@ impl<'a> Parser<'a> {
             self.advance();
             return Ok(ModeRef {
                 name: "CHARS".to_owned(),
-                array: None,
+                arrays: Vec::new(),
                 span,
             });
         }
         let (name, span) = self.expect_identifier()?;
         Ok(ModeRef {
             name,
-            array: None,
+            arrays: Vec::new(),
             span,
         })
     }
