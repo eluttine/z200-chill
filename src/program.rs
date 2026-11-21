@@ -248,12 +248,14 @@ pub struct ProgramInfo {
     pub interfaces: Vec<ModuleInterface>,
     pub exports: Vec<ExportEntry>,
     pub modes: ModeTable,
+    /// Local mode names per module span, including nested modules.
+    pub module_modes_by_span: HashMap<Span, HashMap<String, Type>>,
     pub body_for_spec: HashMap<usize, usize>,
     pub spec_for_body: HashMap<usize, usize>,
 }
 
 pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
-    let (mut modes, module_modes) = build_modes(program)?;
+    let (mut modes, module_modes, module_modes_by_span) = build_modes(program)?;
     let interfaces: Vec<ModuleInterface> = program
         .modules
         .iter()
@@ -323,7 +325,8 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
 
     for (index, module) in program.modules.iter().enumerate() {
         if module.kind == ModuleKind::Body && !spec_for_body.contains_key(&index) {
-            let reach_vars = collect_child_grants(module, &module_modes[index])?;
+            let reach_vars =
+                collect_child_grants(module, &module_modes[index], &module_modes_by_span)?;
             add_grants(
                 module,
                 &interfaces[index],
@@ -345,6 +348,7 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
         interfaces,
         exports,
         modes,
+        module_modes_by_span,
         body_for_spec,
         spec_for_body,
     })
@@ -610,66 +614,159 @@ fn resolve_external_type(ty: &ExternalType, ids: &ExternalModeIds) -> Result<Typ
     }
 }
 
-fn build_modes(program: &Program) -> Result<(ModeTable, Vec<HashMap<String, Type>>), Error> {
+fn build_modes(
+    program: &Program,
+) -> Result<
+    (
+        ModeTable,
+        Vec<HashMap<String, Type>>,
+        HashMap<Span, HashMap<String, Type>>,
+    ),
+    Error,
+> {
     let mut table = ModeTable::default();
-    let mut module_modes: Vec<HashMap<String, Type>> = vec![HashMap::new(); program.modules.len()];
+    let mut top_maps = Vec::with_capacity(program.modules.len());
+    let mut span_maps = HashMap::new();
 
     for (index, module) in program.modules.iter().enumerate() {
-        for declaration in &module.declarations {
-            let Declaration::Mode(mode_def) = declaration else {
-                continue;
-            };
-
-            let ty = match &mode_def.body {
-                crate::ast::ModeDefinitionBody::Struct(fields) => {
-                    let mut field_infos = Vec::with_capacity(fields.len());
-                    let mut names = std::collections::HashSet::new();
-                    for field in fields {
-                        if !names.insert(field.name.clone()) {
-                            return Err(Error::new(
-                                field.span,
-                                format!("duplicate field `{}`", field.name),
-                            ));
-                        }
-                        let ty = resolve_mode_with(&field.mode, &module_modes[index])?;
-                        field_infos.push(FieldInfo {
-                            name: field.name.clone(),
-                            ty,
-                        });
-                    }
-                    let id = ModeId(table.modes.len());
-                    table.modes.push(StructMode {
-                        name: mode_def.name.clone(),
-                        package: module.package,
-                        module: index,
-                        package_name: module.package_name.clone(),
-                        module_name: module.name.clone(),
-                        fields: field_infos,
-                        forbidden: std::collections::HashSet::new(),
-                    });
-                    Type::Struct(id)
-                }
-                crate::ast::ModeDefinitionBody::Alias(mode) => {
-                    resolve_mode_with(mode, &module_modes[index])?
-                }
-            };
-
-            if module_modes[index]
-                .insert(mode_def.name.clone(), ty)
-                .is_some()
-            {
-                return Err(Error::new(
-                    mode_def.span,
-                    format!("duplicate mode `{}`", mode_def.name),
-                ));
-            }
-        }
+        let mut local = HashMap::new();
+        let mut resolution = HashMap::new();
+        process_module_modes(
+            module,
+            index,
+            module.package,
+            module.package_name.clone(),
+            &mut local,
+            &mut resolution,
+            &mut table,
+            &mut span_maps,
+        )?;
+        top_maps.push(local);
     }
 
-    Ok((table, module_modes))
+    Ok((table, top_maps, span_maps))
 }
 
-fn resolve_mode_with(mode: &ModeRef, mode_names: &HashMap<String, Type>) -> Result<Type, Error> {
+fn process_module_modes(
+    module: &Module,
+    top: usize,
+    top_package: usize,
+    top_package_name: Option<String>,
+    local: &mut HashMap<String, Type>,
+    resolution: &mut HashMap<String, Type>,
+    table: &mut ModeTable,
+    span_maps: &mut HashMap<Span, HashMap<String, Type>>,
+) -> Result<(), Error> {
+    for declaration in &module.declarations {
+        let Declaration::Mode(mode_def) = declaration else {
+            continue;
+        };
+
+        let ty = match &mode_def.body {
+            crate::ast::ModeDefinitionBody::Struct(fields) => {
+                let mut field_infos = Vec::with_capacity(fields.len());
+                let mut names = std::collections::HashSet::new();
+                for field in fields {
+                    if !names.insert(field.name.clone()) {
+                        return Err(Error::new(
+                            field.span,
+                            format!("duplicate field `{}`", field.name),
+                        ));
+                    }
+                    let ty = resolve_mode_with(&field.mode, resolution)?;
+                    field_infos.push(FieldInfo {
+                        name: field.name.clone(),
+                        ty,
+                    });
+                }
+                let id = ModeId(table.modes.len());
+                table.modes.push(StructMode {
+                    name: mode_def.name.clone(),
+                    package: top_package,
+                    module: top,
+                    package_name: top_package_name.clone(),
+                    module_name: module.name.clone(),
+                    fields: field_infos,
+                    forbidden: std::collections::HashSet::new(),
+                });
+                Type::Struct(id)
+            }
+            crate::ast::ModeDefinitionBody::Alias(mode) => resolve_mode_with(mode, resolution)?,
+        };
+
+        if local.insert(mode_def.name.clone(), ty).is_some() {
+            return Err(Error::new(
+                mode_def.span,
+                format!("duplicate mode `{}`", mode_def.name),
+            ));
+        }
+        resolution.insert(mode_def.name.clone(), ty);
+    }
+
+    span_maps.insert(module.span, local.clone());
+
+    walk_nested_modules(&module.actions, &mut |child| {
+        let mut child_local = HashMap::new();
+        let mut child_resolution = resolution.clone();
+        process_module_modes(
+            child,
+            top,
+            top_package,
+            top_package_name.clone(),
+            &mut child_local,
+            &mut child_resolution,
+            table,
+            span_maps,
+        )
+    })
+}
+
+fn walk_nested_modules<'a>(
+    actions: &'a [Action],
+    visit: &mut impl FnMut(&'a Module) -> Result<(), Error>,
+) -> Result<(), Error> {
+    for action in actions {
+        match action {
+            Action::Module(module) => visit(module)?,
+            Action::If {
+                branches,
+                else_actions,
+                ..
+            } => {
+                for branch in branches {
+                    walk_nested_modules(&branch.body, visit)?;
+                }
+                if let Some(actions) = else_actions {
+                    walk_nested_modules(actions, visit)?;
+                }
+            }
+            Action::Do { body, .. } => walk_nested_modules(body, visit)?,
+            Action::Case {
+                alternatives,
+                else_actions,
+                ..
+            } => {
+                for alternative in alternatives {
+                    walk_nested_modules(&alternative.body, visit)?;
+                }
+                if let Some(actions) = else_actions {
+                    walk_nested_modules(actions, visit)?;
+                }
+            }
+            Action::Labelled { action, .. } => {
+                walk_nested_modules(std::slice::from_ref(action), visit)?
+            }
+            Action::Begin { actions, .. } => walk_nested_modules(actions, visit)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn resolve_mode_with(
+    mode: &ModeRef,
+    mode_names: &HashMap<String, Type>,
+) -> Result<Type, Error> {
     mode_names
         .get(&mode.name)
         .copied()
@@ -1007,13 +1104,18 @@ fn context_export<'a>(
 fn collect_child_grants(
     module: &Module,
     mode_names: &HashMap<String, Type>,
-) -> Result<HashMap<String, Type>, Error> {
+    span_modes: &HashMap<Span, HashMap<String, Type>>,
+) -> Result<HashMap<String, ExportKind>, Error> {
     let mut grants = HashMap::new();
     for action in &module.actions {
         let Action::Module(child) = action else {
             continue;
         };
-        for (name, ty) in collect_module_exports(child, mode_names)? {
+        let mut child_modes = mode_names.clone();
+        if let Some(modes) = span_modes.get(&child.span) {
+            child_modes.extend(modes.clone());
+        }
+        for (name, ty) in collect_module_exports(child, &child_modes, span_modes)? {
             // Duplicate sibling grants are allowed; ambiguity is reported if
             // the parent re-grants or another module seizes the name.
             grants.entry(name).or_insert(ty);
@@ -1027,22 +1129,42 @@ fn collect_child_grants(
 fn collect_module_exports(
     module: &Module,
     mode_names: &HashMap<String, Type>,
-) -> Result<HashMap<String, Type>, Error> {
-    let mut grantable = HashMap::new();
+    span_modes: &HashMap<Span, HashMap<String, Type>>,
+) -> Result<HashMap<String, ExportKind>, Error> {
+    let mut grantable: HashMap<String, ExportKind> = HashMap::new();
     for declaration in &module.declarations {
-        if let Declaration::Var(list) = declaration {
-            for var in list {
-                let ty = resolve_mode_with(&var.mode, mode_names)?;
-                grantable.insert(var.name.clone(), ty);
+        match declaration {
+            Declaration::Var(list) => {
+                for var in list {
+                    let ty = resolve_mode_with(&var.mode, mode_names)?;
+                    grantable.insert(var.name.clone(), ExportKind::Var(ty));
+                }
             }
+            Declaration::Proc(proc_def) => {
+                let signature =
+                    signature_from_params_with(&proc_def.params, &proc_def.result, mode_names)?;
+                grantable.insert(proc_def.name.clone(), ExportKind::Proc(signature));
+            }
+            Declaration::Mode(mode_def) => {
+                if let Some(modes) = span_modes.get(&module.span) {
+                    if let Some(Type::Struct(id)) = modes.get(&mode_def.name) {
+                        grantable.insert(mode_def.name.clone(), ExportKind::Mode(*id));
+                    }
+                }
+            }
+            _ => {}
         }
     }
     for action in &module.actions {
         let Action::Module(child) = action else {
             continue;
         };
-        for (name, ty) in collect_module_exports(child, mode_names)? {
-            grantable.entry(name).or_insert(ty);
+        let mut child_modes = mode_names.clone();
+        if let Some(modes) = span_modes.get(&child.span) {
+            child_modes.extend(modes.clone());
+        }
+        for (name, export) in collect_module_exports(child, &child_modes, span_modes)? {
+            grantable.entry(name).or_insert(export);
         }
     }
 
@@ -1055,7 +1177,6 @@ fn collect_module_exports(
         if visibility.kind != VisibilityKind::Grant {
             continue;
         }
-        // Advanced nested grant clauses are validated by the checker.
         if visibility.prefix.is_some()
             || !visibility.friends.is_empty()
             || visibility.forbid.is_some()
@@ -1081,7 +1202,7 @@ fn collect_module_exports(
                     format!("`{name}` is granted more than once"),
                 ));
             }
-            let Some(ty) = grantable.get(&name) else {
+            let Some(export) = grantable.get(&name).cloned() else {
                 return Err(Error::new(
                     span,
                     format!(
@@ -1089,7 +1210,7 @@ fn collect_module_exports(
                     ),
                 ));
             };
-            exports.insert(name, *ty);
+            exports.insert(name, export);
         }
     }
     Ok(exports)
@@ -1153,13 +1274,36 @@ fn grant_prefixes(
     }
 }
 
+fn apply_forbid(
+    mode: &mut StructMode,
+    name: &str,
+    forbid: &crate::ast::Forbid,
+    span: Span,
+) -> Result<(), Error> {
+    let fields: Vec<String> = if forbid.all {
+        mode.fields.iter().map(|field| field.name.clone()).collect()
+    } else {
+        forbid.fields.clone()
+    };
+    for field in fields {
+        if !mode.fields.iter().any(|info| info.name == field) {
+            return Err(Error::new(
+                span,
+                format!("FORBID field `{field}` is not a field of `{name}`"),
+            ));
+        }
+        mode.forbidden.insert(field);
+    }
+    Ok(())
+}
+
 fn add_grants(
     module: &Module,
     interface: &ModuleInterface,
     export_module: usize,
     exports: &mut Vec<ExportEntry>,
     modes: &mut ModeTable,
-    reach_vars: &HashMap<String, Type>,
+    reach_exports: &HashMap<String, ExportKind>,
 ) -> Result<(), Error> {
     let module_name = module.name.clone();
     let package = module.package;
@@ -1249,25 +1393,7 @@ fn add_grants(
                     ));
                 };
                 if let Some(forbid) = &visibility.forbid {
-                    let mode_info = modes.get_mut(*id);
-                    let fields: Vec<String> = if forbid.all {
-                        mode_info
-                            .fields
-                            .iter()
-                            .map(|field| field.name.clone())
-                            .collect()
-                    } else {
-                        forbid.fields.clone()
-                    };
-                    for field in fields {
-                        if !mode_info.fields.iter().any(|info| info.name == field) {
-                            return Err(Error::new(
-                                span,
-                                format!("FORBID field `{field}` is not a field of `{name}`"),
-                            ));
-                        }
-                        mode_info.forbidden.insert(field);
-                    }
+                    apply_forbid(modes.get_mut(*id), &name, forbid, span)?;
                 }
                 ExportKind::Mode(*id)
             } else if let Some(ty) = interface.vars.get(&name) {
@@ -1286,14 +1412,33 @@ fn add_grants(
                     ));
                 }
                 ExportKind::Proc(signature.clone())
-            } else if let Some(ty) = reach_vars.get(&name) {
-                if visibility.forbid.is_some() {
-                    return Err(Error::new(
-                        span,
-                        format!("FORBID requires a structure mode, not `{name}`"),
-                    ));
+            } else if let Some(kind) = reach_exports.get(&name) {
+                match kind {
+                    ExportKind::Mode(id) => {
+                        if let Some(forbid) = &visibility.forbid {
+                            apply_forbid(modes.get_mut(*id), &name, forbid, span)?;
+                        }
+                        ExportKind::Mode(*id)
+                    }
+                    ExportKind::Proc(signature) => {
+                        if visibility.forbid.is_some() {
+                            return Err(Error::new(
+                                span,
+                                format!("FORBID requires a structure mode, not `{name}`"),
+                            ));
+                        }
+                        ExportKind::Proc(signature.clone())
+                    }
+                    ExportKind::Var(ty) => {
+                        if visibility.forbid.is_some() {
+                            return Err(Error::new(
+                                span,
+                                format!("FORBID requires a structure mode, not `{name}`"),
+                            ));
+                        }
+                        ExportKind::Var(*ty)
+                    }
                 }
-                ExportKind::Var(*ty)
             } else {
                 return Err(Error::new(
                     span,

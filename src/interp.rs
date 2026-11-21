@@ -178,11 +178,14 @@ pub fn run_checked(
         locals: Vec::new(),
         call_bases: Vec::new(),
         active_module: 0,
+        active_scope_key: None,
         module_floor: 0,
         depth: 0,
         exports,
         modes,
         module_modes,
+        module_modes_by_span: info.module_modes_by_span,
+        modules_by_span: collect_modules_by_span(program),
         nested_scopes: HashMap::new(),
         exprs: lowered.exprs,
         bodies: lowered.bodies,
@@ -241,6 +244,14 @@ impl ImportKind {
 struct ProcRef<'a> {
     def: &'a ProcDef,
     module: usize,
+    scope_key: Option<Span>,
+}
+
+#[derive(Clone)]
+enum ReachExport<'a> {
+    Var(VarCell),
+    Proc(ProcRef<'a>),
+    Mode(Type),
 }
 
 #[derive(Default, Clone)]
@@ -248,10 +259,12 @@ struct Scope<'a> {
     vars: HashMap<String, VarCell>,
     procs: HashMap<String, ProcRef<'a>>,
     modes: HashMap<String, Type>,
-    /// Variable names granted into this reach by directly enclosed modules.
-    exports: HashMap<String, Vec<VarCell>>,
+    /// Names granted into this reach by directly enclosed modules.
+    exports: HashMap<String, Vec<ReachExport<'a>>>,
     /// Whether hoisted-module `SEIZE`s have been applied.
     seizes_applied: bool,
+    /// Span of the nested module that owns this scope, if any.
+    key: Option<Span>,
 }
 
 struct Frame {
@@ -275,12 +288,16 @@ struct Interpreter<'a> {
     /// Index into `locals` at each procedure-call entry.
     call_bases: Vec<usize>,
     active_module: usize,
+    /// Module scope used for lookups while executing a procedure.
+    active_scope_key: Option<Span>,
     /// Lowest local scope visible in the current module.
     module_floor: usize,
     depth: usize,
     exports: Vec<program::ExportEntry>,
     modes: Rc<crate::modes::ModeTable>,
     module_modes: Vec<HashMap<String, Type>>,
+    module_modes_by_span: HashMap<Span, HashMap<String, Type>>,
+    modules_by_span: HashMap<Span, &'a Module>,
     /// Scopes for nested modules declared in a module body, keyed by span.
     nested_scopes: HashMap<Span, Scope<'a>>,
     exprs: ir::ExprTable,
@@ -297,7 +314,14 @@ impl<'a> Interpreter<'a> {
                 ..Scope::default()
             };
             if module.kind == ModuleKind::Body {
-                declare_into_scope(&mut scope, &module.declarations, index, &mode_names, &modes)?;
+                declare_into_scope(
+                    &mut scope,
+                    &module.declarations,
+                    index,
+                    &mode_names,
+                    &modes,
+                    None,
+                )?;
             }
             self.modules.push(scope);
             if module.kind == ModuleKind::Body {
@@ -328,10 +352,30 @@ impl<'a> Interpreter<'a> {
             let Action::Module(child) = action else {
                 continue;
             };
-            let mut child_modes = parent.modes.clone();
+            let mut child_modes = self
+                .module_modes_by_span
+                .get(&child.span)
+                .cloned()
+                .unwrap_or_default();
+            child_modes.extend(parent.modes.clone());
             child_modes.extend(mode_names.clone());
-            let mut scope = Scope::default();
-            declare_into_scope(&mut scope, &child.declarations, top, &child_modes, modes)?;
+            let mut scope = Scope {
+                modes: self
+                    .module_modes_by_span
+                    .get(&child.span)
+                    .cloned()
+                    .unwrap_or_default(),
+                key: Some(child.span),
+                ..Scope::default()
+            };
+            declare_into_scope(
+                &mut scope,
+                &child.declarations,
+                top,
+                &child_modes,
+                modes,
+                Some(child.span),
+            )?;
             self.hoist_children(&child.actions, &mut scope, top, mode_names, modes)?;
             register_hoisted_grants(child, &scope, parent)?;
             self.nested_scopes.insert(child.span, scope);
@@ -442,9 +486,19 @@ impl<'a> Interpreter<'a> {
         for (current, name, span, source, kind) in imports {
             let duplicate = match kind {
                 ImportKind::Proc => {
-                    let proc_ref = *self.modules[source].procs.get(&name).ok_or_else(|| {
-                        Error::new(span, format!("cannot SEIZE `{name}`: not a procedure"))
-                    })?;
+                    let proc_ref = *self.modules[source]
+                        .procs
+                        .get(&name)
+                        .or_else(|| match self.modules[source].exports.get(&name) {
+                            Some(exports) => match exports.as_slice() {
+                                [ReachExport::Proc(proc_ref)] => Some(proc_ref),
+                                _ => None,
+                            },
+                            None => None,
+                        })
+                        .ok_or_else(|| {
+                            Error::new(span, format!("cannot SEIZE `{name}`: not a procedure"))
+                        })?;
                     self.modules[current]
                         .procs
                         .insert(name.clone(), proc_ref)
@@ -456,8 +510,11 @@ impl<'a> Interpreter<'a> {
                         .get(&name)
                         .cloned()
                         .or_else(|| match self.modules[source].exports.get(&name) {
-                            Some(cells) if cells.len() == 1 => Some(cells[0].clone()),
-                            _ => None,
+                            Some(exports) => match exports.as_slice() {
+                                [ReachExport::Var(cell)] => Some(cell.clone()),
+                                _ => None,
+                            },
+                            None => None,
                         })
                         .ok_or_else(|| {
                             Error::new(span, format!("cannot SEIZE `{name}`: not a location"))
@@ -501,7 +558,7 @@ impl<'a> Interpreter<'a> {
         let mode_names = self.module_modes[module].clone();
         let modes = Rc::clone(&self.modes);
         let scope = self.locals.last_mut().expect("local scope");
-        declare_into_scope(scope, declarations, module, &mode_names, &modes)
+        declare_into_scope(scope, declarations, module, &mode_names, &modes, None)
     }
 
     fn declare_local_vars(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
@@ -737,21 +794,36 @@ impl<'a> Interpreter<'a> {
         base_modes: &HashMap<String, Type>,
     ) -> Result<(), Error> {
         for stmt in stmts {
-            let ir::Stmt::Module {
-                span,
-                declarations,
-                actions,
-                ..
-            } = stmt
-            else {
+            let ir::Stmt::Module { span, .. } = stmt else {
                 continue;
             };
+            let Some(module) = self.modules_by_span.get(span).copied() else {
+                continue;
+            };
+            let modes = Rc::clone(&self.modes);
+            let top = self.active_module;
             let mut child_modes = parent.modes.clone();
             child_modes.extend(base_modes.clone());
-            let mut scope = Scope::default();
-            declare_ir_vars(&mut scope, declarations, &child_modes, &self.modes)?;
-            self.hoist_ir_children(actions, &mut scope, base_modes)?;
-            register_hoisted_grants_ir(declarations, &scope, parent)?;
+            let mut scope = Scope {
+                modes: self
+                    .module_modes_by_span
+                    .get(span)
+                    .cloned()
+                    .unwrap_or_default(),
+                key: Some(*span),
+                ..Scope::default()
+            };
+            child_modes.extend(scope.modes.clone());
+            declare_into_scope(
+                &mut scope,
+                &module.declarations,
+                top,
+                &child_modes,
+                &modes,
+                Some(*span),
+            )?;
+            self.hoist_children(&module.actions, &mut scope, top, base_modes, &modes)?;
+            register_hoisted_grants(module, &scope, parent)?;
             self.nested_scopes.insert(*span, scope);
         }
         Ok(())
@@ -770,9 +842,19 @@ impl<'a> Interpreter<'a> {
 
         let parent_is_local = !self.locals.is_empty();
         let parent = self.current_reach();
-        self.locals.push(Scope::default());
+        self.locals.push(Scope {
+            modes: self
+                .module_modes_by_span
+                .get(&span)
+                .cloned()
+                .unwrap_or_default(),
+            key: Some(span),
+            ..Scope::default()
+        });
         let previous_floor = self.module_floor;
+        let previous_scope = self.active_scope_key;
         self.module_floor = self.locals.len() - 1;
+        self.active_scope_key = Some(span);
 
         let result = (|| {
             self.apply_nested_seizes(declarations, &parent)?;
@@ -792,6 +874,7 @@ impl<'a> Interpreter<'a> {
         })();
 
         self.module_floor = previous_floor;
+        self.active_scope_key = previous_scope;
         self.locals.pop();
         result
     }
@@ -807,7 +890,9 @@ impl<'a> Interpreter<'a> {
         let parent = self.current_reach();
         self.locals.push(scope);
         let previous_floor = self.module_floor;
+        let previous_scope = self.active_scope_key;
         self.module_floor = self.locals.len() - 1;
+        self.active_scope_key = Some(span);
 
         let result = (|| {
             if !self.locals.last().expect("hoisted scope").seizes_applied {
@@ -831,6 +916,7 @@ impl<'a> Interpreter<'a> {
         })();
 
         self.module_floor = previous_floor;
+        self.active_scope_key = previous_scope;
         let scope = self.locals.pop().expect("hoisted scope");
         self.nested_scopes.insert(span, scope);
         result
@@ -873,9 +959,10 @@ impl<'a> Interpreter<'a> {
                 for (name, ty) in &parent.modes {
                     self.insert_nested_mode(name, *ty, visibility.span)?;
                 }
-                for (name, cells) in &parent.exports {
-                    let cell = single_reach_export(name, cells, visibility.span)?;
-                    self.insert_nested_var(name, cell, visibility.span)?;
+                for (name, exports) in &parent.exports {
+                    for export in exports {
+                        self.insert_reach_export(name, export.clone(), visibility.span)?;
+                    }
                 }
                 continue;
             }
@@ -893,9 +980,9 @@ impl<'a> Interpreter<'a> {
                     self.insert_nested_proc(&name.name, *proc_ref, name.span)?;
                 } else if let Some(ty) = parent.modes.get(&name.name) {
                     self.insert_nested_mode(&name.name, *ty, name.span)?;
-                } else if let Some(cells) = parent.exports.get(&name.name) {
-                    let cell = single_reach_export(&name.name, cells, name.span)?;
-                    self.insert_nested_var(&name.name, cell, name.span)?;
+                } else if let Some(exports) = parent.exports.get(&name.name) {
+                    let export = single_reach_export(&name.name, exports, name.span)?;
+                    self.insert_reach_export(&name.name, export.clone(), name.span)?;
                 } else {
                     return Err(Error::new(
                         name.span,
@@ -960,24 +1047,58 @@ impl<'a> Interpreter<'a> {
         Ok(())
     }
 
+    fn insert_reach_export(
+        &mut self,
+        name: &str,
+        export: ReachExport<'a>,
+        span: Span,
+    ) -> Result<(), Error> {
+        let scope = self.locals.last_mut().expect("nested module scope");
+        if scope.vars.contains_key(name)
+            || scope.procs.contains_key(name)
+            || scope.modes.contains_key(name)
+            || scope.exports.contains_key(name)
+        {
+            return Err(Error::new(
+                span,
+                format!("duplicate declaration of `{name}`"),
+            ));
+        }
+        match export {
+            ReachExport::Var(cell) => {
+                scope.vars.insert(name.to_owned(), cell);
+            }
+            ReachExport::Proc(proc_ref) => {
+                scope.procs.insert(name.to_owned(), proc_ref);
+            }
+            ReachExport::Mode(ty) => {
+                scope.modes.insert(name.to_owned(), ty);
+            }
+        }
+        Ok(())
+    }
+
     fn register_nested_grants(
         &mut self,
         declarations: &[Declaration],
         parent_is_local: bool,
     ) -> Result<(), Error> {
-        let mut local_vars: HashMap<String, VarCell> = HashMap::new();
-        for declaration in declarations {
-            if let Declaration::Var(list) = declaration {
-                for var in list {
-                    if let Some(cell) = self
-                        .locals
-                        .last()
-                        .and_then(|scope| scope.vars.get(&var.name))
-                        .cloned()
-                    {
-                        local_vars.insert(var.name.clone(), cell);
-                    }
-                }
+        let scope = self.locals.last().cloned().unwrap_or_default();
+        let mut grantable: HashMap<String, ReachExport<'a>> = HashMap::new();
+        for (name, cell) in &scope.vars {
+            grantable.insert(name.clone(), ReachExport::Var(cell.clone()));
+        }
+        for (name, proc_ref) in &scope.procs {
+            grantable.insert(name.clone(), ReachExport::Proc(*proc_ref));
+        }
+        for (name, ty) in &scope.modes {
+            grantable.insert(name.clone(), ReachExport::Mode(*ty));
+        }
+        for (name, exports) in &scope.exports {
+            if let [export] = exports.as_slice() {
+                grantable
+                    .entry(name.clone())
+                    .or_insert_with(|| export.clone());
             }
         }
 
@@ -989,7 +1110,7 @@ impl<'a> Interpreter<'a> {
                 continue;
             }
             let names: Vec<(String, Span)> = if visibility.all {
-                local_vars
+                grantable
                     .keys()
                     .map(|name| (name.clone(), visibility.span))
                     .collect()
@@ -1002,7 +1123,7 @@ impl<'a> Interpreter<'a> {
             };
 
             for (name, span) in names {
-                let Some(cell) = local_vars.get(&name).cloned() else {
+                let Some(export) = grantable.get(&name).cloned() else {
                     return Err(Error::new(
                         span,
                         format!("cannot GRANT `{name}`: not a declaration of this module"),
@@ -1015,12 +1136,11 @@ impl<'a> Interpreter<'a> {
                 } else {
                     &mut self.modules[self.active_module]
                 };
-                let _ = span;
                 parent_scope
                     .exports
                     .entry(name.clone())
                     .or_default()
-                    .push(cell);
+                    .push(export);
             }
         }
         Ok(())
@@ -1285,7 +1405,9 @@ impl<'a> Interpreter<'a> {
         }
 
         let previous_module = self.active_module;
+        let previous_scope = self.active_scope_key;
         self.active_module = proc_ref.module;
+        self.active_scope_key = proc_ref.scope_key;
         self.locals.push(Scope::default());
         self.call_bases.push(self.locals.len() - 1);
         self.depth += 1;
@@ -1296,6 +1418,7 @@ impl<'a> Interpreter<'a> {
         self.call_bases.pop();
         self.locals.pop();
         self.active_module = previous_module;
+        self.active_scope_key = previous_scope;
         result
     }
 
@@ -1576,7 +1699,29 @@ impl<'a> Interpreter<'a> {
                 return Ok(*ty);
             }
         }
+        if let Some(scope) = self.active_module_scope() {
+            if let Some(ty) = scope.modes.get(&mode.name) {
+                return Ok(*ty);
+            }
+            if let Some(exports) = scope.exports.get(&mode.name) {
+                if let [ReachExport::Mode(ty)] = exports.as_slice() {
+                    return Ok(*ty);
+                }
+            }
+        }
         resolve_mode_with(mode, &self.modules[self.active_module].modes)
+    }
+
+    fn active_module_scope(&self) -> Option<&Scope<'a>> {
+        if let Some(key) = self.active_scope_key {
+            for scope in self.locals.iter().rev() {
+                if scope.key == Some(key) {
+                    return Some(scope);
+                }
+            }
+            return self.nested_scopes.get(&key);
+        }
+        self.modules.get(self.active_module)
     }
 
     fn target_type(&self, target: &ir::AssignTarget, span: Span) -> Result<Type, Error> {
@@ -1658,18 +1803,18 @@ impl<'a> Interpreter<'a> {
             if let Some(cell) = scope.vars.get(name) {
                 return Some(cell.clone());
             }
-            if let Some(cells) = scope.exports.get(name) {
-                if let [cell] = cells.as_slice() {
+            if let Some(exports) = scope.exports.get(name) {
+                if let [ReachExport::Var(cell)] = exports.as_slice() {
                     return Some(cell.clone());
                 }
             }
         }
-        let module = self.modules.get(self.active_module)?;
+        let module = self.active_module_scope()?;
         if let Some(cell) = module.vars.get(name) {
             return Some(cell.clone());
         }
-        if let Some(cells) = module.exports.get(name) {
-            if let [cell] = cells.as_slice() {
+        if let Some(exports) = module.exports.get(name) {
+            if let [ReachExport::Var(cell)] = exports.as_slice() {
                 return Some(cell.clone());
             }
         }
@@ -1683,11 +1828,16 @@ impl<'a> Interpreter<'a> {
                 return Some(*proc_ref);
             }
         }
-        self.modules
-            .get(self.active_module)?
-            .procs
-            .get(name)
-            .copied()
+        let scope = self.active_module_scope()?;
+        if let Some(proc_ref) = scope.procs.get(name) {
+            return Some(*proc_ref);
+        }
+        if let Some(exports) = scope.exports.get(name) {
+            if let [ReachExport::Proc(proc_ref)] = exports.as_slice() {
+                return Some(*proc_ref);
+            }
+        }
+        None
     }
 
     /// Scopes below this index belong to the caller and must not be visible
@@ -1698,12 +1848,66 @@ impl<'a> Interpreter<'a> {
     }
 }
 
+fn collect_modules_by_span<'a>(program: &'a Program) -> HashMap<Span, &'a Module> {
+    let mut map = HashMap::new();
+    for module in &program.modules {
+        collect_module_span(module, &mut map);
+    }
+    map
+}
+
+fn collect_module_span<'a>(module: &'a Module, map: &mut HashMap<Span, &'a Module>) {
+    map.insert(module.span, module);
+    walk_action_modules(&module.actions, &mut |child| {
+        collect_module_span(child, map);
+    });
+}
+
+fn walk_action_modules<'a>(actions: &'a [Action], visit: &mut impl FnMut(&'a Module)) {
+    for action in actions {
+        match action {
+            Action::Module(module) => visit(module),
+            Action::If {
+                branches,
+                else_actions,
+                ..
+            } => {
+                for branch in branches {
+                    walk_action_modules(&branch.body, visit);
+                }
+                if let Some(actions) = else_actions {
+                    walk_action_modules(actions, visit);
+                }
+            }
+            Action::Do { body, .. } => walk_action_modules(body, visit),
+            Action::Case {
+                alternatives,
+                else_actions,
+                ..
+            } => {
+                for alternative in alternatives {
+                    walk_action_modules(&alternative.body, visit);
+                }
+                if let Some(actions) = else_actions {
+                    walk_action_modules(actions, visit);
+                }
+            }
+            Action::Labelled { action, .. } => {
+                walk_action_modules(std::slice::from_ref(action), visit)
+            }
+            Action::Begin { actions, .. } => walk_action_modules(actions, visit),
+            _ => {}
+        }
+    }
+}
+
 fn declare_into_scope<'a>(
     scope: &mut Scope<'a>,
     declarations: &'a [Declaration],
     module: usize,
     mode_names: &HashMap<String, Type>,
     modes: &crate::modes::ModeTable,
+    scope_key: Option<Span>,
 ) -> Result<(), Error> {
     for declaration in declarations {
         match declaration {
@@ -1739,43 +1943,11 @@ fn declare_into_scope<'a>(
                     ProcRef {
                         def: proc_def,
                         module,
+                        scope_key,
                     },
                 );
             }
             Declaration::ProcSignature(_) | Declaration::Visibility(_) | Declaration::Mode(_) => {}
-        }
-    }
-    Ok(())
-}
-
-fn declare_ir_vars(
-    scope: &mut Scope<'_>,
-    declarations: &[Declaration],
-    mode_names: &HashMap<String, Type>,
-    modes: &crate::modes::ModeTable,
-) -> Result<(), Error> {
-    for declaration in declarations {
-        let Declaration::Var(list) = declaration else {
-            continue;
-        };
-        for var in list {
-            let ty = resolve_mode_with(&var.mode, mode_names)?;
-            if scope.vars.contains_key(&var.name)
-                || scope.procs.contains_key(&var.name)
-                || scope.modes.contains_key(&var.name)
-            {
-                return Err(Error::new(
-                    var.span,
-                    format!("duplicate declaration of `{}`", var.name),
-                ));
-            }
-            scope.vars.insert(
-                var.name.clone(),
-                Rc::new(RefCell::new(Var {
-                    ty,
-                    value: default_value(modes, ty),
-                })),
-            );
         }
     }
     Ok(())
@@ -1789,25 +1961,26 @@ fn register_hoisted_grants<'a>(
     register_grants(&module.declarations, scope, parent)
 }
 
-fn register_hoisted_grants_ir<'a>(
-    declarations: &[Declaration],
-    scope: &Scope<'a>,
-    parent: &mut Scope<'a>,
-) -> Result<(), Error> {
-    register_grants(declarations, scope, parent)
-}
-
 fn register_grants<'a>(
     declarations: &[Declaration],
     scope: &Scope<'a>,
     parent: &mut Scope<'a>,
 ) -> Result<(), Error> {
-    let mut grantable: HashMap<String, VarCell> = scope.vars.clone();
-    for (name, cells) in &scope.exports {
-        if let [cell] = cells.as_slice() {
+    let mut grantable: HashMap<String, ReachExport<'a>> = HashMap::new();
+    for (name, cell) in &scope.vars {
+        grantable.insert(name.clone(), ReachExport::Var(cell.clone()));
+    }
+    for (name, proc_ref) in &scope.procs {
+        grantable.insert(name.clone(), ReachExport::Proc(*proc_ref));
+    }
+    for (name, ty) in &scope.modes {
+        grantable.insert(name.clone(), ReachExport::Mode(*ty));
+    }
+    for (name, exports) in &scope.exports {
+        if let [export] = exports.as_slice() {
             grantable
                 .entry(name.clone())
-                .or_insert_with(|| cell.clone());
+                .or_insert_with(|| export.clone());
         }
     }
 
@@ -1837,7 +2010,7 @@ fn register_grants<'a>(
                 .collect()
         };
         for (name, span) in names {
-            let Some(cell) = grantable.get(&name) else {
+            let Some(export) = grantable.get(&name).cloned() else {
                 return Err(Error::new(
                     span,
                     format!(
@@ -1845,15 +2018,19 @@ fn register_grants<'a>(
                     ),
                 ));
             };
-            parent.exports.entry(name).or_default().push(cell.clone());
+            parent.exports.entry(name).or_default().push(export);
         }
     }
     Ok(())
 }
 
-fn single_reach_export(name: &str, cells: &[VarCell], span: Span) -> Result<VarCell, Error> {
-    match cells {
-        [cell] => Ok(cell.clone()),
+fn single_reach_export<'a, 'e>(
+    name: &str,
+    exports: &'e [ReachExport<'a>],
+    span: Span,
+) -> Result<&'e ReachExport<'a>, Error> {
+    match exports {
+        [export] => Ok(export),
         _ => Err(Error::new(
             span,
             format!("SEIZE `{name}` is ambiguous; several sibling modules grant it"),
@@ -2093,6 +2270,88 @@ M: MODULE
     x := x + 1;
   END Helper;
   ASSERT x = 2;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_procedures_and_modes_can_be_granted_outward() {
+        run_source(
+            r#"
+M: MODULE
+  GRANT P, S;
+  A: MODULE
+    GRANT P, S;
+    NEWMODE S = STRUCT(x INT);
+    P: PROC () RETURNS (INT);
+      RETURN 1;
+    END P;
+  END A;
+END M;
+
+N: MODULE
+  SEIZE P, S;
+  DCL s S;
+  s.x := 1;
+  ASSERT s.x = 1;
+  ASSERT P() = 1;
+END N;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_modules_can_define_procedures() {
+        run_source(
+            r#"
+M: MODULE
+  DCL x INT INIT := 1;
+  A: MODULE
+    SEIZE x;
+    Add: PROC () RETURNS (INT);
+      RETURN x + 1;
+    END Add;
+    ASSERT Add() = 2;
+  END A;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_modules_can_define_modes() {
+        run_source(
+            r#"
+M: MODULE
+  A: MODULE
+    NEWMODE S = STRUCT(x INT);
+    DCL s S;
+    s.x := 1;
+    ASSERT s.x = 1;
+  END A;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nested_modules_can_seize_parent_modes() {
+        run_source(
+            r#"
+M: MODULE
+  NEWMODE S = STRUCT(x INT);
+  GRANT S;
+  A: MODULE
+    SEIZE S;
+    DCL s S;
+    s.x := 2;
+    ASSERT s.x = 2;
+  END A;
 END M;
 "#,
         )

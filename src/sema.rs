@@ -171,6 +171,7 @@ pub fn analyze_with_externals(
         exports,
         modes,
         module_modes,
+        module_modes_by_span: info.module_modes_by_span,
         module_floor: 0,
         current_module: 0,
         current_package: 0,
@@ -215,13 +216,20 @@ fn map_program_error(error: program::Error) -> Error {
     Error::coded(error.code, error.span, error.message)
 }
 
+#[derive(Clone)]
+enum ReachExport {
+    Var(Type),
+    Proc(ProcType),
+    Mode(Type),
+}
+
 #[derive(Default, Clone)]
 struct Scope {
     vars: HashMap<String, Type>,
     procs: HashMap<String, ProcType>,
     modes: HashMap<String, Type>,
-    /// Variable names granted into this reach by directly enclosed modules.
-    exports: HashMap<String, Vec<Type>>,
+    /// Names granted into this reach by directly enclosed modules.
+    exports: HashMap<String, Vec<ReachExport>>,
     readonly: HashSet<String>,
 }
 
@@ -232,6 +240,7 @@ struct Checker {
     exports: Vec<program::ExportEntry>,
     modes: crate::modes::ModeTable,
     module_modes: Vec<HashMap<String, Type>>,
+    module_modes_by_span: HashMap<Span, HashMap<String, Type>>,
     /// Index of the current module's scope in `scopes`. Outer module scopes
     /// below this index are hidden except through `SEIZE`.
     module_floor: usize,
@@ -318,22 +327,10 @@ impl Checker {
     fn check_nested_module(&mut self, module: &Module) -> Result<(), Error> {
         for declaration in &module.declarations {
             match declaration {
-                Declaration::Proc(proc_def) => {
-                    return Err(Error::new(
-                        proc_def.span,
-                        "procedure definitions in nested modules are not supported yet",
-                    ));
-                }
                 Declaration::ProcSignature(signature) => {
                     return Err(Error::new(
                         signature.span,
                         "procedure signatures in nested modules are not supported yet",
-                    ));
-                }
-                Declaration::Mode(mode) => {
-                    return Err(Error::new(
-                        mode.span,
-                        "mode definitions in nested modules are not supported yet",
                     ));
                 }
                 _ => {}
@@ -348,9 +345,11 @@ impl Checker {
         self.module_floor = self.scopes.len() - 1;
 
         let result = (|| {
+            self.preload_module_modes(module)?;
             self.apply_nested_seizes(&module.declarations, &parent)?;
             self.collect_declarations(&module.declarations)?;
             self.check_initializers(&module.declarations)?;
+            self.check_proc_bodies(&module.declarations)?;
             self.preload_child_grants(&module.actions)?;
             self.check_nested_grants(module)?;
 
@@ -371,19 +370,34 @@ impl Checker {
     }
 
     fn check_nested_grants(&mut self, module: &Module) -> Result<(), Error> {
-        let mut grantable: HashMap<String, Type> = HashMap::new();
+        let mut grantable: HashMap<String, ReachExport> = HashMap::new();
         for declaration in &module.declarations {
-            if let Declaration::Var(list) = declaration {
-                for var in list {
-                    let ty = self.resolve_mode(&var.mode)?;
-                    grantable.insert(var.name.clone(), ty);
+            match declaration {
+                Declaration::Var(list) => {
+                    for var in list {
+                        let ty = self.resolve_mode(&var.mode)?;
+                        grantable.insert(var.name.clone(), ReachExport::Var(ty));
+                    }
                 }
+                Declaration::Proc(proc_def) => {
+                    let signature =
+                        self.signature_from_params(&proc_def.params, &proc_def.result)?;
+                    grantable.insert(proc_def.name.clone(), ReachExport::Proc(signature));
+                }
+                Declaration::Mode(mode_def) => {
+                    let ty = self.resolve_mode(&ModeRef {
+                        name: mode_def.name.clone(),
+                        span: mode_def.span,
+                    })?;
+                    grantable.insert(mode_def.name.clone(), ReachExport::Mode(ty));
+                }
+                _ => {}
             }
         }
         let scope = self.scopes.last().expect("scope stack is never empty");
-        for (name, types) in &scope.exports {
-            if let [ty] = types.as_slice() {
-                grantable.insert(name.clone(), *ty);
+        for (name, exports) in &scope.exports {
+            if let [export] = exports.as_slice() {
+                grantable.insert(name.clone(), export.clone());
             }
         }
 
@@ -449,14 +463,41 @@ impl Checker {
 
     /// Collect the names a module grants into its parent reach, recursively
     /// accounting for grants from directly enclosed modules.
-    fn collect_module_grants(&mut self, module: &Module) -> Result<HashMap<String, Type>, Error> {
-        let mut grantable: HashMap<String, Type> = HashMap::new();
+    fn collect_module_grants(
+        &mut self,
+        module: &Module,
+        inherited_modes: &HashMap<String, Type>,
+    ) -> Result<HashMap<String, ReachExport>, Error> {
+        let mut local_modes = inherited_modes.clone();
+        if let Some(modes) = self.module_modes_by_span.get(&module.span) {
+            local_modes.extend(modes.clone());
+        }
+
+        let mut grantable: HashMap<String, ReachExport> = HashMap::new();
         for declaration in &module.declarations {
-            if let Declaration::Var(list) = declaration {
-                for var in list {
-                    let ty = self.resolve_mode(&var.mode)?;
-                    grantable.insert(var.name.clone(), ty);
+            match declaration {
+                Declaration::Var(list) => {
+                    for var in list {
+                        let ty = program::resolve_mode_with(&var.mode, &local_modes)
+                            .map_err(map_program_error)?;
+                        grantable.insert(var.name.clone(), ReachExport::Var(ty));
+                    }
                 }
+                Declaration::Proc(proc_def) => {
+                    let signature = program::signature_from_params_with(
+                        &proc_def.params,
+                        &proc_def.result,
+                        &local_modes,
+                    )
+                    .map_err(map_program_error)?;
+                    grantable.insert(proc_def.name.clone(), ReachExport::Proc(signature));
+                }
+                Declaration::Mode(mode_def) => {
+                    if let Some(ty) = local_modes.get(&mode_def.name) {
+                        grantable.insert(mode_def.name.clone(), ReachExport::Mode(*ty));
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -464,8 +505,8 @@ impl Checker {
             let Action::Module(child) = action else {
                 continue;
             };
-            for (name, ty) in self.collect_module_grants(child)? {
-                grantable.entry(name).or_insert(ty);
+            for (name, export) in self.collect_module_grants(child, &local_modes)? {
+                grantable.entry(name).or_insert(export);
             }
         }
 
@@ -478,7 +519,10 @@ impl Checker {
             if visibility.kind != VisibilityKind::Grant {
                 continue;
             }
-            if visibility.prefix.is_some() || !visibility.friends.is_empty() {
+            if visibility.prefix.is_some()
+                || !visibility.friends.is_empty()
+                || visibility.forbid.is_some()
+            {
                 continue;
             }
             let names: Vec<String> = if visibility.all {
@@ -497,7 +541,7 @@ impl Checker {
                         format!("`{name}` is granted more than once"),
                     ));
                 }
-                let Some(ty) = grantable.get(&name) else {
+                let Some(export) = grantable.get(&name).cloned() else {
                     return Err(Error::new(
                         visibility.span,
                         format!(
@@ -505,32 +549,55 @@ impl Checker {
                         ),
                     ));
                 };
-                exports.insert(name, *ty);
+                exports.insert(name, export);
             }
         }
         Ok(exports)
     }
 
     fn preload_child_grants(&mut self, actions: &[Action]) -> Result<(), Error> {
+        let mut base_modes = self.module_modes[self.current_module].clone();
+        for scope in &self.scopes[self.module_floor..] {
+            for (name, ty) in &scope.modes {
+                base_modes.insert(name.clone(), *ty);
+            }
+        }
         for action in actions {
             let Action::Module(child) = action else {
                 continue;
             };
-            for (name, ty) in self.collect_module_grants(child)? {
+            for (name, export) in self.collect_module_grants(child, &base_modes)? {
                 let scope = self.scopes.last_mut().expect("scope stack is never empty");
-                scope.exports.entry(name).or_default().push(ty);
+                scope.exports.entry(name).or_default().push(export);
             }
         }
         Ok(())
     }
 
-    fn single_reach_export(name: &str, types: &[Type], span: Span) -> Result<Type, Error> {
-        match types {
-            [ty] => Ok(*ty),
+    fn single_reach_export<'e>(
+        name: &str,
+        exports: &'e [ReachExport],
+        span: Span,
+    ) -> Result<&'e ReachExport, Error> {
+        match exports {
+            [export] => Ok(export),
             _ => Err(Error::new(
                 span,
                 format!("SEIZE `{name}` is ambiguous; several sibling modules grant it"),
             )),
+        }
+    }
+
+    fn import_reach_export(
+        &mut self,
+        name: &str,
+        export: &ReachExport,
+        span: Span,
+    ) -> Result<(), Error> {
+        match export {
+            ReachExport::Var(ty) => self.declare_var(name, *ty, span),
+            ReachExport::Proc(signature) => self.declare_proc(name, signature.clone(), span),
+            ReachExport::Mode(ty) => self.declare_mode(name, *ty, span),
         }
     }
 
@@ -549,10 +616,12 @@ impl Checker {
                             }
                             let declared = self.resolve_mode(&var.mode)?;
                             let parent_ty = parent.vars.get(&var.name).copied().or_else(|| {
-                                parent
-                                    .exports
-                                    .get(&var.name)
-                                    .and_then(|types| (types.len() == 1).then_some(types[0]))
+                                parent.exports.get(&var.name).and_then(|exports| {
+                                    match exports.as_slice() {
+                                        [ReachExport::Var(ty)] => Some(*ty),
+                                        _ => None,
+                                    }
+                                })
                             });
                             match parent_ty {
                                 Some(actual) if actual == declared => {}
@@ -588,7 +657,14 @@ impl Checker {
                         }
                         let declared =
                             self.signature_from_params(&signature.params, &signature.result)?;
-                        let parent_sig = parent.procs.get(&signature.name).cloned();
+                        let parent_sig = parent.procs.get(&signature.name).cloned().or_else(|| {
+                            parent.exports.get(&signature.name).and_then(|exports| {
+                                match exports.as_slice() {
+                                    [ReachExport::Proc(signature)] => Some(signature.clone()),
+                                    _ => None,
+                                }
+                            })
+                        });
                         match parent_sig {
                             Some(actual) if actual == declared => {}
                             Some(_) => {
@@ -652,9 +728,9 @@ impl Checker {
                 for (name, ty) in &parent.modes {
                     self.declare_mode(name, *ty, visibility.span)?;
                 }
-                for (name, types) in &parent.exports {
-                    let ty = Self::single_reach_export(name, types, visibility.span)?;
-                    self.declare_var(name, ty, visibility.span)?;
+                for (name, exports) in &parent.exports {
+                    let export = Self::single_reach_export(name, exports, visibility.span)?;
+                    self.import_reach_export(name, export, visibility.span)?;
                 }
                 continue;
             }
@@ -672,9 +748,9 @@ impl Checker {
                     self.declare_proc(&name.name, signature.clone(), name.span)?;
                 } else if let Some(ty) = parent.modes.get(&name.name) {
                     self.declare_mode(&name.name, *ty, name.span)?;
-                } else if let Some(types) = parent.exports.get(&name.name) {
-                    let ty = Self::single_reach_export(&name.name, types, name.span)?;
-                    self.declare_var(&name.name, ty, name.span)?;
+                } else if let Some(exports) = parent.exports.get(&name.name) {
+                    let export = Self::single_reach_export(&name.name, exports, name.span)?;
+                    self.import_reach_export(&name.name, export, name.span)?;
                 } else {
                     return Err(Error::new(
                         name.span,
@@ -934,7 +1010,11 @@ impl Checker {
     }
 
     fn preload_module_modes(&mut self, module: &Module) -> Result<(), Error> {
-        let modes = self.module_modes[self.current_module].clone();
+        let modes = self
+            .module_modes_by_span
+            .get(&module.span)
+            .cloned()
+            .unwrap_or_else(|| self.module_modes[self.current_module].clone());
         let scope = self.scopes.last_mut().expect("scope stack is never empty");
         for (name, ty) in modes {
             if scope.modes.contains_key(&name) {
@@ -979,6 +1059,11 @@ impl Checker {
             if let Some(ty) = scope.modes.get(&mode.name) {
                 return Ok(*ty);
             }
+            if let Some(exports) = scope.exports.get(&mode.name) {
+                if let [ReachExport::Mode(ty)] = exports.as_slice() {
+                    return Ok(*ty);
+                }
+            }
         }
         program::resolve_mode(mode).map_err(map_program_error)
     }
@@ -988,9 +1073,9 @@ impl Checker {
             if let Some(ty) = scope.vars.get(name) {
                 return Some(*ty);
             }
-            if let Some(types) = scope.exports.get(name) {
-                if types.len() == 1 {
-                    return Some(types[0]);
+            if let Some(exports) = scope.exports.get(name) {
+                if let [ReachExport::Var(ty)] = exports.as_slice() {
+                    return Some(*ty);
                 }
             }
         }
@@ -998,10 +1083,17 @@ impl Checker {
     }
 
     fn lookup_proc(&self, name: &str) -> Option<ProcType> {
-        self.scopes[self.module_floor..]
-            .iter()
-            .rev()
-            .find_map(|scope| scope.procs.get(name).cloned())
+        for scope in self.scopes[self.module_floor..].iter().rev() {
+            if let Some(signature) = scope.procs.get(name) {
+                return Some(signature.clone());
+            }
+            if let Some(exports) = scope.exports.get(name) {
+                if let [ReachExport::Proc(signature)] = exports.as_slice() {
+                    return Some(signature.clone());
+                }
+            }
+        }
+        None
     }
 
     fn check_block(&mut self, actions: &[Action]) -> Result<(), Error> {
@@ -2414,23 +2506,21 @@ END M;
     }
 
     #[test]
-    fn nested_module_rejects_local_definitions() {
-        let error = check_source(
+    fn nested_module_allows_local_definitions() {
+        check_source(
             r#"
 M: MODULE
   Helper: MODULE
-    P: PROC ();
+    DCL x INT INIT := 1;
+    P: PROC () RETURNS (INT);
+      RETURN x;
     END P;
+    ASSERT P() = 1;
   END Helper;
 END M;
 "#,
         )
-        .unwrap_err();
-        assert!(
-            error.message.contains("nested modules"),
-            "{}",
-            error.message
-        );
+        .unwrap();
     }
 
     #[test]
