@@ -1,10 +1,10 @@
 # Piecewise compilation (design)
 
-Status: **Phase 0 implemented.** Remote syntax, piece designators, manifest `[pieces]`,
-and the resolver exist; remote nodes are validated and then rejected as “not expanded
-yet”. This document also designs the remaining expansion, nested spec modules/regions,
-and context interactions. Regions are a separate prerequisite and are not implemented
-yet.
+Status: **Phases 0–1 implemented.** Remote syntax, piece designators, manifest
+`[pieces]`, the resolver, and expansion of remote modules/spec modules/program units
+exist. Remote contexts and context modules are still rejected as “not expanded yet”.
+This document also designs the remaining nested spec modules/regions and context
+interactions. Regions are a separate prerequisite and are not implemented yet.
 
 ## Normative model
 
@@ -233,12 +233,17 @@ Diagnostics should carry both the referencing span and the resolved piece path.
 - Loader validates that referenced pieces exist (`E0700`).
 - No expansion yet; remote nodes produce `E0701` “remote pieces are not expanded yet”.
 
-### Phase 1 — Remote modules, specs, and program units
+### Phase 1 — Remote modules, specs, and program units (implemented)
 
-- Expand remote modulions/specs/program units.
-- Enforce kind compatibility and non-remote target rules.
-- Reuse existing top-level spec/body pairing.
-- Tests: literal path, text ref, empty designator, missing piece, wrong kind, cycle.
+- The loader expands remote modulions/specs/program units before semantic analysis.
+- Kind compatibility is enforced (module vs spec module vs any unit).
+- Optional names must match the referenced unit’s module name.
+- A referenced piece must contain exactly one non-remote program unit.
+- Cycle detection uses the resolver’s `visiting` set.
+- Expanded modules get the referencing package identity.
+- Tests: literal/text-ref/empty resolution, missing piece, wrong kind, named remote
+  module, remote spec module, and execution of expanded modules.
+- Remote contexts and `CONTEXT MODULE REMOTE` still report `E0701`.
 
 ### Phase 2 — Remote contexts and context lists
 

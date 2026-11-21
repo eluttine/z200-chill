@@ -653,7 +653,7 @@ entry = "src/main.ch"
 }
 
 #[test]
-fn remote_piece_reports_not_expanded() {
+fn remote_piece_is_expanded() {
     let dir = std::env::temp_dir().join(format!("z200-piece-present-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -678,10 +678,147 @@ counter = "pieces/counter.ch"
     std::fs::write(dir.join("src/main.ch"), "REMOTE counter;\n").unwrap();
 
     let output = z200c().arg("check").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn named_remote_module_expands_and_runs() {
+    let dir = std::env::temp_dir().join(format!("z200-piece-run-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("pieces")).unwrap();
+    std::fs::write(
+        dir.join("pieces/helper.ch"),
+        r#"
+Helper: MODULE
+  ASSERT 1 = 1;
+END Helper;
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "remote"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+
+[pieces]
+helper = "pieces/helper.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/main.ch"), "Helper: REMOTE helper;\n").unwrap();
+
+    let output = z200c().arg("run").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn remote_spec_module_expands() {
+    let dir = std::env::temp_dir().join(format!("z200-piece-spec-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("pieces")).unwrap();
+    std::fs::write(
+        dir.join("pieces/spec.ch"),
+        r#"
+Counter: SPEC MODULE
+  GRANT value;
+  DCL value INT;
+END Counter;
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "remote"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+Counter: SPEC REMOTE "pieces/spec.ch";
+
+Counter: MODULE
+  DCL value INT INIT := 1;
+END Counter;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("check").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn remote_piece_kind_mismatch_is_reported() {
+    let dir = std::env::temp_dir().join(format!("z200-piece-kind-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("pieces")).unwrap();
+    std::fs::write(
+        dir.join("pieces/spec.ch"),
+        "Counter: SPEC MODULE END Counter;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "remote"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        "Counter: REMOTE \"pieces/spec.ch\";\n",
+    )
+    .unwrap();
+
+    let output = z200c().arg("check").arg(&dir).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("E0701"), "stderr: {stderr}");
-    assert!(stderr.contains("not expanded yet"), "stderr: {stderr}");
+    assert!(stderr.contains("E0700"), "stderr: {stderr}");
+    assert!(stderr.contains("not a module"), "stderr: {stderr}");
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

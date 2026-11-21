@@ -194,9 +194,9 @@ struct LoadedPackage {
 struct Loader {
     source_map: SourceMap,
     modules: Vec<crate::ast::Module>,
-    remotes: Vec<crate::ast::RemoteUnit>,
     package_dirs: Vec<std::path::PathBuf>,
     package_pieces: Vec<std::collections::HashMap<String, std::path::PathBuf>>,
+    piece_visiting: HashSet<std::path::PathBuf>,
     token_count: usize,
     external: Vec<program::ExternalInterface>,
     visiting: HashSet<PathBuf>,
@@ -221,9 +221,9 @@ fn load_package(target: &Path, link_grant_sources: bool) -> Result<LoadedPackage
     let mut loader = Loader {
         source_map: SourceMap::default(),
         modules: Vec::new(),
-        remotes: Vec::new(),
         package_dirs: Vec::new(),
         package_pieces: Vec::new(),
+        piece_visiting: HashSet::new(),
         token_count: 0,
         external: Vec::new(),
         visiting: HashSet::new(),
@@ -243,7 +243,7 @@ fn load_package(target: &Path, link_grant_sources: bool) -> Result<LoadedPackage
         token_count: loader.token_count,
         program: Program {
             modules: loader.modules,
-            remotes: loader.remotes,
+            remotes: Vec::new(),
         },
         external: loader.external,
     })
@@ -362,41 +362,136 @@ impl Loader {
             self.source_map
                 .format_diagnostic(error.code, error.span, &error.message)
         })?;
-        self.validate_remotes(&program, path, package)?;
-        for mut module in program.modules {
-            module.package = package;
-            module.package_name = Some(package_name.to_owned());
-            self.modules.push(module);
+        let mut modules = self.expand_program(program, path, package, package_name)?;
+        for module in &mut modules {
+            assign_package(module, package, package_name);
         }
-        self.remotes.extend(program.remotes);
+        self.modules.extend(modules);
         Ok(())
     }
 
-    fn validate_remotes(
-        &self,
-        program: &Program,
-        containing_file: &Path,
+    fn expand_program(
+        &mut self,
+        program: Program,
+        containing: &Path,
         package: usize,
-    ) -> Result<(), String> {
-        let pieces = crate::pieces::PieceResolver::new(
+        package_name: &str,
+    ) -> Result<Vec<crate::ast::Module>, String> {
+        let mut modules = program.modules;
+        for remote in program.remotes {
+            modules.extend(self.expand_remote(remote, containing, package, package_name)?);
+        }
+        Ok(modules)
+    }
+
+    fn expand_remote(
+        &mut self,
+        remote: crate::ast::RemoteUnit,
+        containing: &Path,
+        package: usize,
+        package_name: &str,
+    ) -> Result<Vec<crate::ast::Module>, String> {
+        if remote.kind == crate::ast::RemoteKind::ContextModule {
+            return Err(self.source_map.format_diagnostic(
+                "E0701",
+                remote.span,
+                "remote context modules are not expanded yet",
+            ));
+        }
+
+        let resolver = crate::pieces::PieceResolver::new(
             &self.package_dirs[package],
             &self.package_pieces[package],
         );
-        for remote in &program.remotes {
-            pieces
-                .resolve_existing(&remote.designator, remote.name.as_deref(), containing_file)
-                .map_err(|error| format!("error[E0700]: {error}"))?;
-        }
-        for module in &program.modules {
-            for context in &module.contexts {
-                if let Some(designator) = &context.remote {
-                    pieces
-                        .resolve_existing(designator, module.name.as_deref(), containing_file)
-                        .map_err(|error| format!("error[E0700]: {error}"))?;
+        let canonical = resolver
+            .resolve_checked(
+                &remote.designator,
+                remote.name.as_deref(),
+                containing,
+                &mut self.piece_visiting,
+            )
+            .map_err(|error| format!("error[E0700]: {error}"))?;
+
+        let result = (|| {
+            let (piece, _) = self.parse_source_file(&canonical)?;
+            if piece
+                .remotes
+                .iter()
+                .any(|r| r.kind != crate::ast::RemoteKind::ContextModule)
+                || !piece.remotes.is_empty()
+            {
+                return Err(format!(
+                    "error[E0700]: piece {} is itself a remote program unit",
+                    canonical.display()
+                ));
+            }
+            if piece.modules.len() != 1 {
+                return Err(format!(
+                    "error[E0700]: piece {} must contain exactly one program unit",
+                    canonical.display()
+                ));
+            }
+            let module = &piece.modules[0];
+            match remote.kind {
+                crate::ast::RemoteKind::Module if module.kind != crate::ast::ModuleKind::Body => {
+                    return Err(format!(
+                        "error[E0700]: piece {} is not a module",
+                        canonical.display()
+                    ));
+                }
+                crate::ast::RemoteKind::SpecModule
+                    if module.kind != crate::ast::ModuleKind::Spec =>
+                {
+                    return Err(format!(
+                        "error[E0700]: piece {} is not a spec module",
+                        canonical.display()
+                    ));
+                }
+                _ => {}
+            }
+            if let Some(name) = &remote.name {
+                if module.name.as_deref() != Some(name.as_str()) {
+                    return Err(format!(
+                        "error[E0700]: piece {} defines `{}`, not `{name}`",
+                        canonical.display(),
+                        module.name.as_deref().unwrap_or("<unnamed>")
+                    ));
                 }
             }
-        }
-        Ok(())
+
+            let mut modules = piece.modules;
+            for module in &mut modules {
+                assign_package(module, package, package_name);
+            }
+            Ok(modules)
+        })();
+
+        self.piece_visiting.remove(&canonical);
+        result
+    }
+
+    fn parse_source_file(
+        &mut self,
+        path: &Path,
+    ) -> Result<(Program, crate::lexer::SourceId), String> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|error| format!("error[E0700]: cannot read {}: {error}", path.display()))?;
+        let source_id = self.source_map.add(path.to_path_buf(), text);
+        let tokens = {
+            let source = &self
+                .source_map
+                .get(source_id)
+                .expect("source was just added")
+                .text;
+            lexer::tokenize_with_source(source, source_id)
+                .map_err(|errors| self.source_map.format_lex_errors(&errors))?
+        };
+        self.token_count += tokens.len();
+        let program = parser::parse(&tokens).map_err(|error| {
+            self.source_map
+                .format_diagnostic(error.code, error.span, &error.message)
+        })?;
+        Ok((program, source_id))
     }
 
     fn load_grant_dependency(&mut self, name: &str, path: &Path) -> Result<(), String> {
@@ -451,6 +546,56 @@ impl Loader {
                 .map_err(|error| format!("error[E0600]: {}: {error}", path.display()))?,
         );
         Ok(())
+    }
+}
+
+fn assign_package(module: &mut crate::ast::Module, package: usize, package_name: &str) {
+    module.package = package;
+    module.package_name = Some(package_name.to_owned());
+    assign_action_packages(&mut module.actions, package, package_name);
+}
+
+fn assign_action_packages(actions: &mut [crate::ast::Action], package: usize, package_name: &str) {
+    for action in actions {
+        match action {
+            crate::ast::Action::Module(module) => {
+                assign_package(module, package, package_name);
+            }
+            crate::ast::Action::If {
+                branches,
+                else_actions,
+                ..
+            } => {
+                for branch in branches {
+                    assign_action_packages(&mut branch.body, package, package_name);
+                }
+                if let Some(actions) = else_actions {
+                    assign_action_packages(actions, package, package_name);
+                }
+            }
+            crate::ast::Action::Do { body, .. } => {
+                assign_action_packages(body, package, package_name);
+            }
+            crate::ast::Action::Case {
+                alternatives,
+                else_actions,
+                ..
+            } => {
+                for alternative in alternatives {
+                    assign_action_packages(&mut alternative.body, package, package_name);
+                }
+                if let Some(actions) = else_actions {
+                    assign_action_packages(actions, package, package_name);
+                }
+            }
+            crate::ast::Action::Labelled { action, .. } => {
+                assign_action_packages(std::slice::from_mut(action), package, package_name);
+            }
+            crate::ast::Action::Begin { actions, .. } => {
+                assign_action_packages(actions, package, package_name);
+            }
+            _ => {}
+        }
     }
 }
 
