@@ -837,19 +837,15 @@ pub(crate) fn resolve_mode_with(
     mode: &ModeRef,
     mode_names: &HashMap<String, Type>,
 ) -> Result<Type, Error> {
-    mode_names
-        .get(&mode.name)
-        .copied()
-        .or_else(|| types::resolve_mode(&mode.name))
-        .ok_or_else(|| {
-            Error::new(
-                mode.span,
-                format!(
-                    "unknown mode `{}`; only scalar modes and previously defined modes are supported in structure fields",
-                    mode.name
-                ),
-            )
-        })
+    types::resolve_mode_ref(mode, mode_names).ok_or_else(|| {
+        Error::new(
+            mode.span,
+            format!(
+                "unknown mode `{}`; array elements must be scalar modes or the mode must be previously defined",
+                mode.name
+            ),
+        )
+    })
 }
 
 pub fn collect_interface(

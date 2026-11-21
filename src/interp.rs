@@ -221,6 +221,7 @@ enum Value {
     Char(char),
     String(String),
     Struct(Vec<(String, Value)>),
+    Array { low: i128, values: Vec<Value> },
 }
 
 struct Var {
@@ -1416,6 +1417,14 @@ impl<'a> Interpreter<'a> {
             ir::Expr::Char { value, .. } => Ok(Value::Char(*value)),
             ir::Expr::String { value, .. } => Ok(Value::String(value.clone())),
             ir::Expr::Name { name, span, .. } => self.read_var(name, *span),
+            ir::Expr::Index {
+                name, index, span, ..
+            } => {
+                let value = self.read_var(name, *span)?;
+                let index_value = self.eval_ir(index)?;
+                let (index, _) = self.expect_int(index_value, index.span())?;
+                read_array_element(value, index, *span)
+            }
             ir::Expr::Conversion {
                 kind, arg, span, ..
             } => {
@@ -1703,6 +1712,26 @@ impl<'a> Interpreter<'a> {
             (Value::Bool(left), Value::Bool(right)) => Ok(left == right),
             (Value::Char(left), Value::Char(right)) => Ok(left == right),
             (Value::String(left), Value::String(right)) => Ok(left == right),
+            (
+                Value::Array {
+                    low: left_low,
+                    values: left_values,
+                },
+                Value::Array {
+                    low: right_low,
+                    values: right_values,
+                },
+            ) => {
+                if left_low != right_low || left_values.len() != right_values.len() {
+                    return Ok(false);
+                }
+                for (left, right) in left_values.iter().zip(right_values) {
+                    if !self.values_equal(left, right, span)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
             (Value::Struct(left), Value::Struct(right)) => {
                 if left.len() != right.len() {
                     return Err(Error::new(
@@ -1798,11 +1827,42 @@ impl<'a> Interpreter<'a> {
                 Value::Struct(_) => Ok(value),
                 _ => Err(Error::new(span, "expected a structure value")),
             },
+            Type::Array(array) => match value {
+                Value::Array { low, values }
+                    if low == array.low
+                        && values.len() == (array.high - array.low + 1) as usize =>
+                {
+                    Ok(Value::Array { low, values })
+                }
+                _ => Err(Error::new(span, "expected an array value")),
+            },
             Type::IntLiteral => Err(Error::new(span, "internal: cannot declare a literal type")),
         }
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        if let Some(bounds) = mode.array {
+            let element_mode = ModeRef {
+                name: mode.name.clone(),
+                array: None,
+                span: mode.span,
+            };
+            let base = self.resolve_mode(&element_mode)?;
+            let Some(element) = base.scalar() else {
+                return Err(Error::new(
+                    mode.span,
+                    format!(
+                        "array elements must be scalar modes, found {}",
+                        base.describe()
+                    ),
+                ));
+            };
+            return Ok(Type::Array(crate::types::ArrayType {
+                low: bounds.low,
+                high: bounds.high,
+                element,
+            }));
+        }
         let floor = self.local_floor();
         for scope in self.locals[floor..].iter().rev() {
             if let Some(ty) = scope.modes.get(&mode.name) {
@@ -1851,13 +1911,20 @@ impl<'a> Interpreter<'a> {
                 Ok(ty)
             }
             ir::AssignTarget::Field { ty, .. } => Ok(*ty),
+            ir::AssignTarget::Index { ty, .. } => Ok(*ty),
         }
     }
 
-    fn read_target(&self, target: &ir::AssignTarget, span: Span) -> Result<Value, Error> {
+    fn read_target(&mut self, target: &ir::AssignTarget, span: Span) -> Result<Value, Error> {
         match target {
             ir::AssignTarget::Var(name) => self.read_var(name, span),
             ir::AssignTarget::Field { root, path, .. } => self.read_field_path(root, path, span),
+            ir::AssignTarget::Index { name, index, .. } => {
+                let value = self.read_var(name, span)?;
+                let index_value = self.eval_ir(index)?;
+                let (index, _) = self.expect_int(index_value, index.span())?;
+                read_array_element(value, index, span)
+            }
         }
     }
 
@@ -1889,6 +1956,16 @@ impl<'a> Interpreter<'a> {
                     .ok_or_else(|| Error::new(span, format!("unknown variable `{root}`")))?;
                 let mut var = cell.borrow_mut();
                 assign_path(&mut var.value, path, value, span)
+            }
+            ir::AssignTarget::Index { name, index, ty } => {
+                let value = self.convert(value, *ty, span)?;
+                let index_value = self.eval_ir(index)?;
+                let (index, _) = self.expect_int(index_value, index.span())?;
+                let cell = self
+                    .find_var_cell(name)
+                    .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+                let mut var = cell.borrow_mut();
+                assign_array_element(&mut var.value, index, value, span)
             }
         }
     }
@@ -2205,6 +2282,46 @@ fn reach_grant_prefix(
     }
 }
 
+fn read_array_element(value: Value, index: i128, span: Span) -> Result<Value, Error> {
+    let Value::Array { low, values } = value else {
+        return Err(Error::new(span, "expected an array value"));
+    };
+    let offset = index - low;
+    if offset < 0 || offset as usize >= values.len() {
+        return Err(Error::new(
+            span,
+            format!("array index `{index}` is out of bounds"),
+        ));
+    }
+    match &values[offset as usize] {
+        Value::Undefined => Err(Error::new(
+            span,
+            format!("use of undefined array element `{index}`"),
+        )),
+        value => Ok(value.clone()),
+    }
+}
+
+fn assign_array_element(
+    value: &mut Value,
+    index: i128,
+    new_value: Value,
+    span: Span,
+) -> Result<(), Error> {
+    let Value::Array { low, values } = value else {
+        return Err(Error::new(span, "expected an array value"));
+    };
+    let offset = index - *low;
+    if offset < 0 || offset as usize >= values.len() {
+        return Err(Error::new(
+            span,
+            format!("array index `{index}` is out of bounds"),
+        ));
+    }
+    values[offset as usize] = new_value;
+    Ok(())
+}
+
 fn read_field(value: Value, field: &str, span: Span) -> Result<Value, Error> {
     let Value::Struct(fields) = value else {
         return Err(Error::new(span, "expected a structure value"));
@@ -2250,11 +2367,12 @@ fn assign_path(
 }
 
 fn resolve_mode_with(mode: &ModeRef, mode_names: &HashMap<String, Type>) -> Result<Type, Error> {
-    mode_names
-        .get(&mode.name)
-        .copied()
-        .or_else(|| types::resolve_mode(&mode.name))
-        .ok_or_else(|| Error::new(mode.span, format!("unknown mode `{}`", mode.name)))
+    types::resolve_mode_ref(mode, mode_names).ok_or_else(|| {
+        Error::new(
+            mode.span,
+            format!("unknown or unsupported mode `{}`", mode.name),
+        )
+    })
 }
 
 fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
@@ -2267,6 +2385,10 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
                 .map(|field| (field.name.clone(), default_value(modes, field.ty)))
                 .collect(),
         ),
+        Type::Array(array) => Value::Array {
+            low: array.low,
+            values: vec![Value::Undefined; (array.high - array.low + 1).max(0) as usize],
+        },
         _ => Value::Undefined,
     }
 }
@@ -3130,6 +3252,42 @@ END M;
 "#,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn arrays_support_indexing_bounds_and_scalars() {
+        run_source(
+            r#"
+M: MODULE
+  DCL a ARRAY (1:3) INT;
+  DCL s ARRAY (0:1) CHARS;
+  DCL n ARRAY (-1:1) INT;
+  a(1) := 10;
+  a(2) := 20;
+  a(3) := a(1) + a(2);
+  ASSERT a(3) = 30;
+  s(0) := "x";
+  ASSERT s(0) = "x";
+  n(-1) := 5;
+  ASSERT n(-1) = 5;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn array_index_out_of_bounds_is_reported() {
+        let error = run_source(
+            r#"
+M: MODULE
+  DCL a ARRAY (1:2) INT;
+  a(0) := 1;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("out of bounds"), "{}", error.message);
     }
 
     #[test]

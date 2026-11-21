@@ -1,6 +1,7 @@
+use crate::ast::ModeRef;
 use crate::manifest::WidthProfile;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntKind {
     Short,
     Int,
@@ -28,6 +29,21 @@ impl IntKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ModeId(pub usize);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Scalar {
+    Int(IntKind),
+    Bool,
+    Char,
+    String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ArrayType {
+    pub low: i128,
+    pub high: i128,
+    pub element: Scalar,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Type {
     Int(IntKind),
@@ -37,6 +53,7 @@ pub enum Type {
     Char,
     String,
     Struct(ModeId),
+    Array(ArrayType),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +67,25 @@ impl Type {
         matches!(self, Self::Int(_) | Self::IntLiteral)
     }
 
+    pub fn scalar(self) -> Option<Scalar> {
+        match self {
+            Self::Int(kind) => Some(Scalar::Int(kind)),
+            Self::Bool => Some(Scalar::Bool),
+            Self::Char => Some(Scalar::Char),
+            Self::String => Some(Scalar::String),
+            Self::IntLiteral | Self::Struct(_) | Self::Array(_) => None,
+        }
+    }
+
+    pub fn from_scalar(scalar: Scalar) -> Self {
+        match scalar {
+            Scalar::Int(kind) => Self::Int(kind),
+            Scalar::Bool => Self::Bool,
+            Scalar::Char => Self::Char,
+            Scalar::String => Self::String,
+        }
+    }
+
     pub fn describe(self) -> &'static str {
         match self {
             Self::Int(kind) => kind.name(),
@@ -58,6 +94,7 @@ impl Type {
             Self::Char => "CHAR",
             Self::String => "character string",
             Self::Struct(_) => "structure",
+            Self::Array(_) => "array",
         }
     }
 }
@@ -72,6 +109,28 @@ pub fn resolve_mode(name: &str) -> Option<Type> {
         "CHAR" => Some(Type::Char),
         "CHARS" => Some(Type::String),
         _ => None,
+    }
+}
+
+/// Resolve a mode reference, including an inline `ARRAY (low:high) element` shape.
+pub fn resolve_mode_ref(
+    mode: &ModeRef,
+    mode_names: &std::collections::HashMap<String, Type>,
+) -> Option<Type> {
+    let base = mode_names
+        .get(&mode.name)
+        .copied()
+        .or_else(|| resolve_mode(&mode.name))?;
+    match mode.array {
+        None => Some(base),
+        Some(bounds) => {
+            let element = base.scalar()?;
+            Some(Type::Array(ArrayType {
+                low: bounds.low,
+                high: bounds.high,
+                element,
+            }))
+        }
     }
 }
 

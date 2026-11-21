@@ -276,6 +276,35 @@ fn parse_external_type(
     name: &str,
     definitions: &std::collections::HashMap<String, &GrantMode>,
 ) -> Result<program::ExternalType, String> {
+    if let Some(rest) = name.strip_prefix("ARRAY(") {
+        let (bounds, element) = rest
+            .split_once(')')
+            .ok_or_else(|| format!("invalid array mode `{name}` in grant file"))?;
+        let (low, high) = bounds
+            .split_once(':')
+            .ok_or_else(|| format!("invalid array mode `{name}` in grant file"))?;
+        let low = low
+            .trim()
+            .parse::<i128>()
+            .map_err(|_| format!("invalid array lower bound in `{name}`"))?;
+        let high = high
+            .trim()
+            .parse::<i128>()
+            .map_err(|_| format!("invalid array upper bound in `{name}`"))?;
+        if low > high {
+            return Err(format!("invalid array bounds in `{name}`"));
+        }
+        let element = parse_external_type(element.trim(), definitions)?;
+        let program::ExternalType::Builtin(element) = element else {
+            return Err(format!("array element must be scalar in `{name}`"));
+        };
+        let Some(element) = element.scalar() else {
+            return Err(format!("array element must be scalar in `{name}`"));
+        };
+        return Ok(program::ExternalType::Builtin(Type::Array(
+            types::ArrayType { low, high, element },
+        )));
+    }
     if let Some(ty) = types::resolve_mode(name) {
         return Ok(program::ExternalType::Builtin(ty));
     }
@@ -306,6 +335,12 @@ fn type_name(ty: Type) -> String {
         // Structure modes must be referenced symbolically; this branch should
         // not be reached because portable types use `ExternalType::Mode`.
         Type::Struct(_) => "STRUCT".to_owned(),
+        Type::Array(array) => format!(
+            "ARRAY({}:{}) {}",
+            array.low,
+            array.high,
+            type_name(Type::from_scalar(array.element))
+        ),
         // Expression-only class; it cannot occur in a declared signature.
         Type::IntLiteral => "INT".to_owned(),
     }
@@ -558,6 +593,20 @@ END M;
         assert_eq!(export.kind, GrantKind::Variable);
         assert_eq!(export.module.as_deref(), Some("M"));
         assert_eq!(export.mode.as_deref(), Some("INT"));
+    }
+
+    #[test]
+    fn array_types_round_trip() {
+        let ty = Type::Array(types::ArrayType {
+            low: -1,
+            high: 2,
+            element: types::Scalar::Int(types::IntKind::Int),
+        });
+        let text = type_name(ty);
+        assert_eq!(
+            parse_external_type(&text, &std::collections::HashMap::new()).unwrap(),
+            program::ExternalType::Builtin(ty)
+        );
     }
 
     #[test]

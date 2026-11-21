@@ -55,7 +55,7 @@ Implemented in `z200c`:
 - manifest loading and width-profile validation;
 - lexer, parser, and AST for the constructs in the subset above;
 - mode checking for `SHORT_INT` / `INT` / `LONG_INT` / `BOOL` / `CHAR` / `CHARS`,
-  literals, arithmetic,
+  literals, arithmetic, and one-dimensional scalar arrays (`ARRAY (low:high) mode`),
   relational and boolean expressions, procedures, calls, assignments, `ASSERT`,
   `IF`, `DO WHILE` / `DO FOR EVER`, and `BEGIN … END`;
 - `GRANT` / `SEIZE` visibility with module/package-qualified names (`Module!x`,
@@ -212,6 +212,18 @@ Z.200 does **not** require `SHORT_INT` to be narrower than `INT`, nor `INT` narr
 
 Integer widths are a target/toolchain property, not a package manifest setting. The
 invariant `width(SHORT_INT) <= width(INT) <= width(LONG_INT)` holds by construction.
+
+### 4.3 Arrays
+
+`ARRAY (low:high) element-mode` declares a one-dimensional array with constant integer
+bounds. The element mode must be scalar (`SHORT_INT`/`INT`/`LONG_INT`, `BOOL`, `CHAR`,
+or `CHARS`).
+
+- `a(i)` selects an element, and may be read or used as an assignment target.
+- Bounds are checked at runtime.
+- Whole-array assignment copies the value.
+- Not implemented yet: array slices, nested/multidimensional arrays, arrays of
+  structures, and array literals.
 
 ### 4.4 Runtime checks
 

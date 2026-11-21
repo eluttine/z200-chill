@@ -838,16 +838,74 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_mode_ref(&mut self) -> Result<ModeRef, Error> {
+        if self.at_keyword(Keyword::Array) {
+            let start = self.current_span();
+            self.advance();
+            self.expect_lparen()?;
+            let low = self.parse_mode_integer()?;
+            self.expect_colon()?;
+            let high = self.parse_mode_integer()?;
+            self.expect_rparen()?;
+            if low > high {
+                return Err(Error::coded(
+                    "E0205",
+                    start,
+                    "array lower bound is greater than its upper bound",
+                ));
+            }
+            let element = self.parse_mode_ref()?;
+            if element.array.is_some() {
+                return Err(Error::coded(
+                    "E0205",
+                    element.span,
+                    "nested array modes are not implemented yet",
+                ));
+            }
+            return Ok(ModeRef {
+                name: element.name,
+                array: Some(ArrayBounds { low, high }),
+                span: Span::new(self.source, start.start, element.span.end),
+            });
+        }
         if self.at_keyword(Keyword::Chars) {
             let span = self.current_span();
             self.advance();
             return Ok(ModeRef {
                 name: "CHARS".to_owned(),
+                array: None,
                 span,
             });
         }
         let (name, span) = self.expect_identifier()?;
-        Ok(ModeRef { name, span })
+        Ok(ModeRef {
+            name,
+            array: None,
+            span,
+        })
+    }
+
+    fn parse_mode_integer(&mut self) -> Result<i128, Error> {
+        let negative = if matches!(self.kind(), Some(TokenKind::Minus)) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        let Some(token) = self.current() else {
+            return Err(self.expected("an integer array bound"));
+        };
+        let value = match &token.kind {
+            TokenKind::Integer { value, .. } => *value,
+            _ => return Err(self.expected("an integer array bound")),
+        };
+        self.advance();
+        if negative {
+            value
+                .checked_neg()
+                .ok_or_else(|| self.error_here_code("E0205", "array bound is out of range"))
+        } else {
+            Ok(value)
+        }
     }
 
     fn parse_actions_until(&mut self, stop: &[Keyword]) -> Result<Vec<Action>, Error> {

@@ -68,6 +68,12 @@ pub enum Expr {
         ty: Type,
         span: Span,
     },
+    Index {
+        name: String,
+        index: Node,
+        ty: Type,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -82,7 +88,8 @@ impl Expr {
             | Self::Call { span, .. }
             | Self::Unary { span, .. }
             | Self::Binary { span, .. }
-            | Self::Field { span, .. } => *span,
+            | Self::Field { span, .. }
+            | Self::Index { span, .. } => *span,
         }
     }
 
@@ -96,7 +103,8 @@ impl Expr {
             | Self::Conversion { ty, .. }
             | Self::Unary { ty, .. }
             | Self::Binary { ty, .. }
-            | Self::Field { ty, .. } => Some(*ty),
+            | Self::Field { ty, .. }
+            | Self::Index { ty, .. } => Some(*ty),
             Self::Call { ty, .. } => *ty,
         }
     }
@@ -109,6 +117,11 @@ pub enum AssignTarget {
     Field {
         root: String,
         path: Vec<String>,
+        ty: Type,
+    },
+    Index {
+        name: String,
+        index: Node,
         ty: Type,
     },
 }
@@ -469,6 +482,28 @@ impl Lowerer<'_> {
     fn lower_target(&mut self, target: &AstExpr) -> Result<AssignTarget, Error> {
         match target {
             AstExpr::Name { name, .. } => Ok(AssignTarget::Var(name.clone())),
+            AstExpr::Apply { name, args, span } => {
+                if !matches!(
+                    self.check.resolutions.get(span),
+                    Some(ApplyResolution::ArrayIndex)
+                ) {
+                    return Err(Error::new(
+                        *span,
+                        "assignment target must be a variable, field, or array element",
+                    ));
+                }
+                let ty = self.check.types.get(span).copied().ok_or_else(|| {
+                    Error::new(*span, "internal: array element has no checked mode")
+                })?;
+                let index = args
+                    .first()
+                    .ok_or_else(|| Error::new(*span, "array index has no operand"))?;
+                Ok(AssignTarget::Index {
+                    name: name.clone(),
+                    index: self.lower_expr(index)?,
+                    ty,
+                })
+            }
             AstExpr::Field { .. } => {
                 let ty = self
                     .check
@@ -524,6 +559,20 @@ impl Lowerer<'_> {
                     ty,
                     span,
                 }),
+                Some(ApplyResolution::ArrayIndex) => {
+                    let ty = ty.ok_or_else(|| {
+                        Error::new(span, "internal: array index has no checked mode")
+                    })?;
+                    Rc::new(Expr::Index {
+                        name: name.clone(),
+                        index: args
+                            .into_iter()
+                            .next()
+                            .ok_or_else(|| Error::new(span, "array index has no operand"))?,
+                        ty,
+                        span,
+                    })
+                }
                 None => {
                     return Err(Error::new(span, "internal: call/apply has no resolution"));
                 }

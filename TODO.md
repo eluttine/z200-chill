@@ -65,7 +65,10 @@ all existing tests pass with no new special cases.
 
 ## 7. Core language coverage
 
-- [ ] Arrays and array slices.
+- [x] One-dimensional scalar arrays (`ARRAY (low:high) mode`) with indexing, bounds
+      checks, and whole-array assignment.
+- [ ] Array slices, nested/multidimensional arrays, arrays of structures, and array
+      literals.
 - [x] `CHAR` and unbounded `CHARS` modes (`CHARS(n)`, `VARYING`, and `WCHARS` remain).
 - [ ] Exceptions and handlers.
 - [ ] Processes, signals, and timers.

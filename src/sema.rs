@@ -82,6 +82,7 @@ impl std::error::Error for Error {}
 pub enum ApplyResolution {
     Conversion(IntKind),
     Procedure,
+    ArrayIndex,
 }
 
 /// The checker's result: diagnostics plus expression annotations that the
@@ -1155,6 +1156,28 @@ impl Checker {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        if let Some(bounds) = mode.array {
+            let element_mode = ModeRef {
+                name: mode.name.clone(),
+                array: None,
+                span: mode.span,
+            };
+            let base = self.resolve_mode(&element_mode)?;
+            let Some(element) = base.scalar() else {
+                return Err(Error::new(
+                    mode.span,
+                    format!(
+                        "array elements must be scalar modes, found {}",
+                        base.describe()
+                    ),
+                ));
+            };
+            return Ok(Type::Array(crate::types::ArrayType {
+                low: bounds.low,
+                high: bounds.high,
+                element,
+            }));
+        }
         for scope in self.scopes[self.module_floor..].iter().rev() {
             if let Some(ty) = scope.modes.get(&mode.name) {
                 return Ok(*ty);
@@ -1499,6 +1522,32 @@ impl Checker {
                 let ty = self.check_field(base, field, *span)?;
                 Ok(ty)
             }
+            Expr::Apply { name, args, span } => {
+                let Some(Type::Array(array)) = self.lookup_var(name) else {
+                    return Err(Error::new(
+                        *span,
+                        "assignment target must be a name, field, or array element",
+                    ));
+                };
+                if args.len() != 1 {
+                    return Err(Error::new(
+                        *span,
+                        format!("array `{name}` requires exactly one index"),
+                    ));
+                }
+                let index_ty = self.check_expr(&args[0])?;
+                if !index_ty.is_int() {
+                    return Err(Error::new(
+                        args[0].span(),
+                        format!(
+                            "array index must be an integer, found {}",
+                            index_ty.describe()
+                        ),
+                    ));
+                }
+                self.resolutions.insert(*span, ApplyResolution::ArrayIndex);
+                Ok(Type::from_scalar(array.element))
+            }
             Expr::Name { name, span } => {
                 if self.is_readonly(name) {
                     return Err(Error::new(
@@ -1789,6 +1838,27 @@ impl Checker {
         span: Span,
         require_result: bool,
     ) -> Result<Option<Type>, Error> {
+        if let Some(Type::Array(array)) = self.lookup_var(name) {
+            if args.len() != 1 {
+                return Err(Error::new(
+                    span,
+                    format!("array `{name}` requires exactly one index"),
+                ));
+            }
+            let index_ty = self.check_expr(&args[0])?;
+            if !index_ty.is_int() {
+                return Err(Error::new(
+                    args[0].span(),
+                    format!(
+                        "array index must be an integer, found {}",
+                        index_ty.describe()
+                    ),
+                ));
+            }
+            self.resolutions.insert(span, ApplyResolution::ArrayIndex);
+            return Ok(Some(Type::from_scalar(array.element)));
+        }
+
         if let Some(mode) = types::resolve_mode(name) {
             let Type::Int(kind) = mode else {
                 return Err(Error::new(
@@ -1860,6 +1930,7 @@ impl Checker {
             Type::Char => value == Type::Char,
             Type::String => value == Type::String,
             Type::Struct(id) => value == Type::Struct(id),
+            Type::Array(array) => value == Type::Array(array),
             Type::IntLiteral => false,
         };
 
@@ -2880,6 +2951,38 @@ END B;
         .unwrap_err();
         assert!(
             error.message.contains("no matching grant"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn array_index_requires_an_integer() {
+        let error = check_source(
+            r#"
+M: MODULE
+  DCL a ARRAY (1:2) INT;
+  a(TRUE) := 1;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("array index"), "{}", error.message);
+    }
+
+    #[test]
+    fn array_elements_must_be_scalar() {
+        let error = check_source(
+            r#"
+M: MODULE
+  NEWMODE S = STRUCT(x INT);
+  DCL a ARRAY (1:2) S;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("array elements"),
             "{}",
             error.message
         );
