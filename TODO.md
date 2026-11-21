@@ -13,8 +13,10 @@ land as a small, green change.
 - [x] Keep one `SEIZE`/`SEIZE ALL` selection path so checker and interpreter cannot
       diverge.
 - [x] Add focused tests for prefix/friend/ambiguity cases.
-- [ ] Remaining: share the reach tree itself (declarations, modes, hoisting, virtual
-      grants) between `program`, `sema`, and `interp`.
+- [x] Shared static `ReachTree` for module declarations and modes, consumed by
+      `program`, `sema`, and `interp`.
+- [ ] Remaining: share reach exports, hoisting, and virtual grants between the three
+      layers.
 
 Acceptance for completion: no duplicate reach-matching or reach-building logic remains;
 all existing tests pass with no new special cases.

@@ -244,12 +244,30 @@ pub enum ExportInfoKind {
 /// Static structure shared by the checker, interpreter, and grant emitter:
 /// the interface of every module and the resolved export table.
 #[derive(Debug, Clone)]
+pub struct ReachNode {
+    pub span: Span,
+    pub parent: Option<usize>,
+    pub interface: ModuleInterface,
+}
+
+/// Shared static reach tree for modules, including nested modules.
+#[derive(Debug, Clone, Default)]
+pub struct ReachTree {
+    pub nodes: Vec<ReachNode>,
+    pub by_span: HashMap<Span, usize>,
+}
+
+impl ReachTree {
+    pub fn get(&self, span: Span) -> Option<&ReachNode> {
+        self.by_span.get(&span).map(|index| &self.nodes[*index])
+    }
+}
+
 pub struct ProgramInfo {
     pub interfaces: Vec<ModuleInterface>,
     pub exports: Vec<ExportEntry>,
     pub modes: ModeTable,
-    /// Local mode names per module span, including nested modules.
-    pub module_modes_by_span: HashMap<Span, HashMap<String, Type>>,
+    pub reaches: ReachTree,
     pub body_for_spec: HashMap<usize, usize>,
     pub spec_for_body: HashMap<usize, usize>,
 }
@@ -320,6 +338,8 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
             ));
         }
     }
+
+    let reaches = build_reach_tree(program, &interfaces, &module_modes_by_span)?;
 
     let mut exports: Vec<ExportEntry> = Vec::new();
     let mut body_for_spec = HashMap::new();
@@ -401,7 +421,7 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
         interfaces,
         exports,
         modes,
-        module_modes_by_span,
+        reaches,
         body_for_spec,
         spec_for_body,
     })
@@ -771,6 +791,83 @@ fn process_module_modes(
             span_maps,
         )
     })
+}
+
+fn build_reach_tree(
+    program: &Program,
+    interfaces: &[ModuleInterface],
+    span_modes: &HashMap<Span, HashMap<String, Type>>,
+) -> Result<ReachTree, Error> {
+    let mut tree = ReachTree::default();
+    for (index, module) in program.modules.iter().enumerate() {
+        let id = tree.nodes.len();
+        tree.by_span.insert(module.span, id);
+        tree.nodes.push(ReachNode {
+            span: module.span,
+            parent: None,
+            interface: interfaces[index].clone(),
+        });
+        add_nested_reaches(&module.actions, id, &mut tree, span_modes)?;
+    }
+    Ok(tree)
+}
+
+fn add_nested_reaches(
+    actions: &[Action],
+    parent: usize,
+    tree: &mut ReachTree,
+    span_modes: &HashMap<Span, HashMap<String, Type>>,
+) -> Result<(), Error> {
+    for action in actions {
+        match action {
+            Action::Module(module) => {
+                let modes = span_modes.get(&module.span).cloned().unwrap_or_default();
+                let interface = collect_interface(module, &modes)?;
+                let id = tree.nodes.len();
+                tree.by_span.insert(module.span, id);
+                tree.nodes.push(ReachNode {
+                    span: module.span,
+                    parent: Some(parent),
+                    interface,
+                });
+                add_nested_reaches(&module.actions, id, tree, span_modes)?;
+            }
+            Action::If {
+                branches,
+                else_actions,
+                ..
+            } => {
+                for branch in branches {
+                    add_nested_reaches(&branch.body, parent, tree, span_modes)?;
+                }
+                if let Some(actions) = else_actions {
+                    add_nested_reaches(actions, parent, tree, span_modes)?;
+                }
+            }
+            Action::Do { body, .. } => add_nested_reaches(body, parent, tree, span_modes)?,
+            Action::Case {
+                alternatives,
+                else_actions,
+                ..
+            } => {
+                for alternative in alternatives {
+                    add_nested_reaches(&alternative.body, parent, tree, span_modes)?;
+                }
+                if let Some(actions) = else_actions {
+                    add_nested_reaches(actions, parent, tree, span_modes)?;
+                }
+            }
+            Action::Labelled { action, .. } => add_nested_reaches(
+                std::slice::from_ref(action.as_ref()),
+                parent,
+                tree,
+                span_modes,
+            )?,
+            Action::Begin { actions, .. } => add_nested_reaches(actions, parent, tree, span_modes)?,
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn find_remote_context(module: &Module) -> Option<&crate::ast::Context> {

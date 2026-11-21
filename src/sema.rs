@@ -184,7 +184,7 @@ pub fn analyze_with_externals(
         exports,
         modes,
         module_modes,
-        module_modes_by_span: info.module_modes_by_span,
+        reaches: info.reaches,
         current_nested_module_name: None,
         module_floor: 0,
         current_module: 0,
@@ -260,7 +260,7 @@ struct Checker {
     exports: Vec<program::ExportEntry>,
     modes: crate::modes::ModeTable,
     module_modes: Vec<HashMap<String, Type>>,
-    module_modes_by_span: HashMap<Span, HashMap<String, Type>>,
+    reaches: program::ReachTree,
     current_nested_module_name: Option<String>,
     /// Index of the current module's scope in `scopes`. Outer module scopes
     /// below this index are hidden except through `SEIZE`.
@@ -427,8 +427,8 @@ impl Checker {
         inherited_modes: &HashMap<String, Type>,
     ) -> Result<HashMap<String, ReachBinding>, Error> {
         let mut local_modes = inherited_modes.clone();
-        if let Some(modes) = self.module_modes_by_span.get(&module.span) {
-            local_modes.extend(modes.clone());
+        if let Some(node) = self.reaches.get(module.span) {
+            local_modes.extend(node.interface.modes.clone());
         }
 
         let mut grantable: HashMap<String, ReachKind> = HashMap::new();
@@ -1151,9 +1151,9 @@ impl Checker {
 
     fn preload_module_modes(&mut self, module: &Module) -> Result<(), Error> {
         let modes = self
-            .module_modes_by_span
-            .get(&module.span)
-            .cloned()
+            .reaches
+            .get(module.span)
+            .map(|node| node.interface.modes.clone())
             .unwrap_or_else(|| self.module_modes[self.current_module].clone());
         let scope = self.scopes.last_mut().expect("scope stack is never empty");
         for (name, ty) in modes {

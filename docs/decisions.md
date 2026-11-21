@@ -73,6 +73,14 @@ expression and statement nodes (`ir::Expr`, `ir::Stmt`) that the interpreter con
 This removes expression-level re-inference and AST action traversal from the interpreter.
 See [ir.md](ir.md).
 
+## 10.15 Shared reach tree (stage 1)
+
+`program::ReachTree` now holds the static module reach hierarchy and each module's
+declaration interface (variables, procedures, modes). `sema` and `interp` read module
+mode/declaration data from this tree instead of maintaining separate span-keyed maps.
+Reach exports, hoisting, and virtual-grant gluing are still computed per layer and are
+the next stage.
+
 ## 10.14 Text I/O (implementation-defined, resolved for now)
 
 `WRITE`, `WRITELINE`, and `READLINE` provide practical text I/O as

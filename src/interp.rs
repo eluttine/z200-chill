@@ -216,7 +216,7 @@ pub fn run_checked(
         exports,
         modes,
         module_modes,
-        module_modes_by_span: info.module_modes_by_span,
+        reaches: info.reaches,
         modules_by_span: collect_modules_by_span(&program),
         package_names: program
             .modules
@@ -340,7 +340,7 @@ struct Interpreter<'a> {
     exports: Vec<program::ExportEntry>,
     modes: Rc<crate::modes::ModeTable>,
     module_modes: Vec<HashMap<String, Type>>,
-    module_modes_by_span: HashMap<Span, HashMap<String, Type>>,
+    reaches: program::ReachTree,
     modules_by_span: HashMap<Span, &'a Module>,
     package_names: Vec<Option<String>>,
     /// Scopes for nested modules declared in a module body, keyed by span.
@@ -398,17 +398,17 @@ impl<'a> Interpreter<'a> {
                 continue;
             };
             let mut child_modes = self
-                .module_modes_by_span
-                .get(&child.span)
-                .cloned()
+                .reaches
+                .get(child.span)
+                .map(|node| node.interface.modes.clone())
                 .unwrap_or_default();
             child_modes.extend(parent.modes.clone());
             child_modes.extend(mode_names.clone());
             let mut scope = Scope {
                 modes: self
-                    .module_modes_by_span
-                    .get(&child.span)
-                    .cloned()
+                    .reaches
+                    .get(child.span)
+                    .map(|node| node.interface.modes.clone())
                     .unwrap_or_default(),
                 key: Some(child.span),
                 ..Scope::default()
@@ -890,9 +890,9 @@ impl<'a> Interpreter<'a> {
             child_modes.extend(base_modes.clone());
             let mut scope = Scope {
                 modes: self
-                    .module_modes_by_span
-                    .get(span)
-                    .cloned()
+                    .reaches
+                    .get(*span)
+                    .map(|node| node.interface.modes.clone())
                     .unwrap_or_default(),
                 key: Some(*span),
                 ..Scope::default()
@@ -928,9 +928,9 @@ impl<'a> Interpreter<'a> {
         let parent = self.current_reach();
         self.locals.push(Scope {
             modes: self
-                .module_modes_by_span
-                .get(&span)
-                .cloned()
+                .reaches
+                .get(span)
+                .map(|node| node.interface.modes.clone())
                 .unwrap_or_default(),
             key: Some(span),
             ..Scope::default()
