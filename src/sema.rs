@@ -332,7 +332,7 @@ impl Checker {
         self.collect_declarations(&module.declarations)?;
         self.check_initializers(&module.declarations)?;
         self.check_proc_bodies(&module.declarations)?;
-        self.preload_child_grants(&module.actions)?;
+        self.seed_reach_exports(module);
 
         let has_module_label = module.name.is_some();
         if let Some(name) = &module.name {
@@ -349,6 +349,31 @@ impl Checker {
             self.labels.pop();
         }
         result
+    }
+
+    fn seed_reach_exports(&mut self, module: &Module) {
+        let Some(node) = self.reaches.get(module.span) else {
+            return;
+        };
+        let exports = node.exports.clone();
+        let scope = self.scopes.last_mut().expect("scope stack is never empty");
+        for (name, entries) in exports {
+            for entry in entries {
+                let kind = match entry.kind {
+                    program::ReachExportKind::Var(ty) => ReachKind::Var(ty),
+                    program::ReachExportKind::Proc(signature) => ReachKind::Proc(signature),
+                    program::ReachExportKind::Mode(ty) => ReachKind::Mode(ty),
+                };
+                scope
+                    .exports
+                    .entry(name.clone())
+                    .or_default()
+                    .push(ReachBinding {
+                        meta: entry.meta,
+                        kind,
+                    });
+            }
+        }
     }
 
     fn check_handler(&mut self, handler: &Handler) -> Result<(), Error> {
@@ -395,7 +420,7 @@ impl Checker {
             self.collect_declarations(&module.declarations)?;
             self.check_initializers(&module.declarations)?;
             self.check_proc_bodies(&module.declarations)?;
-            self.preload_child_grants(&module.actions)?;
+            self.seed_reach_exports(module);
             self.check_nested_grants(module)?;
 
             let has_label = module.name.is_some();

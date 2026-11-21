@@ -427,10 +427,73 @@ impl<'a> Interpreter<'a> {
                 Some(child_span),
             )?;
             self.hoist_children(child_span, &mut scope, top, mode_names, modes)?;
-            register_hoisted_grants(child, &scope, parent)?;
             self.nested_scopes.insert(child_span, scope);
         }
+        self.seed_reach_exports(span, parent);
         Ok(())
+    }
+
+    fn seed_reach_exports(&mut self, span: Span, scope: &mut Scope<'a>) {
+        let Some(node) = self.reaches.get(span) else {
+            return;
+        };
+        let exports = node.exports.clone();
+        for (name, entries) in exports {
+            for entry in entries {
+                let Some(owner) = self.nested_scopes.get(&entry.owner) else {
+                    continue;
+                };
+                let binding = match entry.kind {
+                    program::ReachExportKind::Var(_) => {
+                        let cell = owner.vars.get(&name).cloned().or_else(|| {
+                            match owner.exports.get(&name) {
+                                Some(exports) => match exports.as_slice() {
+                                    [ReachBinding {
+                                        kind: ReachKind::Var(cell),
+                                        ..
+                                    }] => Some(cell.clone()),
+                                    _ => None,
+                                },
+                                None => None,
+                            }
+                        });
+                        let Some(cell) = cell else {
+                            continue;
+                        };
+                        ReachBinding {
+                            meta: entry.meta,
+                            kind: ReachKind::Var(cell),
+                        }
+                    }
+                    program::ReachExportKind::Proc(_) => {
+                        let proc_ref = owner.procs.get(&name).copied().or_else(|| {
+                            match owner.exports.get(&name) {
+                                Some(exports) => match exports.as_slice() {
+                                    [ReachBinding {
+                                        kind: ReachKind::Proc(proc_ref),
+                                        ..
+                                    }] => Some(*proc_ref),
+                                    _ => None,
+                                },
+                                None => None,
+                            }
+                        });
+                        let Some(proc_ref) = proc_ref else {
+                            continue;
+                        };
+                        ReachBinding {
+                            meta: entry.meta,
+                            kind: ReachKind::Proc(proc_ref),
+                        }
+                    }
+                    program::ReachExportKind::Mode(ty) => ReachBinding {
+                        meta: entry.meta,
+                        kind: ReachKind::Mode(ty),
+                    },
+                };
+                scope.exports.entry(name.clone()).or_default().push(binding);
+            }
+        }
     }
 
     fn apply_seizes(&mut self, program: &'a Program) -> Result<(), Error> {
@@ -912,7 +975,6 @@ impl<'a> Interpreter<'a> {
                 Some(*span),
             )?;
             self.hoist_children(module.span, &mut scope, top, base_modes, &modes)?;
-            register_hoisted_grants(module, &scope, parent)?;
             self.nested_scopes.insert(*span, scope);
         }
         Ok(())
@@ -2342,92 +2404,6 @@ fn declare_into_scope<'a>(
             | Declaration::Visibility(_)
             | Declaration::Mode(_)
             | Declaration::SpecModule(_) => {}
-        }
-    }
-    Ok(())
-}
-
-fn register_hoisted_grants<'a>(
-    module: &Module,
-    scope: &Scope<'a>,
-    parent: &mut Scope<'a>,
-) -> Result<(), Error> {
-    register_grants(&module.declarations, module.name.as_deref(), scope, parent)
-}
-
-fn register_grants<'a>(
-    declarations: &[Declaration],
-    module_name: Option<&str>,
-    scope: &Scope<'a>,
-    parent: &mut Scope<'a>,
-) -> Result<(), Error> {
-    let mut grantable: HashMap<String, ReachKind<'a>> = HashMap::new();
-    for (name, cell) in &scope.vars {
-        grantable.insert(name.clone(), ReachKind::Var(cell.clone()));
-    }
-    for (name, proc_ref) in &scope.procs {
-        grantable.insert(name.clone(), ReachKind::Proc(*proc_ref));
-    }
-    for (name, ty) in &scope.modes {
-        grantable.insert(name.clone(), ReachKind::Mode(*ty));
-    }
-    for (name, exports) in &scope.exports {
-        if let [export] = exports.as_slice() {
-            if export.meta.prefix.is_empty() {
-                grantable
-                    .entry(name.clone())
-                    .or_insert_with(|| export.kind.clone());
-            }
-        }
-    }
-
-    for declaration in declarations {
-        let Declaration::Visibility(visibility) = declaration else {
-            continue;
-        };
-        if visibility.kind != VisibilityKind::Grant {
-            continue;
-        }
-        let prefix = reach_grant_prefix(visibility, module_name)?;
-        let friends = if visibility.friends.is_empty() {
-            None
-        } else {
-            Some(
-                visibility
-                    .friends
-                    .iter()
-                    .map(|friend| friend.qualified())
-                    .collect::<Vec<_>>(),
-            )
-        };
-        let names: Vec<(String, Span)> = if visibility.all {
-            grantable
-                .keys()
-                .map(|name| (name.clone(), visibility.span))
-                .collect()
-        } else {
-            visibility
-                .names
-                .iter()
-                .map(|name| (name.name.clone(), name.span))
-                .collect()
-        };
-        for (name, span) in names {
-            let Some(kind) = grantable.get(&name).cloned() else {
-                return Err(Error::new(
-                    span,
-                    format!(
-                        "cannot GRANT `{name}`: not a declaration or child grant in this reach"
-                    ),
-                ));
-            };
-            parent.exports.entry(name).or_default().push(ReachBinding {
-                kind,
-                meta: crate::reach::ExportMeta {
-                    prefix: prefix.clone(),
-                    friends: friends.clone(),
-                },
-            });
         }
     }
     Ok(())

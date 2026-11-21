@@ -17,8 +17,10 @@ land as a small, green change.
       `program`, `sema`, and `interp`.
 - [x] Shared child/hoisting plan (`children`, `hoisted`), used by the interpreter's
       module-body hoisting.
-- [ ] Remaining: share reach exports and virtual-grant gluing between the layers; migrate
-      the checker's child preloading to the tree as well.
+- [x] Shared module-reach exports (`exports` with owner, kind, prefix/friend metadata),
+      used to seed checker and interpreter module scopes.
+- [ ] Remaining: block-level reach exports (BEGIN/IF/DO/CASE) still use dynamic
+      preloading, and some checker validation still recomputes grant sets.
 
 Acceptance for completion: no duplicate reach-matching or reach-building logic remains;
 all existing tests pass with no new special cases.

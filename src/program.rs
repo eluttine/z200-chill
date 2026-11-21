@@ -244,6 +244,20 @@ pub enum ExportInfoKind {
 /// Static structure shared by the checker, interpreter, and grant emitter:
 /// the interface of every module and the resolved export table.
 #[derive(Debug, Clone)]
+pub enum ReachExportKind {
+    Var(Type),
+    Proc(ProcType),
+    Mode(Type),
+}
+
+#[derive(Debug, Clone)]
+pub struct ReachExport {
+    pub kind: ReachExportKind,
+    pub meta: crate::reach::ExportMeta,
+    pub owner: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct ReachNode {
     pub span: Span,
     pub parent: Option<usize>,
@@ -251,6 +265,8 @@ pub struct ReachNode {
     /// True when the module is directly in a module body (not inside an action block).
     pub hoisted: bool,
     pub interface: ModuleInterface,
+    /// Names granted into this reach by directly hoisted child modules.
+    pub exports: HashMap<String, Vec<ReachExport>>,
 }
 
 /// Shared static reach tree for modules, including nested modules.
@@ -796,6 +812,123 @@ fn process_module_modes(
     })
 }
 
+fn collect_child_exports(
+    module: &Module,
+    span_modes: &HashMap<Span, HashMap<String, Type>>,
+) -> Result<HashMap<String, Vec<ReachExport>>, Error> {
+    let mut exports: HashMap<String, Vec<ReachExport>> = HashMap::new();
+    for action in &module.actions {
+        let Action::Module(child) = action else {
+            continue;
+        };
+        for (name, entries) in collect_reach_exports(child, span_modes)? {
+            exports.entry(name).or_default().extend(entries);
+        }
+    }
+    Ok(exports)
+}
+
+fn collect_reach_exports(
+    module: &Module,
+    span_modes: &HashMap<Span, HashMap<String, Type>>,
+) -> Result<HashMap<String, Vec<ReachExport>>, Error> {
+    let mode_names = span_modes.get(&module.span).cloned().unwrap_or_default();
+
+    let mut grantable: HashMap<String, ReachExportKind> = HashMap::new();
+    for declaration in &module.declarations {
+        match declaration {
+            Declaration::Var(list) => {
+                for var in list {
+                    if let Ok(ty) = resolve_mode_with(&var.mode, &mode_names) {
+                        grantable.insert(var.name.clone(), ReachExportKind::Var(ty));
+                    }
+                }
+            }
+            Declaration::Proc(proc_def) => {
+                if let Ok(signature) =
+                    signature_from_params_with(&proc_def.params, &proc_def.result, &mode_names)
+                {
+                    grantable.insert(proc_def.name.clone(), ReachExportKind::Proc(signature));
+                }
+            }
+            Declaration::Mode(mode_def) => {
+                if let Some(Type::Struct(_)) = mode_names.get(&mode_def.name) {
+                    grantable.insert(
+                        mode_def.name.clone(),
+                        ReachExportKind::Mode(mode_names[&mode_def.name]),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for action in &module.actions {
+        let Action::Module(child) = action else {
+            continue;
+        };
+        for (name, entries) in collect_reach_exports(child, span_modes)? {
+            for entry in entries {
+                if entry.meta.prefix.is_empty() {
+                    grantable.entry(name.clone()).or_insert(entry.kind);
+                }
+            }
+        }
+    }
+
+    let mut exports: HashMap<String, Vec<ReachExport>> = HashMap::new();
+    let mut granted = HashSet::new();
+    for declaration in &module.declarations {
+        let Declaration::Visibility(visibility) = declaration else {
+            continue;
+        };
+        if visibility.kind != VisibilityKind::Grant {
+            continue;
+        }
+        let (old, new) = grant_prefixes(visibility, module)?;
+        if !old.is_empty() {
+            continue;
+        }
+        let friends = if visibility.friends.is_empty() {
+            None
+        } else {
+            Some(
+                visibility
+                    .friends
+                    .iter()
+                    .map(|friend| friend.qualified())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let names: Vec<String> = if visibility.all {
+            grantable.keys().cloned().collect()
+        } else {
+            visibility
+                .names
+                .iter()
+                .map(|name| name.name.clone())
+                .collect()
+        };
+        for name in names {
+            if !granted.insert(name.clone()) {
+                continue;
+            }
+            let Some(kind) = grantable.get(&name).cloned() else {
+                continue;
+            };
+            exports.entry(name).or_default().push(ReachExport {
+                kind,
+                meta: crate::reach::ExportMeta {
+                    prefix: new.clone(),
+                    friends: friends.clone(),
+                },
+                owner: module.span,
+            });
+        }
+    }
+    Ok(exports)
+}
+
 fn build_reach_tree(
     program: &Program,
     interfaces: &[ModuleInterface],
@@ -811,8 +944,10 @@ fn build_reach_tree(
             children: Vec::new(),
             hoisted: false,
             interface: interfaces[index].clone(),
+            exports: HashMap::new(),
         });
         add_nested_reaches(&module.actions, id, false, &mut tree, span_modes)?;
+        tree.nodes[id].exports = collect_child_exports(module, span_modes)?;
     }
     Ok(tree)
 }
@@ -837,9 +972,11 @@ fn add_nested_reaches(
                     children: Vec::new(),
                     hoisted: !in_block,
                     interface,
+                    exports: HashMap::new(),
                 });
                 tree.nodes[parent].children.push(id);
                 add_nested_reaches(&module.actions, id, false, tree, span_modes)?;
+                tree.nodes[id].exports = collect_child_exports(module, span_modes)?;
             }
             Action::If {
                 branches,
