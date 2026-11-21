@@ -94,6 +94,8 @@ pub struct CheckResult {
     pub diagnostics: Vec<Diagnostic>,
     pub types: HashMap<Span, Type>,
     pub resolutions: HashMap<Span, ApplyResolution>,
+    /// Concrete indices assigned by each entry of a labelled array tuple.
+    pub labelled_tuples: HashMap<Span, Vec<Vec<i128>>>,
 }
 
 pub fn check(program: &Program, profile: WidthProfile) -> Result<(), Error> {
@@ -149,6 +151,7 @@ pub fn analyze_with_externals(
                 diagnostics: vec![Diagnostic::new(error.code, Some(error.span), error.message)],
                 types: HashMap::new(),
                 resolutions: HashMap::new(),
+                labelled_tuples: HashMap::new(),
             };
         }
     };
@@ -159,6 +162,7 @@ pub fn analyze_with_externals(
                 diagnostics: vec![Diagnostic::new(error.code, Some(error.span), error.message)],
                 types: HashMap::new(),
                 resolutions: HashMap::new(),
+                labelled_tuples: HashMap::new(),
             };
         }
     };
@@ -196,6 +200,7 @@ pub fn analyze_with_externals(
         types: HashMap::new(),
         resolutions: HashMap::new(),
         exception_sets: Vec::new(),
+        labelled_tuples: HashMap::new(),
     };
     for (index, module) in program.modules.iter().enumerate() {
         checker.current_module = index;
@@ -216,6 +221,7 @@ pub fn analyze_with_externals(
         diagnostics: checker.diagnostics,
         types: checker.types,
         resolutions: checker.resolutions,
+        labelled_tuples: checker.labelled_tuples,
     }
 }
 
@@ -224,6 +230,7 @@ fn external_error(message: String) -> CheckResult {
         diagnostics: vec![Diagnostic::new("E0600", None, message)],
         types: HashMap::new(),
         resolutions: HashMap::new(),
+        labelled_tuples: HashMap::new(),
     }
 }
 
@@ -277,6 +284,7 @@ struct Checker {
     /// Statically possible exceptions for the action list currently being
     /// checked. A new set is pushed around procedure/module bodies and handlers.
     exception_sets: Vec<HashSet<String>>,
+    labelled_tuples: HashMap<Span, Vec<Vec<i128>>>,
 }
 
 impl Checker {
@@ -1760,9 +1768,9 @@ impl Checker {
             Expr::Bool { .. } => Ok(Type::Bool),
             Expr::Char { .. } => Ok(Type::Char),
             Expr::String { .. } => Ok(Type::String),
-            Expr::ArrayTuple { values, .. } => {
-                for value in values {
-                    self.check_expr(value)?;
+            Expr::ArrayTuple { elements, .. } => {
+                for element in elements {
+                    self.check_expr(&element.value)?;
                 }
                 Ok(Type::ArrayTuple)
             }
@@ -2146,6 +2154,37 @@ impl Checker {
         Ok(signature.result)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn tuple_label_index(
+        &self,
+        value: i128,
+        array: crate::types::ArrayType,
+        span: Span,
+        explicit: &mut [bool],
+        entry_index: usize,
+        entry_indices: &mut [Vec<i128>],
+    ) -> Result<(), Error> {
+        if value < array.low || value > array.high {
+            return Err(Error::new(
+                span,
+                format!(
+                    "array tuple label `{value}` is outside the array bounds `{}:{}`",
+                    array.low, array.high
+                ),
+            ));
+        }
+        let offset = (value - array.low) as usize;
+        if explicit[offset] {
+            return Err(Error::new(
+                span,
+                format!("array tuple label `{value}` is covered more than once"),
+            ));
+        }
+        explicit[offset] = true;
+        entry_indices[entry_index].push(value);
+        Ok(())
+    }
+
     fn check_array_index(
         &mut self,
         name: &str,
@@ -2188,33 +2227,127 @@ impl Checker {
     /// Check a value expression in a context where the target mode is known.
     /// This is what gives array tuples their element and bounds modes.
     fn check_expr_for_mode(&mut self, value: &Expr, target: Type) -> Result<Type, Error> {
-        let Expr::ArrayTuple { values, span } = value else {
+        let Expr::ArrayTuple { elements, span } = value else {
             return self.check_expr(value);
         };
         let Type::Array(array) = target else {
             return Err(Error::new(
                 *span,
                 format!(
-                    "array literal requires an array target mode, found {}",
+                    "array literal requires a one-dimensional array target mode, found {}",
                     target.describe()
                 ),
             ));
         };
-        let expected = (array.high - array.low + 1).max(0) as usize;
-        if values.len() != expected {
-            return Err(Error::new(
-                *span,
-                format!(
-                    "array literal has {} element(s), but the target array has {expected}",
-                    values.len()
-                ),
-            ));
-        }
         let element = array.element.ty();
-        for item in values {
-            let item_ty = self.check_expr(item)?;
-            self.ensure_assignable(element, item_ty, item.span())?;
-            self.check_constant_range(item, element)?;
+        let expected = (array.high - array.low + 1).max(0) as usize;
+        let labelled = elements.iter().any(|element| element.labels.is_some());
+        if !labelled {
+            if elements.len() != expected {
+                return Err(Error::new(
+                    *span,
+                    format!(
+                        "array literal has {} element(s), but the target array has {expected}",
+                        elements.len()
+                    ),
+                ));
+            }
+            for item in elements {
+                let item_ty = self.check_expr(&item.value)?;
+                self.ensure_assignable(element, item_ty, item.value.span())?;
+                self.check_constant_range(&item.value, element)?;
+            }
+        } else {
+            if elements.iter().any(|element| element.labels.is_none()) {
+                return Err(Error::new(
+                    *span,
+                    "array tuple entries must be all labelled or all unlabelled",
+                ));
+            }
+            let mut explicit = vec![false; expected];
+            let mut entry_indices = vec![Vec::new(); elements.len()];
+            let mut explicit_count = 0;
+            let mut else_entry = None;
+            let mut any_entry = None;
+            for (entry_index, item) in elements.iter().enumerate() {
+                let labels = item.labels.as_ref().expect("labelled tuple entry");
+                let item_ty = self.check_expr(&item.value)?;
+                self.ensure_assignable(element, item_ty, item.value.span())?;
+                self.check_constant_range(&item.value, element)?;
+                for label in labels {
+                    match label {
+                        CaseLabel::Value(value) => {
+                            self.tuple_label_index(
+                                *value,
+                                array,
+                                *span,
+                                &mut explicit,
+                                entry_index,
+                                &mut entry_indices,
+                            )?;
+                            explicit_count += 1;
+                        }
+                        CaseLabel::Range { low, high } => {
+                            for value in *low..=*high {
+                                self.tuple_label_index(
+                                    value,
+                                    array,
+                                    *span,
+                                    &mut explicit,
+                                    entry_index,
+                                    &mut entry_indices,
+                                )?;
+                                explicit_count += 1;
+                            }
+                        }
+                        CaseLabel::Else => {
+                            if else_entry.replace(entry_index).is_some() {
+                                return Err(Error::new(
+                                    *span,
+                                    "duplicate ELSE label in array tuple",
+                                ));
+                            }
+                        }
+                        CaseLabel::Any => {
+                            if any_entry.replace(entry_index).is_some() {
+                                return Err(Error::new(*span, "duplicate * label in array tuple"));
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(any_entry) = any_entry {
+                if explicit_count > 0 || else_entry.is_some() || elements.len() != 1 {
+                    return Err(Error::new(
+                        *span,
+                        "the * array-tuple label must be the only label",
+                    ));
+                }
+                entry_indices[any_entry] = (array.low..=array.high).collect();
+            } else if let Some(else_entry) = else_entry {
+                let missing: Vec<i128> = (array.low..=array.high)
+                    .filter(|index| !explicit[(index - array.low) as usize])
+                    .collect();
+                entry_indices[else_entry] = missing;
+            }
+            if explicit_count == 0 && any_entry.is_none() && else_entry.is_none() {
+                return Err(Error::new(*span, "array tuple has no labels"));
+            }
+            let missing: Vec<i128> = (array.low..=array.high)
+                .filter(|index| !explicit[(index - array.low) as usize])
+                .collect();
+            if any_entry.is_none() && else_entry.is_none() && !missing.is_empty() {
+                return Err(Error::new(
+                    *span,
+                    format!("array tuple does not cover index `{}`", missing[0]),
+                ));
+            }
+            if let Some(else_entry) = else_entry {
+                entry_indices[else_entry] = (array.low..=array.high)
+                    .filter(|index| !explicit[(index - array.low) as usize])
+                    .collect();
+            }
+            self.labelled_tuples.insert(*span, entry_indices);
         }
         let ty = Type::Array(array);
         self.types.insert(*span, ty);

@@ -337,6 +337,14 @@ pub struct CaseAlternative {
     pub span: Span,
 }
 
+#[derive(Debug, Clone)]
+pub struct ArrayTupleElement {
+    /// `None` for an unlabelled tuple entry.
+    pub labels: Option<Vec<CaseLabel>>,
+    pub value: Expr,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaseLabel {
     Value(i128),
@@ -414,9 +422,9 @@ pub enum Expr {
         field: String,
         span: Span,
     },
-    /// An unlabelled array tuple: `(: v, ... :)` or `[v, ...]`.
+    /// An array tuple: `(: v, ... :)`, `[v, ...]`, or labelled entries.
     ArrayTuple {
-        values: Vec<Expr>,
+        elements: Vec<ArrayTupleElement>,
         span: Span,
     },
     /// An array slice: `a(lower : upper)` or `a(first UP size)`.

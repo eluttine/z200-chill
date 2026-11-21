@@ -1575,6 +1575,25 @@ impl<'a> Interpreter<'a> {
                     values: lowered,
                 })
             }
+            ir::Expr::LabelledArrayLiteral { entries, array, .. } => {
+                let element = array.element.ty();
+                let mut values =
+                    vec![Value::Undefined; (array.high - array.low + 1).max(0) as usize];
+                for (indices, node) in entries {
+                    if indices.is_empty() {
+                        continue;
+                    }
+                    let value = self.eval_ir(node)?;
+                    let value = self.convert(value, element, node.span())?;
+                    for index in indices {
+                        values[(index - array.low) as usize] = value.clone();
+                    }
+                }
+                Ok(Value::Array {
+                    low: array.low,
+                    values,
+                })
+            }
             ir::Expr::ArraySlice {
                 name,
                 offset,

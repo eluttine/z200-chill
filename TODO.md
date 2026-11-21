@@ -92,7 +92,8 @@ all existing tests pass with no new special cases.
       and assignment targets, with constant or runtime bounds.
 - [x] Multidimensional arrays up to four dimensions, with multi-index access,
       whole-array assignment/equality, and scalar or structure elements.
-- [ ] Labelled array tuples.
+- [x] Labelled array tuples with literal/range/`ELSE`/`(*)` labels, completeness and
+      overlap checking.
 - [x] `CHAR` and unbounded `CHARS` modes (`CHARS(n)`, `VARYING`, and `WCHARS` remain).
 - [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
 - [x] Action-level handlers, including handlers on bracketed actions, assignment,

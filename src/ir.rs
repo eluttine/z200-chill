@@ -109,6 +109,11 @@ pub enum Expr {
         element: crate::types::ArrayElement,
         span: Span,
     },
+    LabelledArrayLiteral {
+        entries: Vec<(Vec<i128>, Node)>,
+        array: crate::types::ArrayType,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -129,7 +134,8 @@ impl Expr {
             | Self::TextIo { span, .. }
             | Self::ArrayLiteral { span, .. }
             | Self::ArraySlice { span, .. }
-            | Self::ArraySliceDynamic { span, .. } => *span,
+            | Self::ArraySliceDynamic { span, .. }
+            | Self::LabelledArrayLiteral { span, .. } => *span,
         }
     }
 
@@ -145,9 +151,9 @@ impl Expr {
             | Self::Binary { ty, .. }
             | Self::Field { ty, .. }
             | Self::Index { ty, .. } => Some(*ty),
-            Self::ArrayLiteral { array, .. } | Self::ArraySlice { array, .. } => {
-                Some(Type::Array(*array))
-            }
+            Self::ArrayLiteral { array, .. }
+            | Self::ArraySlice { array, .. }
+            | Self::LabelledArrayLiteral { array, .. } => Some(Type::Array(*array)),
             Self::ArraySliceDynamic { low, element, .. } => Some(Type::DynamicArray {
                 low: *low,
                 element: *element,
@@ -940,7 +946,7 @@ impl Lowerer<'_> {
                 ty,
                 span,
             }),
-            AstExpr::ArrayTuple { values, .. } => {
+            AstExpr::ArrayTuple { elements, .. } => {
                 let Type::Array(array) = self
                     .check
                     .types
@@ -950,18 +956,33 @@ impl Lowerer<'_> {
                 else {
                     return Err(Error::new(
                         span,
-                        "array literal requires an array target mode",
+                        "array literal requires a one-dimensional array target mode",
                     ));
                 };
-                let values = values
-                    .iter()
-                    .map(|value| self.lower_expr(value))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Rc::new(Expr::ArrayLiteral {
-                    values,
-                    array,
-                    span,
-                })
+                if let Some(indices) = self.check.labelled_tuples.get(&span) {
+                    let entries = elements
+                        .iter()
+                        .zip(indices)
+                        .map(|(element, indices)| {
+                            Ok((indices.clone(), self.lower_expr(&element.value)?))
+                        })
+                        .collect::<Result<Vec<_>, Error>>()?;
+                    Rc::new(Expr::LabelledArrayLiteral {
+                        entries,
+                        array,
+                        span,
+                    })
+                } else {
+                    let values = elements
+                        .iter()
+                        .map(|element| self.lower_expr(&element.value))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Rc::new(Expr::ArrayLiteral {
+                        values,
+                        array,
+                        span,
+                    })
+                }
             }
         };
 

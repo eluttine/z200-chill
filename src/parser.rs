@@ -1646,10 +1646,35 @@ impl<'a> Parser<'a> {
                     TokenKind::RBracket
                 };
                 self.advance();
-                let mut values = Vec::new();
+                let mut elements = Vec::new();
+                let mut labelled = None;
                 if self.kind() != Some(&closing) {
                     loop {
-                        values.push(self.parse_expr()?);
+                        let entry_start = self.current_span();
+                        let labels = if self.tuple_label_follows() {
+                            let labels = self.parse_case_labels()?;
+                            self.expect_colon()?;
+                            Some(labels)
+                        } else {
+                            None
+                        };
+                        let is_labelled = labels.is_some();
+                        if let Some(expected) = labelled {
+                            if expected != is_labelled {
+                                return Err(self.error_here_code(
+                                    "E0206",
+                                    "array tuple entries must be all labelled or all unlabelled",
+                                ));
+                            }
+                        } else {
+                            labelled = Some(is_labelled);
+                        }
+                        let value = self.parse_expr()?;
+                        elements.push(ArrayTupleElement {
+                            labels,
+                            span: Span::new(self.source, entry_start.start, value.span().end),
+                            value,
+                        });
                         if self.at_comma() {
                             self.advance();
                         } else {
@@ -1665,7 +1690,7 @@ impl<'a> Parser<'a> {
                     return Err(self.error_here(format!("expected `{closing}`")));
                 };
                 Ok(Expr::ArrayTuple {
-                    values,
+                    elements,
                     span: Span::new(self.source, span.start, end.end),
                 })
             }
@@ -1797,6 +1822,31 @@ impl<'a> Parser<'a> {
 
     fn at_colon(&self) -> bool {
         matches!(self.kind(), Some(TokenKind::Colon))
+    }
+
+    fn tuple_label_follows(&self) -> bool {
+        if !self.at_lparen() {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut index = self.index;
+        while let Some(token) = self.tokens.get(index) {
+            match token.kind {
+                TokenKind::LParen => depth += 1,
+                TokenKind::RParen => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return matches!(
+                            self.tokens.get(index + 1).map(|token| &token.kind),
+                            Some(TokenKind::Colon)
+                        );
+                    }
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+        false
     }
 
     fn at_assign(&self) -> bool {

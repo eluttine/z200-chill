@@ -236,9 +236,12 @@ scalar (`SHORT_INT`/`INT`/`LONG_INT`, `BOOL`, `CHAR`, or `CHARS`) or a structure
 - As with whole structure assignment, reading a structure element field before it is
   assigned raises the undefined-value runtime error.
 - Array element modes cannot themselves be arrays.
-- Unlabelled array tuples are accepted where the target array mode is known:
-  `[1, 2, 3]` or `(: 1, 2, 3 :)`. The number of elements must match the target bounds,
-  and each element must be assignable to the element mode. This works for assignment,
+- Array tuples are accepted where a one-dimensional target array mode is known:
+  `[1, 2, 3]` or `(: 1, 2, 3 :)` (unlabelled), and
+  `[ (1, 2): 5, (3:4): 7 ]` (labelled). Unlabelled tuples must have exactly as many
+  elements as the target; labelled tuples use integer labels, ranges, `ELSE`, and
+  `(*)`, must cover every index exactly once, and must stay within the target bounds.
+  Tuple values must be assignable to the element mode. This works for assignment,
   `INIT :=`, procedure arguments, `RETURN`, `RESULT`, and array equality.
 - Slices are available as values and as assignment targets:
   `a(lower:upper)` and `a(first UP size)`. The slice keeps the original array's lower
@@ -258,7 +261,7 @@ scalar (`SHORT_INT`/`INT`/`LONG_INT`, `BOOL`, `CHAR`, or `CHARS`) or a structure
   implemented yet.
 - Array slices currently apply to one-dimensional arrays only.
 - Array literals currently apply to one-dimensional arrays only.
-- Not implemented yet: labelled array tuples.
+
 
 ### 4.4 Runtime checks
 
