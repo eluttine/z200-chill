@@ -838,6 +838,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_mode_ref(&mut self) -> Result<ModeRef, Error> {
+        if self.at_keyword(Keyword::Chars) {
+            let span = self.current_span();
+            self.advance();
+            return Ok(ModeRef {
+                name: "CHARS".to_owned(),
+                span,
+            });
+        }
         let (name, span) = self.expect_identifier()?;
         Ok(ModeRef { name, span })
     }

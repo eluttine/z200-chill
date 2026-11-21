@@ -1010,7 +1010,7 @@ pub fn resolve_mode(mode: &ModeRef) -> Result<Type, Error> {
         Error::new(
             mode.span,
             format!(
-                "unknown mode `{}`; v0 supports SHORT_INT, INT, LONG_INT, and BOOL",
+                "unknown mode `{}`; v0 supports SHORT_INT, INT, LONG_INT, BOOL, CHAR, and CHARS",
                 mode.name
             ),
         )

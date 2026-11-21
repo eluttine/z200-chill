@@ -3133,6 +3133,24 @@ END M;
     }
 
     #[test]
+    fn char_and_chars_modes_work() {
+        run_source(
+            r#"
+M: MODULE
+  DCL c CHAR INIT := 'A';
+  DCL s CHARS INIT := "hi";
+  s := s // "!";
+  ASSERT s = "hi!";
+  ASSERT c = 'A';
+  c := 'B';
+  ASSERT c = 'B';
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn structure_fields_can_be_assigned_and_read() {
         run_source(
             r#"

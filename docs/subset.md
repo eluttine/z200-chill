@@ -54,7 +54,8 @@ Implemented in `z200c`:
 
 - manifest loading and width-profile validation;
 - lexer, parser, and AST for the constructs in the subset above;
-- mode checking for `SHORT_INT` / `INT` / `LONG_INT` / `BOOL`, literals, arithmetic,
+- mode checking for `SHORT_INT` / `INT` / `LONG_INT` / `BOOL` / `CHAR` / `CHARS`,
+  literals, arithmetic,
   relational and boolean expressions, procedures, calls, assignments, `ASSERT`,
   `IF`, `DO WHILE` / `DO FOR EVER`, and `BEGIN … END`;
 - `GRANT` / `SEIZE` visibility with module/package-qualified names (`Module!x`,

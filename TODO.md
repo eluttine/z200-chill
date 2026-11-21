@@ -40,12 +40,14 @@ all existing tests pass with no new special cases.
 - [ ] Expand fixtures with more direct Z.200 examples and, if useful, full golden
       snapshots.
 
-## 4. Decide product direction (needs decision)
+## 4. Decide product direction (resolved: interpreter-first)
 
-- [ ] Choose interpreter-first educational compiler vs native/C backend.
-- [ ] If backend: define declaration/procedure lowering, symbol mangling, and runtime
-      ABI before writing code.
-- [ ] If language-first: prioritize arrays, strings, exceptions/handlers, and I/O.
+- [x] Choose interpreter-first educational compiler vs native/C backend.
+      Decision: interpreter-first educational compiler.
+- [-] Native/C backend: deferred; no declaration lowering, symbol mangling, or ABI work
+      for now.
+- [x] Direction: prioritize language coverage/conformance; start with strings, then
+      arrays, exceptions/handlers, and I/O.
 
 ## 5. CI
 
@@ -64,7 +66,7 @@ all existing tests pass with no new special cases.
 ## 7. Core language coverage
 
 - [ ] Arrays and array slices.
-- [ ] Full character-string modes.
+- [x] `CHAR` and unbounded `CHARS` modes (`CHARS(n)`, `VARYING`, and `WCHARS` remain).
 - [ ] Exceptions and handlers.
 - [ ] Processes, signals, and timers.
 - [ ] Sets/powersets, moreta modes, templates.

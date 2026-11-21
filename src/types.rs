@@ -69,6 +69,8 @@ pub fn resolve_mode(name: &str) -> Option<Type> {
         "INT" => Some(Type::Int(IntKind::Int)),
         "LONG_INT" => Some(Type::Int(IntKind::Long)),
         "BOOL" => Some(Type::Bool),
+        "CHAR" => Some(Type::Char),
+        "CHARS" => Some(Type::String),
         _ => None,
     }
 }
