@@ -321,6 +321,9 @@ fn parse_external_type(
             }),
         };
     }
+    if name == "ACCESS CHARS" {
+        return Ok(program::ExternalType::Builtin(Type::Access));
+    }
     if let Some(rest) = name.strip_prefix("CHARS(") {
         let (length, suffix) = rest
             .split_once(')')
@@ -405,6 +408,8 @@ fn type_name(ty: Type) -> String {
                 .join(", ");
             format!("ARRAY({bounds}) {}", type_name(array.element.ty()))
         }
+        Type::Association => "ASSOCIATION".to_owned(),
+        Type::Access => "ACCESS CHARS".to_owned(),
         Type::ArrayTuple | Type::DynamicArray { .. } => "ARRAY".to_owned(),
     }
 }

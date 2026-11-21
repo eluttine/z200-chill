@@ -55,7 +55,9 @@ impl ArrayElement {
                 Some(Self::Scalar(Scalar::BoundedString { length, varying }))
             }
             Type::Struct(id) => Some(Self::Struct(id)),
-            Type::IntLiteral
+            Type::Association
+            | Type::Access
+            | Type::IntLiteral
             | Type::Array(_)
             | Type::MultiArray(_)
             | Type::DynamicArray { .. }
@@ -148,6 +150,10 @@ pub enum Type {
         low: i128,
         element: ArrayElement,
     },
+    /// An opaque association-mode value.
+    Association,
+    /// An opaque access-mode value.
+    Access,
     /// An array tuple before its target array mode is known.
     ArrayTuple,
 }
@@ -175,7 +181,9 @@ impl Type {
             Self::BoundedString { length, varying } => {
                 Some(Scalar::BoundedString { length, varying })
             }
-            Self::IntLiteral
+            Self::Association
+            | Self::Access
+            | Self::IntLiteral
             | Self::Struct(_)
             | Self::Array(_)
             | Self::MultiArray(_)
@@ -207,6 +215,8 @@ impl Type {
             Self::Array(_) => "array",
             Self::MultiArray(_) => "multidimensional array",
             Self::DynamicArray { .. } => "dynamic array slice",
+            Self::Association => "association",
+            Self::Access => "access",
             Self::ArrayTuple => "array literal",
         }
     }
@@ -221,6 +231,7 @@ pub fn resolve_mode(name: &str) -> Option<Type> {
         "BOOL" => Some(Type::Bool),
         "CHAR" => Some(Type::Char),
         "CHARS" => Some(Type::String),
+        "ASSOCIATION" => Some(Type::Association),
         _ => None,
     }
 }
@@ -251,6 +262,9 @@ pub fn resolve_mode_ref(
     mode: &ModeRef,
     mode_names: &std::collections::HashMap<String, Type>,
 ) -> Option<Type> {
+    if mode.access {
+        return Some(Type::Access);
+    }
     let base = mode_names
         .get(&mode.name)
         .copied()

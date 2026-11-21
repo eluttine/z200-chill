@@ -1,0 +1,3 @@
+M: MODULE
+  ASSOCIATE(1, "x");
+END M;

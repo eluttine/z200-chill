@@ -449,9 +449,9 @@ text**:
   - `%%` for a literal percent and ordinary format text;
   - io lists after the format argument, one value/location per conversion.
 - `READTEXT` io list elements are locations; `WRITETEXT` io list elements are values.
+- Parenthesized clauses are supported, e.g. `%2(%C:%C %)`.
 - Not implemented yet: variable widths (`V`), fractional/exponent widths, `%F`
-  scientific conversion, parenthesized clauses, I/O control clauses (`%/`, `%+`,
-  etc.), and associations/access modes.
+  scientific conversion, and I/O control clauses (`%/`, `%+`, etc.).
 - Text locations must have a varying string mode (`CHARS` or `CHARS(n) VARYING`).
 
 ### 5.6 Text modes
@@ -467,6 +467,31 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
 - String literals and `READLINE` deliver unbounded `CHARS` values, so assigning them to
   a bounded string is checked at runtime.
 - `WCHARS` and wide-character text are not implemented.
+
+### 5.7 Associations and access modes (simplified)
+
+`ASSOCIATION` is an opaque association-mode location. `ACCESS CHARS` is an opaque
+sequential access-mode location for character-string line records. The current
+implementation is an intentional simplification of Z.200 file handling:
+
+- `ASSOCIATE(association, "path")` attaches an implementation-defined host-file path.
+- `ISASSOCIATED(association)` reports whether an association is present.
+- `DISSOCIATE(association)` clears the association.
+- `CREATE(association)` creates/truncates the associated file.
+- `DELETE(association)` removes the associated file.
+- `CONNECT(access, association)` connects an access location and resets its record
+  position to the beginning.
+- `DISCONNECT(access)` clears the connection.
+- `WRITERECORD(access, text)` appends one line-based record.
+- `READRECORD(access)` returns the next line; `READRECORD(access, target)` stores it in
+  a `CHARS` location.
+- Access is sequential only; there is no index mode, random access, attribute
+  inspection, or `MODIFY`.
+
+The built-in routines raise implementation-defined `ASSOCIATEFAIL`, `NOTASSOCIATED`,
+`CREATEFAIL`, `DELETEFAIL`, `CONNECTFAIL`, `NOTCONNECTED`, `READFAIL`, and `WRITEFAIL`
+exceptions. These implicit exceptions are not included in the static exception-flow
+analysis yet.
 
 ## 6. Procedures
 

@@ -863,6 +863,33 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_mode_ref(&mut self) -> Result<ModeRef, Error> {
+        if self.at_keyword(Keyword::Access) {
+            let start = self.current_span();
+            self.advance();
+            if self.at_lparen() {
+                return Err(Error::coded(
+                    "E0205",
+                    start,
+                    "ACCESS index modes are not implemented yet",
+                ));
+            }
+            let record = self.parse_mode_ref()?;
+            if record.name != "CHARS" || !record.arrays.is_empty() {
+                return Err(Error::coded(
+                    "E0205",
+                    record.span,
+                    "ACCESS record mode must be a character string mode",
+                ));
+            }
+            return Ok(ModeRef {
+                name: "ACCESS".to_owned(),
+                arrays: Vec::new(),
+                string_length: None,
+                varying: false,
+                access: true,
+                span: Span::new(self.source, start.start, record.span.end),
+            });
+        }
         if self.at_keyword(Keyword::Array) {
             let start = self.current_span();
             self.advance();
@@ -910,6 +937,7 @@ impl<'a> Parser<'a> {
                 arrays,
                 string_length: element.string_length,
                 varying: element.varying,
+                access: false,
                 span: Span::new(self.source, start.start, element.span.end),
             });
         }
@@ -949,6 +977,7 @@ impl<'a> Parser<'a> {
                 arrays: Vec::new(),
                 string_length: length,
                 varying,
+                access: false,
                 span,
             });
         }
@@ -958,6 +987,7 @@ impl<'a> Parser<'a> {
             arrays: Vec::new(),
             string_length: None,
             varying: false,
+            access: false,
             span,
         })
     }

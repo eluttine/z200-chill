@@ -121,6 +121,14 @@ pub enum Expr {
         array: crate::types::ArrayType,
         span: Span,
     },
+    Association {
+        op: crate::builtins::AssociationOp,
+        first: String,
+        second: Option<String>,
+        value: Option<Node>,
+        ty: Option<Type>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -142,7 +150,8 @@ impl Expr {
             | Self::ArrayLiteral { span, .. }
             | Self::ArraySlice { span, .. }
             | Self::ArraySliceDynamic { span, .. }
-            | Self::LabelledArrayLiteral { span, .. } => *span,
+            | Self::LabelledArrayLiteral { span, .. }
+            | Self::Association { span, .. } => *span,
         }
     }
 
@@ -165,7 +174,7 @@ impl Expr {
                 low: *low,
                 element: *element,
             }),
-            Self::Call { ty, .. } | Self::Builtin { ty, .. } => *ty,
+            Self::Call { ty, .. } | Self::Builtin { ty, .. } | Self::Association { ty, .. } => *ty,
             Self::TextIo { .. } => None,
         }
     }
@@ -837,6 +846,49 @@ impl Lowerer<'_> {
                         index,
                         ops: format.clone(),
                         io,
+                        span,
+                    })
+                }
+                Some(ApplyResolution::Association(op)) => {
+                    use crate::builtins::AssociationOp;
+                    let AstExpr::Name { name: first, .. } = &ast_args[0] else {
+                        return Err(Error::new(
+                            ast_args[0].span(),
+                            "internal: association argument is not a location",
+                        ));
+                    };
+                    let mut lowered = args.into_iter();
+                    let _first = lowered.next();
+                    let (second, value) = match op {
+                        AssociationOp::Associate | AssociationOp::WriteRecord => {
+                            (None, lowered.next())
+                        }
+                        AssociationOp::Connect => {
+                            let AstExpr::Name { name, .. } = &ast_args[1] else {
+                                return Err(Error::new(
+                                    ast_args[1].span(),
+                                    "internal: association argument is not a location",
+                                ));
+                            };
+                            (Some(name.clone()), None)
+                        }
+                        AssociationOp::ReadRecord if ast_args.len() == 2 => {
+                            let AstExpr::Name { name, .. } = &ast_args[1] else {
+                                return Err(Error::new(
+                                    ast_args[1].span(),
+                                    "internal: record target is not a location",
+                                ));
+                            };
+                            (Some(name.clone()), None)
+                        }
+                        _ => (None, None),
+                    };
+                    Rc::new(Expr::Association {
+                        op: *op,
+                        first: first.clone(),
+                        second,
+                        value,
+                        ty,
                         span,
                     })
                 }

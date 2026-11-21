@@ -217,6 +217,8 @@ pub struct ModeRef {
     pub string_length: Option<usize>,
     /// `VARYING` after a string length.
     pub varying: bool,
+    /// True for an `ACCESS` mode.
+    pub access: bool,
     pub span: Span,
 }
 

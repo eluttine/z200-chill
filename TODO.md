@@ -110,8 +110,13 @@ all existing tests pass with no new special cases.
 - [x] `READTEXT`/`WRITETEXT` format conversion and editing codes with io lists
       (`%B`, `%O`, `%H`, `%C`, widths, `L`/`E`/`P` qualifiers, repetition, `X`, `>`,
       `<`, `T`, and `%%`).
-- [ ] Associations/access modes and the remaining format features (variable widths,
-      fractional/exponent widths, parenthesized clauses, and I/O control clauses).
+- [x] Basic `ASSOCIATION` and `ACCESS CHARS` modes with `ASSOCIATE`, `DISSOCIATE`,
+      `ISASSOCIATED`, `CREATE`, `DELETE`, `CONNECT`, `DISCONNECT`, `READRECORD`, and
+      `WRITERECORD` over sequential line records.
+- [x] Parenthesized text-format clauses with repetition.
+- [ ] Advanced text-format clauses (variable/fractional/exponent widths, I/O control
+      clauses) and the remaining association attributes/modify parameters/indexed
+      access.
 - [ ] Processes, signals, and timers.
 - [ ] Sets/powersets, moreta modes, templates.
 

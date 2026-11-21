@@ -89,6 +89,7 @@ pub enum ApplyResolution {
         format: Vec<crate::builtins::FormatOp>,
         indexed: bool,
     },
+    Association(crate::builtins::AssociationOp),
 }
 
 /// The checker's result: diagnostics plus expression annotations that the
@@ -1191,12 +1192,16 @@ impl Checker {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        if mode.access {
+            return Ok(Type::Access);
+        }
         if !mode.arrays.is_empty() {
             let element_mode = ModeRef {
                 name: mode.name.clone(),
                 arrays: Vec::new(),
                 string_length: mode.string_length,
                 varying: mode.varying,
+                access: mode.access,
                 span: mode.span,
             };
             let base = self.resolve_mode(&element_mode)?;
@@ -2009,6 +2014,135 @@ impl Checker {
         span: Span,
         require_result: bool,
     ) -> Result<Option<Type>, Error> {
+        if let Some(op) = crate::builtins::lookup_association(name) {
+            use crate::builtins::AssociationOp;
+            let association_arg = |checker: &mut Checker, arg: &Expr| -> Result<(), Error> {
+                let Expr::Name { span, .. } = arg else {
+                    return Err(Error::new(
+                        arg.span(),
+                        "association/access argument must be a location",
+                    ));
+                };
+                let ty = checker.check_expr(arg)?;
+                if ty != Type::Association {
+                    return Err(Error::new(*span, "expected an ASSOCIATION location"));
+                }
+                Ok(())
+            };
+            let access_arg = |checker: &mut Checker, arg: &Expr| -> Result<(), Error> {
+                let Expr::Name { span, .. } = arg else {
+                    return Err(Error::new(
+                        arg.span(),
+                        "association/access argument must be a location",
+                    ));
+                };
+                let ty = checker.check_expr(arg)?;
+                if ty != Type::Access {
+                    return Err(Error::new(*span, "expected an ACCESS location"));
+                }
+                Ok(())
+            };
+            let result = match op {
+                AssociationOp::Associate => {
+                    let [association, path] = args else {
+                        return Err(Error::new(
+                            span,
+                            "ASSOCIATE takes an association and a path",
+                        ));
+                    };
+                    association_arg(self, association)?;
+                    let path_ty = self.check_expr(path)?;
+                    if !is_string_type(path_ty) {
+                        return Err(Error::new(path.span(), "ASSOCIATE path must be CHARS"));
+                    }
+                    None
+                }
+                AssociationOp::IsAssociated => {
+                    let [association] = args else {
+                        return Err(Error::new(
+                            span,
+                            "ISASSOCIATED takes an association location",
+                        ));
+                    };
+                    association_arg(self, association)?;
+                    Some(Type::Bool)
+                }
+                AssociationOp::Dissociate | AssociationOp::Create | AssociationOp::Delete => {
+                    let [association] = args else {
+                        return Err(Error::new(
+                            span,
+                            format!("{name} takes an association location"),
+                        ));
+                    };
+                    association_arg(self, association)?;
+                    None
+                }
+                AssociationOp::Connect => {
+                    let [access, association] = args else {
+                        return Err(Error::new(
+                            span,
+                            "CONNECT takes an access and an association location",
+                        ));
+                    };
+                    access_arg(self, access)?;
+                    association_arg(self, association)?;
+                    None
+                }
+                AssociationOp::Disconnect => {
+                    let [access] = args else {
+                        return Err(Error::new(span, "DISCONNECT takes an access location"));
+                    };
+                    access_arg(self, access)?;
+                    None
+                }
+                AssociationOp::ReadRecord => match args {
+                    [access] => {
+                        access_arg(self, access)?;
+                        Some(Type::String)
+                    }
+                    [access, target] => {
+                        access_arg(self, access)?;
+                        let Expr::Name { .. } = target else {
+                            return Err(Error::new(
+                                target.span(),
+                                "READRECORD target must be a CHARS location",
+                            ));
+                        };
+                        let target_ty = self.check_expr(target)?;
+                        if !is_string_type(target_ty) {
+                            return Err(Error::new(
+                                target.span(),
+                                "READRECORD target must be a CHARS location",
+                            ));
+                        }
+                        None
+                    }
+                    _ => {
+                        return Err(Error::new(
+                            span,
+                            "READRECORD takes an access location and optional target",
+                        ))
+                    }
+                },
+                AssociationOp::WriteRecord => {
+                    let [access, value] = args else {
+                        return Err(Error::new(
+                            span,
+                            "WRITERECORD takes an access location and a value",
+                        ));
+                    };
+                    access_arg(self, access)?;
+                    let value_ty = self.check_expr(value)?;
+                    if !is_string_type(value_ty) {
+                        return Err(Error::new(value.span(), "WRITERECORD value must be CHARS"));
+                    }
+                    None
+                }
+            };
+            self.resolutions
+                .insert(span, ApplyResolution::Association(op));
+            return Ok(result);
+        }
         if let Some(kind) = match name {
             "WRITETEXT" => Some(crate::builtins::TextIo::Write),
             "READTEXT" => Some(crate::builtins::TextIo::Read),
@@ -2454,6 +2588,8 @@ impl Checker {
             Type::String => is_string_type(value),
             Type::BoundedString { .. } => is_string_type(value),
             Type::Struct(id) => value == Type::Struct(id),
+            Type::Association => value == Type::Association,
+            Type::Access => value == Type::Access,
             Type::Array(array) => match value {
                 Type::Array(value_array) => value_array == array,
                 Type::DynamicArray { low, element } => low == array.low && element == array.element,

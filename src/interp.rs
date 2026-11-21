@@ -252,6 +252,20 @@ enum Value {
     String(String),
     Struct(Vec<(String, Value)>),
     Array { low: i128, values: Vec<Value> },
+    Association(Option<Rc<RefCell<AssociationState>>>),
+    Access(Option<Rc<RefCell<AccessState>>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AssociationState {
+    path: String,
+    existing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AccessState {
+    association: Option<Rc<RefCell<AssociationState>>>,
+    position: usize,
 }
 
 struct Var {
@@ -953,6 +967,251 @@ impl<'a> Interpreter<'a> {
         Ok(Flow::Normal)
     }
 
+    fn exec_association(
+        &mut self,
+        op: crate::builtins::AssociationOp,
+        first: &str,
+        second: Option<&str>,
+        value: Option<&ir::Node>,
+        ty: Option<Type>,
+        span: Span,
+    ) -> Result<Value, Error> {
+        use crate::builtins::AssociationOp;
+        match op {
+            AssociationOp::Associate => {
+                let Some(value) = value else {
+                    return Err(Error::new(span, "ASSOCIATE requires a path"));
+                };
+                let path = self.eval_ir(value)?;
+                let Value::String(path) = path else {
+                    return Err(Error::new(span, "ASSOCIATE path must be CHARS"));
+                };
+                let cell = self
+                    .find_var_cell(first)
+                    .ok_or_else(|| Error::new(span, format!("unknown variable `{first}`")))?;
+                let mut var = cell.borrow_mut();
+                match &var.value {
+                    Value::Association(None) => {}
+                    Value::Association(Some(_)) => {
+                        return Err(Error::exception(
+                            "ASSOCIATEFAIL",
+                            span,
+                            "ASSOCIATEFAIL: association already exists",
+                        ));
+                    }
+                    _ => return Err(Error::new(span, "expected an ASSOCIATION location")),
+                }
+                let existing = std::path::Path::new(&path).exists();
+                var.value = Value::Association(Some(Rc::new(RefCell::new(AssociationState {
+                    path,
+                    existing,
+                }))));
+                Ok(Value::Undefined)
+            }
+            AssociationOp::IsAssociated => {
+                let cell = self
+                    .find_var_cell(first)
+                    .ok_or_else(|| Error::new(span, format!("unknown variable `{first}`")))?;
+                let var = cell.borrow();
+                let Value::Association(state) = &var.value else {
+                    return Err(Error::new(span, "expected an ASSOCIATION location"));
+                };
+                Ok(Value::Bool(state.is_some()))
+            }
+            AssociationOp::Dissociate => {
+                let cell = self
+                    .find_var_cell(first)
+                    .ok_or_else(|| Error::new(span, format!("unknown variable `{first}`")))?;
+                let mut var = cell.borrow_mut();
+                let Value::Association(state) = &mut var.value else {
+                    return Err(Error::new(span, "expected an ASSOCIATION location"));
+                };
+                if state.take().is_none() {
+                    return Err(Error::exception(
+                        "NOTASSOCIATED",
+                        span,
+                        "NOTASSOCIATED: empty association",
+                    ));
+                }
+                Ok(Value::Undefined)
+            }
+            AssociationOp::Create => {
+                let state = self.association_state(first, span)?;
+                if state.borrow().existing {
+                    return Err(Error::exception(
+                        "CREATEFAIL",
+                        span,
+                        "CREATEFAIL: file already exists",
+                    ));
+                }
+                let path = state.borrow().path.clone();
+                std::fs::write(&path, "").map_err(|error| {
+                    Error::exception("CREATEFAIL", span, format!("CREATEFAIL: {error}"))
+                })?;
+                state.borrow_mut().existing = true;
+                Ok(Value::Undefined)
+            }
+            AssociationOp::Delete => {
+                let state = self.association_state(first, span)?;
+                if !state.borrow().existing {
+                    return Err(Error::exception(
+                        "DELETEFAIL",
+                        span,
+                        "DELETEFAIL: file does not exist",
+                    ));
+                }
+                let path = state.borrow().path.clone();
+                std::fs::remove_file(&path).map_err(|error| {
+                    Error::exception("DELETEFAIL", span, format!("DELETEFAIL: {error}"))
+                })?;
+                state.borrow_mut().existing = false;
+                Ok(Value::Undefined)
+            }
+            AssociationOp::Connect => {
+                let Some(second) = second else {
+                    return Err(Error::new(span, "CONNECT requires an association"));
+                };
+                let association = self.association_state(second, span)?;
+                let cell = self
+                    .find_var_cell(first)
+                    .ok_or_else(|| Error::new(span, format!("unknown variable `{first}`")))?;
+                let mut var = cell.borrow_mut();
+                match &var.value {
+                    Value::Access(None) => {}
+                    Value::Access(Some(_)) => {
+                        return Err(Error::exception(
+                            "CONNECTFAIL",
+                            span,
+                            "CONNECTFAIL: access location is already connected",
+                        ));
+                    }
+                    _ => return Err(Error::new(span, "expected an ACCESS location")),
+                }
+                var.value = Value::Access(Some(Rc::new(RefCell::new(AccessState {
+                    association: Some(association),
+                    position: 0,
+                }))));
+                Ok(Value::Undefined)
+            }
+            AssociationOp::Disconnect => {
+                let cell = self
+                    .find_var_cell(first)
+                    .ok_or_else(|| Error::new(span, format!("unknown variable `{first}`")))?;
+                let mut var = cell.borrow_mut();
+                let Value::Access(state) = &mut var.value else {
+                    return Err(Error::new(span, "expected an ACCESS location"));
+                };
+                if state.take().is_none() {
+                    return Err(Error::exception(
+                        "NOTCONNECTED",
+                        span,
+                        "NOTCONNECTED: access location is not connected",
+                    ));
+                }
+                Ok(Value::Undefined)
+            }
+            AssociationOp::ReadRecord => {
+                let access = self.access_state(first, span)?;
+                let (association, position) = {
+                    let access = access.borrow();
+                    let Some(association) = access.association.clone() else {
+                        return Err(Error::exception(
+                            "NOTCONNECTED",
+                            span,
+                            "NOTCONNECTED: access location is not connected",
+                        ));
+                    };
+                    (association, access.position)
+                };
+                let path = association.borrow().path.clone();
+                let contents = std::fs::read_to_string(&path).map_err(|error| {
+                    Error::exception("READFAIL", span, format!("READFAIL: {error}"))
+                })?;
+                let lines: Vec<&str> = contents.lines().collect();
+                let Some(record) = lines.get(position) else {
+                    return Err(Error::exception("READFAIL", span, "READFAIL: end of file"));
+                };
+                access.borrow_mut().position += 1;
+                let record = Value::String((*record).to_owned());
+                if let Some(target) = second {
+                    self.assign_var(target, record, span)?;
+                    Ok(Value::Undefined)
+                } else {
+                    let _ = ty;
+                    Ok(record)
+                }
+            }
+            AssociationOp::WriteRecord => {
+                let Some(value) = value else {
+                    return Err(Error::new(span, "WRITERECORD requires a value"));
+                };
+                let value = self.eval_ir(value)?;
+                let Value::String(record) = value else {
+                    return Err(Error::new(span, "WRITERECORD value must be CHARS"));
+                };
+                let access = self.access_state(first, span)?;
+                let association = {
+                    let access = access.borrow();
+                    let Some(association) = access.association.clone() else {
+                        return Err(Error::exception(
+                            "NOTCONNECTED",
+                            span,
+                            "NOTCONNECTED: access location is not connected",
+                        ));
+                    };
+                    association
+                };
+                let path = association.borrow().path.clone();
+                use std::io::Write as _;
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .map_err(|error| {
+                        Error::exception("WRITEFAIL", span, format!("WRITEFAIL: {error}"))
+                    })?;
+                writeln!(file, "{record}").map_err(|error| {
+                    Error::exception("WRITEFAIL", span, format!("WRITEFAIL: {error}"))
+                })?;
+                Ok(Value::Undefined)
+            }
+        }
+    }
+
+    fn association_state(
+        &self,
+        name: &str,
+        span: Span,
+    ) -> Result<Rc<RefCell<AssociationState>>, Error> {
+        let cell = self
+            .find_var_cell(name)
+            .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+        let var = cell.borrow();
+        let Value::Association(Some(state)) = &var.value else {
+            return Err(Error::exception(
+                "NOTASSOCIATED",
+                span,
+                "NOTASSOCIATED: empty association",
+            ));
+        };
+        Ok(state.clone())
+    }
+
+    fn access_state(&self, name: &str, span: Span) -> Result<Rc<RefCell<AccessState>>, Error> {
+        let cell = self
+            .find_var_cell(name)
+            .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+        let var = cell.borrow();
+        let Value::Access(Some(state)) = &var.value else {
+            return Err(Error::exception(
+                "NOTCONNECTED",
+                span,
+                "NOTCONNECTED: access location is not connected",
+            ));
+        };
+        Ok(state.clone())
+    }
+
     fn exec_block(
         &mut self,
         stmts: &[ir::Stmt],
@@ -1602,6 +1861,14 @@ impl<'a> Interpreter<'a> {
                     values: lowered,
                 })
             }
+            ir::Expr::Association {
+                op,
+                first,
+                second,
+                value,
+                ty,
+                span,
+            } => self.exec_association(*op, first, second.as_deref(), value.as_ref(), *ty, *span),
             ir::Expr::LabelledArrayLiteral { entries, array, .. } => {
                 let element = array.element.ty();
                 let mut values =
@@ -2119,18 +2386,30 @@ impl<'a> Interpreter<'a> {
                 }),
                 _ => Err(Error::new(span, "expected an array slice value")),
             },
+            Type::Association => match value {
+                Value::Association(_) => Ok(value),
+                _ => Err(Error::new(span, "expected an ASSOCIATION value")),
+            },
+            Type::Access => match value {
+                Value::Access(_) => Ok(value),
+                _ => Err(Error::new(span, "expected an ACCESS value")),
+            },
             Type::IntLiteral => Err(Error::new(span, "internal: cannot declare a literal type")),
             Type::ArrayTuple => Err(Error::new(span, "array literal has no target array mode")),
         }
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        if mode.access {
+            return Ok(Type::Access);
+        }
         if !mode.arrays.is_empty() {
             let element_mode = ModeRef {
                 name: mode.name.clone(),
                 arrays: Vec::new(),
                 string_length: mode.string_length,
                 varying: mode.varying,
+                access: mode.access,
                 span: mode.span,
             };
             let base = self.resolve_mode(&element_mode)?;
@@ -3164,6 +3443,8 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
                 values: vec![value; (array.high - array.low + 1).max(0) as usize],
             }
         }
+        Type::Association => Value::Association(None),
+        Type::Access => Value::Access(None),
         Type::MultiArray(array) => {
             let element = array.element.ty();
             let value = if matches!(element, Type::Struct(_)) {

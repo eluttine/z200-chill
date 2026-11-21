@@ -218,7 +218,43 @@ pub fn parse_format(text: &str) -> Result<Vec<FormatOp>, String> {
                 return Err("I/O control format clauses are not implemented yet".to_owned());
             }
             '(' => {
-                return Err("parenthesized format clauses are not implemented yet".to_owned());
+                let inner_start = index;
+                let mut depth = 1usize;
+                let mut scan = index;
+                let mut inner_end = None;
+                while scan < chars.len() {
+                    if chars[scan] == '%' {
+                        match chars.get(scan + 1) {
+                            Some('(') => {
+                                depth += 1;
+                                scan += 2;
+                                continue;
+                            }
+                            Some(')') => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    inner_end = Some(scan);
+                                    scan += 2;
+                                    break;
+                                }
+                                scan += 2;
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                    scan += 1;
+                }
+                let Some(inner_end) = inner_end else {
+                    return Err("unterminated parenthesized format clause".to_owned());
+                };
+                let inner: String = chars[inner_start..inner_end].iter().collect();
+                let inner_ops = parse_format(&inner)?;
+                for _ in 0..repetition {
+                    ops.extend(inner_ops.clone());
+                }
+                index = scan;
+                continue;
             }
             other => {
                 return Err(format!("unknown format code `%{other}`"));
@@ -227,4 +263,32 @@ pub fn parse_format(text: &str) -> Result<Vec<FormatOp>, String> {
     }
     flush(&mut literal, &mut ops);
     Ok(ops)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssociationOp {
+    Associate,
+    IsAssociated,
+    Dissociate,
+    Create,
+    Delete,
+    Connect,
+    Disconnect,
+    ReadRecord,
+    WriteRecord,
+}
+
+pub fn lookup_association(name: &str) -> Option<AssociationOp> {
+    match name {
+        "ASSOCIATE" => Some(AssociationOp::Associate),
+        "ISASSOCIATED" => Some(AssociationOp::IsAssociated),
+        "DISSOCIATE" => Some(AssociationOp::Dissociate),
+        "CREATE" => Some(AssociationOp::Create),
+        "DELETE" => Some(AssociationOp::Delete),
+        "CONNECT" => Some(AssociationOp::Connect),
+        "DISCONNECT" => Some(AssociationOp::Disconnect),
+        "READRECORD" => Some(AssociationOp::ReadRecord),
+        "WRITERECORD" => Some(AssociationOp::WriteRecord),
+        _ => None,
+    }
 }

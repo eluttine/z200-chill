@@ -81,6 +81,10 @@ M: MODULE
   ASSERT text = "hello";
 
   s := "";
+  WRITETEXT(s, "%2(%C:%C %)", 1, 2, 3, 4);
+  ASSERT s = "1:2 3:4 ";
+
+  s := "";
   WRITETEXT(s, 2, "%C", 7);
   ASSERT s = "  7";
 END M;
