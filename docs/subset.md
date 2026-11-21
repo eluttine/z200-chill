@@ -55,8 +55,8 @@ Implemented in `z200c`:
 - manifest loading and width-profile validation;
 - lexer, parser, and AST for the constructs in the subset above;
 - mode checking for `SHORT_INT` / `INT` / `LONG_INT` / `BOOL` / `CHAR` / `CHARS`,
-  literals, arithmetic, and one-dimensional arrays of scalar or structure modes
-  (`ARRAY (low:high) mode`),
+  `CHARS(n)` / `CHARS(n) VARYING`, literals, arithmetic, and one-dimensional arrays
+  of scalar or structure modes (`ARRAY (low:high) mode`),
   relational and boolean expressions, procedures, calls, assignments, `ASSERT`,
   `IF`, `DO WHILE` / `DO FOR EVER`, and `BEGIN … END`;
 - `GRANT` / `SEIZE` visibility with module/package-qualified names (`Module!x`,
@@ -438,8 +438,23 @@ text**:
   the index is beyond the current length.
 - `READTEXT(text, format)` / `READTEXT(text, index, format)` check that the text matches
   the literal format and raise the `TEXTFAIL` exception otherwise.
-- Format text is currently literal; `%` conversion/editing codes, io lists, text modes,
-  and associations are not implemented yet.
+- Format text is currently literal; `%` conversion/editing codes, io lists, and
+  associations are not implemented yet.
+- Text locations must have a varying string mode (`CHARS` or `CHARS(n) VARYING`).
+
+### 5.6 Text modes
+
+`CHARS(n)` is a fixed string mode: every value must contain exactly `n` characters.
+`CHARS(n) VARYING` is a bounded varying mode: values may contain between 0 and `n`
+characters. Bare `CHARS` remains an unbounded varying string mode.
+
+- Fixed and bounded varying strings are valid scalar array elements.
+- Assignment checks the destination string mode's length/limit at runtime.
+- String concatenation and comparison accept any mix of `CHARS`, `CHARS(n)`, and
+  `CHARS(n) VARYING`; concatenation delivers an unbounded `CHARS` value.
+- String literals and `READLINE` deliver unbounded `CHARS` values, so assigning them to
+  a bounded string is checked at runtime.
+- `WCHARS` and wide-character text are not implemented.
 
 ## 6. Procedures
 

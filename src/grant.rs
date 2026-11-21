@@ -321,6 +321,24 @@ fn parse_external_type(
             }),
         };
     }
+    if let Some(rest) = name.strip_prefix("CHARS(") {
+        let (length, suffix) = rest
+            .split_once(')')
+            .ok_or_else(|| format!("invalid string mode `{name}` in grant file"))?;
+        let length = length
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| format!("invalid string length in `{name}`"))?;
+        let varying = match suffix.trim() {
+            "" => false,
+            "VARYING" => true,
+            other => return Err(format!("invalid string attribute `{other}` in `{name}`")),
+        };
+        return Ok(program::ExternalType::Builtin(Type::BoundedString {
+            length,
+            varying,
+        }));
+    }
     if let Some(ty) = types::resolve_mode(name) {
         return Ok(program::ExternalType::Builtin(ty));
     }
@@ -359,6 +377,14 @@ fn type_name(ty: Type) -> String {
         Type::Bool => "BOOL".to_owned(),
         Type::Char => "CHAR".to_owned(),
         Type::String => "CHARS".to_owned(),
+        Type::BoundedString {
+            length,
+            varying: true,
+        } => format!("CHARS({length}) VARYING"),
+        Type::BoundedString {
+            length,
+            varying: false,
+        } => format!("CHARS({length})"),
         // Structure modes must be referenced symbolically; this branch should
         // not be reached because portable types use `ExternalType::Mode`.
         Type::Struct(_) => "STRUCT".to_owned(),
@@ -650,6 +676,26 @@ END M;
                 ))),
             }
         );
+    }
+
+    #[test]
+    fn bounded_string_types_round_trip() {
+        for ty in [
+            Type::BoundedString {
+                length: 20,
+                varying: false,
+            },
+            Type::BoundedString {
+                length: 20,
+                varying: true,
+            },
+        ] {
+            let text = type_name(ty);
+            assert_eq!(
+                parse_external_type(&text, &std::collections::HashMap::new()).unwrap(),
+                program::ExternalType::Builtin(ty)
+            );
+        }
     }
 
     #[test]

@@ -213,6 +213,10 @@ pub struct ModeRef {
     pub name: String,
     /// Inline `ARRAY (low:high, ...) mode` bounds.
     pub arrays: Vec<ArrayBounds>,
+    /// `CHARS(n)` / `WCHARS(n)` length, if specified.
+    pub string_length: Option<usize>,
+    /// `VARYING` after a string length.
+    pub varying: bool,
     pub span: Span,
 }
 

@@ -1191,6 +1191,8 @@ impl Checker {
             let element_mode = ModeRef {
                 name: mode.name.clone(),
                 arrays: Vec::new(),
+                string_length: mode.string_length,
+                varying: mode.varying,
                 span: mode.span,
             };
             let base = self.resolve_mode(&element_mode)?;
@@ -1205,6 +1207,12 @@ impl Checker {
             };
             return crate::types::array_type_from_bounds(&mode.arrays, element)
                 .ok_or_else(|| Error::new(mode.span, "unsupported array dimensions"));
+        }
+        if let Some(length) = mode.string_length {
+            return Ok(Type::BoundedString {
+                length,
+                varying: mode.varying,
+            });
         }
         for scope in self.scopes[self.module_floor..].iter().rev() {
             if let Some(ty) = scope.modes.get(&mode.name) {
@@ -1875,10 +1883,8 @@ impl Checker {
                     self.combine_int(left, right, span)?;
                     Ok(Type::Bool)
                 } else if (left == right
-                    && matches!(
-                        left,
-                        Type::Bool | Type::Char | Type::String | Type::Struct(_)
-                    ))
+                    && matches!(left, Type::Bool | Type::Char | Type::Struct(_)))
+                    || (is_string_type(left) && is_string_type(right))
                     || arrays_compatible(left, right)
                 {
                     Ok(Type::Bool)
@@ -1898,7 +1904,7 @@ impl Checker {
                     self.combine_int(left, right, span)?;
                     Ok(Type::Bool)
                 } else if (left == Type::Char && right == Type::Char)
-                    || (left == Type::String && right == Type::String)
+                    || (is_string_type(left) && is_string_type(right))
                 {
                     Ok(Type::Bool)
                 } else {
@@ -1933,7 +1939,7 @@ impl Checker {
                 }
             }
             BinaryOp::Concat => {
-                if left == Type::String && right == Type::String {
+                if is_string_type(left) && is_string_type(right) {
                     Ok(Type::String)
                 } else {
                     Err(Error::new(
@@ -2026,10 +2032,12 @@ impl Checker {
                 ));
             };
             let target_ty = self.check_expr(target)?;
-            if target_ty != Type::String {
+            if !is_varying_string(target_ty) {
                 return Err(Error::new(
                     *target_span,
-                    format!("text location `{target_name}` must have mode CHARS"),
+                    format!(
+                        "text location `{target_name}` must have a varying CHARS mode (CHARS or CHARS(n) VARYING)"
+                    ),
                 ));
             }
             if let Some(index) = index {
@@ -2066,10 +2074,13 @@ impl Checker {
                     }
                     if let Some(arg) = args.first() {
                         let ty = self.check_expr(arg)?;
-                        if ty != Type::String {
+                        if !is_string_type(ty) {
                             return Err(Error::new(
                                 arg.span(),
-                                format!("`{name}` requires CHARS, found {}", ty.describe()),
+                                format!(
+                                    "`{name}` requires a character string, found {}",
+                                    ty.describe()
+                                ),
                             ));
                         }
                     }
@@ -2363,7 +2374,8 @@ impl Checker {
             },
             Type::Bool => value == Type::Bool,
             Type::Char => value == Type::Char,
-            Type::String => value == Type::String,
+            Type::String => is_string_type(value),
+            Type::BoundedString { .. } => is_string_type(value),
             Type::Struct(id) => value == Type::Struct(id),
             Type::Array(array) => match value {
                 Type::Array(value_array) => value_array == array,
@@ -2464,6 +2476,14 @@ fn binary_for_assign(op: AssignOp) -> BinaryOp {
         AssignOp::Div => BinaryOp::Div,
         AssignOp::Concat => BinaryOp::Concat,
     }
+}
+
+fn is_string_type(ty: Type) -> bool {
+    matches!(ty, Type::String | Type::BoundedString { .. })
+}
+
+fn is_varying_string(ty: Type) -> bool {
+    matches!(ty, Type::String) || matches!(ty, Type::BoundedString { varying: true, .. })
 }
 
 fn arrays_compatible(left: Type, right: Type) -> bool {

@@ -94,7 +94,8 @@ all existing tests pass with no new special cases.
       whole-array assignment/equality, and scalar or structure elements.
 - [x] Labelled array tuples with literal/range/`ELSE`/`(*)` labels, completeness and
       overlap checking.
-- [x] `CHAR` and unbounded `CHARS` modes (`CHARS(n)`, `VARYING`, and `WCHARS` remain).
+- [x] `CHAR`, unbounded `CHARS`, fixed `CHARS(n)`, and bounded
+      `CHARS(n) VARYING` modes (`WCHARS` remains).
 - [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
 - [x] Action-level handlers, including handlers on bracketed actions, assignment,
       assert, and call actions.
@@ -104,7 +105,9 @@ all existing tests pass with no new special cases.
       statically inferred yet.
 - [x] Implementation-defined text I/O (`WRITE`, `WRITELINE`, `READLINE`).
 - [x] `READTEXT`/`WRITETEXT` for `CHARS` locations with literal format text.
-- [ ] Text modes, associations, format conversion/editing codes, and io lists.
+- [x] Bounded text modes (`CHARS(n)` and `CHARS(n) VARYING`), including arrays of
+      bounded strings.
+- [ ] Associations/access modes, format conversion/editing codes, and io lists.
 - [ ] Processes, signals, and timers.
 - [ ] Sets/powersets, moreta modes, templates.
 

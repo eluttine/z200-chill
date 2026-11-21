@@ -2038,6 +2038,28 @@ impl<'a> Interpreter<'a> {
                 Value::String(value) => Ok(Value::String(value)),
                 _ => Err(Error::new(span, "expected a character string value")),
             },
+            Type::BoundedString { length, varying } => match value {
+                Value::String(value) => {
+                    let actual = value.chars().count();
+                    let fits = if varying {
+                        actual <= length
+                    } else {
+                        actual == length
+                    };
+                    if fits {
+                        Ok(Value::String(value))
+                    } else {
+                        Err(Error::new(
+                            span,
+                            format!(
+                                "string length {actual} does not fit CHARS({length}){}",
+                                if varying { " VARYING" } else { "" }
+                            ),
+                        ))
+                    }
+                }
+                _ => Err(Error::new(span, "expected a character string value")),
+            },
             Type::Struct(_) => match value {
                 Value::Struct(_) => Ok(value),
                 _ => Err(Error::new(span, "expected a structure value")),
@@ -2080,6 +2102,8 @@ impl<'a> Interpreter<'a> {
             let element_mode = ModeRef {
                 name: mode.name.clone(),
                 arrays: Vec::new(),
+                string_length: mode.string_length,
+                varying: mode.varying,
                 span: mode.span,
             };
             let base = self.resolve_mode(&element_mode)?;
@@ -2094,6 +2118,12 @@ impl<'a> Interpreter<'a> {
             };
             return crate::types::array_type_from_bounds(&mode.arrays, element)
                 .ok_or_else(|| Error::new(mode.span, "unsupported array dimensions"));
+        }
+        if let Some(length) = mode.string_length {
+            return Ok(Type::BoundedString {
+                length,
+                varying: mode.varying,
+            });
         }
         let floor = self.local_floor();
         for scope in self.locals[floor..].iter().rev() {

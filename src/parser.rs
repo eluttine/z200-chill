@@ -908,15 +908,47 @@ impl<'a> Parser<'a> {
             return Ok(ModeRef {
                 name: element.name,
                 arrays,
+                string_length: element.string_length,
+                varying: element.varying,
                 span: Span::new(self.source, start.start, element.span.end),
             });
         }
         if self.at_keyword(Keyword::Chars) {
             let span = self.current_span();
             self.advance();
+            let length = if self.at_lparen() {
+                self.advance();
+                let length = self.parse_mode_integer()?;
+                self.expect_rparen()?;
+                if length < 0 {
+                    return Err(Error::coded(
+                        "E0205",
+                        span,
+                        "string length must be non-negative",
+                    ));
+                }
+                Some(length as usize)
+            } else {
+                None
+            };
+            let varying = if self.at_keyword(Keyword::Varying) {
+                self.advance();
+                if length.is_none() {
+                    return Err(Error::coded(
+                        "E0205",
+                        span,
+                        "VARYING requires a CHARS(n) length",
+                    ));
+                }
+                true
+            } else {
+                false
+            };
             return Ok(ModeRef {
                 name: "CHARS".to_owned(),
                 arrays: Vec::new(),
+                string_length: length,
+                varying,
                 span,
             });
         }
@@ -924,6 +956,8 @@ impl<'a> Parser<'a> {
         Ok(ModeRef {
             name,
             arrays: Vec::new(),
+            string_length: None,
+            varying: false,
             span,
         })
     }

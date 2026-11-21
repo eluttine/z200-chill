@@ -35,6 +35,7 @@ pub enum Scalar {
     Bool,
     Char,
     String,
+    BoundedString { length: usize, varying: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -50,6 +51,9 @@ impl ArrayElement {
             Type::Bool => Some(Self::Scalar(Scalar::Bool)),
             Type::Char => Some(Self::Scalar(Scalar::Char)),
             Type::String => Some(Self::Scalar(Scalar::String)),
+            Type::BoundedString { length, varying } => {
+                Some(Self::Scalar(Scalar::BoundedString { length, varying }))
+            }
             Type::Struct(id) => Some(Self::Struct(id)),
             Type::IntLiteral
             | Type::Array(_)
@@ -130,6 +134,11 @@ pub enum Type {
     Bool,
     Char,
     String,
+    /// `CHARS(n)` fixed or `CHARS(n) VARYING` bounded string mode.
+    BoundedString {
+        length: usize,
+        varying: bool,
+    },
     Struct(ModeId),
     Array(ArrayType),
     MultiArray(MultiArrayType),
@@ -163,6 +172,9 @@ impl Type {
             Self::Bool => Some(Scalar::Bool),
             Self::Char => Some(Scalar::Char),
             Self::String => Some(Scalar::String),
+            Self::BoundedString { length, varying } => {
+                Some(Scalar::BoundedString { length, varying })
+            }
             Self::IntLiteral
             | Self::Struct(_)
             | Self::Array(_)
@@ -178,6 +190,7 @@ impl Type {
             Scalar::Bool => Self::Bool,
             Scalar::Char => Self::Char,
             Scalar::String => Self::String,
+            Scalar::BoundedString { length, varying } => Self::BoundedString { length, varying },
         }
     }
 
@@ -188,6 +201,8 @@ impl Type {
             Self::Bool => "BOOL",
             Self::Char => "CHAR",
             Self::String => "character string",
+            Self::BoundedString { varying: true, .. } => "varying character string",
+            Self::BoundedString { .. } => "fixed character string",
             Self::Struct(_) => "structure",
             Self::Array(_) => "array",
             Self::MultiArray(_) => "multidimensional array",
@@ -240,6 +255,13 @@ pub fn resolve_mode_ref(
         .get(&mode.name)
         .copied()
         .or_else(|| resolve_mode(&mode.name))?;
+    let base = match mode.string_length {
+        Some(length) => Type::BoundedString {
+            length,
+            varying: mode.varying,
+        },
+        None => base,
+    };
     if mode.arrays.is_empty() {
         Some(base)
     } else {
