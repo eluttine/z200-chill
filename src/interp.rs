@@ -45,6 +45,15 @@ impl Error {
         }
     }
 
+    pub fn exception(name: &str, span: Span, message: impl Into<String>) -> Self {
+        Self {
+            code: "E0510",
+            span,
+            message: message.into(),
+            exception: Some(name.to_owned()),
+        }
+    }
+
     pub fn raised(name: &str, span: Span) -> Self {
         Self {
             code: "E0509",
@@ -1512,6 +1521,73 @@ impl<'a> Interpreter<'a> {
                             .map_err(|error| Error::new(*span, error.to_string()))?;
                         let line = line.trim_end_matches(['\n', '\r']).to_owned();
                         Ok(Value::String(line))
+                    }
+                }
+            }
+            ir::Expr::TextIo {
+                kind,
+                target,
+                index,
+                format,
+                span,
+            } => {
+                let format_value = self.eval_ir(format)?;
+                let Value::String(format) = format_value else {
+                    return Err(Error::new(*span, "format text must be CHARS"));
+                };
+                let index = match index {
+                    Some(index) => {
+                        let value = self.eval_ir(index)?;
+                        let (index, _) = self.expect_int(value, index.span())?;
+                        index
+                    }
+                    None => 0,
+                };
+                if index < 0 {
+                    return Err(Error::exception(
+                        "TEXTFAIL",
+                        *span,
+                        "TEXTFAIL: negative text index",
+                    ));
+                }
+                let cell = self
+                    .find_var_cell(target)
+                    .ok_or_else(|| Error::new(*span, format!("unknown variable `{target}`")))?;
+                let mut var = cell.borrow_mut();
+                let Value::String(text) = &mut var.value else {
+                    return Err(Error::new(*span, "text location must be CHARS"));
+                };
+                let mut chars: Vec<char> = text.chars().collect();
+                let offset = index as usize;
+                match kind {
+                    crate::builtins::TextIo::Write => {
+                        while chars.len() < offset {
+                            chars.push(' ');
+                        }
+                        for (position, ch) in format.chars().enumerate() {
+                            let position = offset + position;
+                            if position < chars.len() {
+                                chars[position] = ch;
+                            } else {
+                                chars.push(ch);
+                            }
+                        }
+                        *text = chars.into_iter().collect();
+                        Ok(Value::Undefined)
+                    }
+                    crate::builtins::TextIo::Read => {
+                        let matches = format
+                            .chars()
+                            .enumerate()
+                            .all(|(position, ch)| chars.get(offset + position) == Some(&ch));
+                        if !matches {
+                            return Err(Error::exception(
+                                "TEXTFAIL",
+                                *span,
+                                "TEXTFAIL: text does not match the format",
+                            ));
+                        }
+                        Ok(Value::Undefined)
                     }
                 }
             }
@@ -3347,6 +3423,44 @@ M: MODULE
   OD;
   ASSERT x = 33;
 END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn writetext_and_readtext_on_chars_locations() {
+        run_source(
+            r#"
+M: MODULE
+  DCL s CHARS INIT := "hello";
+  DCL t CHARS INIT := "";
+  DCL u CHARS INIT := "abc";
+  WRITETEXT(s, 1, "i");
+  ASSERT s = "hillo";
+  READTEXT(s, 1, "i");
+  WRITETEXT(t, 2, "x");
+  ASSERT t = "  x";
+  WRITETEXT(u, "xy");
+  ASSERT u = "xyc";
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn readtext_mismatch_raises_textfail() {
+        run_source(
+            r#"
+M: MODULE
+  DCL s CHARS INIT := "abc";
+  READTEXT(s, 1, "z");
+  ASSERT FALSE;
+END
+ON (TEXTFAIL):
+  ASSERT TRUE;
+END;
 "#,
         )
         .unwrap();

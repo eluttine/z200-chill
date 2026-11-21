@@ -368,8 +368,16 @@ Z.200 permits implementation-defined built-in routine names. `z200c` provides:
 - `WRITELINE();` / `WRITELINE(chars);` writes a line to stdout.
 - `line := READLINE();` reads one stdin line as `CHARS`, without the terminator.
 
-These are not the standard `READTEXT`/`WRITETEXT` text-transfer operations; those require
-text modes and associations, which are not implemented yet.
+`READTEXT`/`WRITETEXT` are also supported for **`CHARS` locations with literal format
+text**:
+
+- `WRITETEXT(text, format)` writes at index 0.
+- `WRITETEXT(text, index, format)` writes at an integer index, padding with spaces if
+  the index is beyond the current length.
+- `READTEXT(text, format)` / `READTEXT(text, index, format)` check that the text matches
+  the literal format and raise the `TEXTFAIL` exception otherwise.
+- Format text is currently literal; `%` conversion/editing codes, io lists, text modes,
+  and associations are not implemented yet.
 
 ## 6. Procedures
 

@@ -80,6 +80,13 @@ pub enum Expr {
         ty: Option<Type>,
         span: Span,
     },
+    TextIo {
+        kind: crate::builtins::TextIo,
+        target: String,
+        index: Option<Node>,
+        format: Node,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -96,7 +103,8 @@ impl Expr {
             | Self::Binary { span, .. }
             | Self::Field { span, .. }
             | Self::Index { span, .. }
-            | Self::Builtin { span, .. } => *span,
+            | Self::Builtin { span, .. }
+            | Self::TextIo { span, .. } => *span,
         }
     }
 
@@ -113,6 +121,7 @@ impl Expr {
             | Self::Field { ty, .. }
             | Self::Index { ty, .. } => Some(*ty),
             Self::Call { ty, .. } | Self::Builtin { ty, .. } => *ty,
+            Self::TextIo { .. } => None,
         }
     }
 }
@@ -625,6 +634,31 @@ impl Lowerer<'_> {
                     ty,
                     span,
                 }),
+                Some(ApplyResolution::TextIo(kind)) => {
+                    let (target, index, format) = match args.as_slice() {
+                        [target, format] => (target, None, format),
+                        [target, index, format] => (target, Some(index), format),
+                        _ => {
+                            return Err(Error::new(span, "internal: text I/O has the wrong arity"));
+                        }
+                    };
+                    let Expr::Name {
+                        name: target_name, ..
+                    } = target.as_ref()
+                    else {
+                        return Err(Error::new(
+                            target.span(),
+                            "internal: text argument is not a location",
+                        ));
+                    };
+                    Rc::new(Expr::TextIo {
+                        kind: *kind,
+                        target: target_name.clone(),
+                        index: index.cloned(),
+                        format: format.clone(),
+                        span,
+                    })
+                }
                 Some(ApplyResolution::Builtin(builtin)) => Rc::new(Expr::Builtin {
                     builtin: *builtin,
                     args,

@@ -3,6 +3,12 @@
 /// Z.200 permits implementation-defined built-in routine names. These are not the
 /// standard `READTEXT`/`WRITETEXT` operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextIo {
+    Read,
+    Write,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Builtin {
     /// Write a CHARS value to stdout without a newline.
     Write,

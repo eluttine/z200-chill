@@ -73,7 +73,8 @@ all existing tests pass with no new special cases.
 - [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
 - [ ] Action-level handlers and exception-set flow checking.
 - [x] Implementation-defined text I/O (`WRITE`, `WRITELINE`, `READLINE`).
-- [ ] Standard `READTEXT`/`WRITETEXT`, text modes, associations, and format conversions.
+- [x] `READTEXT`/`WRITETEXT` for `CHARS` locations with literal format text.
+- [ ] Text modes, associations, format conversion/editing codes, and io lists.
 - [ ] Processes, signals, and timers.
 - [ ] Sets/powersets, moreta modes, templates.
 

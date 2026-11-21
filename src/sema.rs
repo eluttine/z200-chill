@@ -84,6 +84,7 @@ pub enum ApplyResolution {
     Procedure,
     ArrayIndex,
     Builtin(crate::builtins::Builtin),
+    TextIo(crate::builtins::TextIo),
 }
 
 /// The checker's result: diagnostics plus expression annotations that the
@@ -1877,6 +1878,62 @@ impl Checker {
         span: Span,
         require_result: bool,
     ) -> Result<Option<Type>, Error> {
+        if let Some(kind) = match name {
+            "WRITETEXT" => Some(crate::builtins::TextIo::Write),
+            "READTEXT" => Some(crate::builtins::TextIo::Read),
+            _ => None,
+        } {
+            let (target, index, format) = match args {
+                [target, format] => (target, None, format),
+                [target, index, format] => (target, Some(index), format),
+                _ => {
+                    return Err(Error::new(
+                        span,
+                        format!("`{name}` takes a text location, an optional index, and a format"),
+                    ));
+                }
+            };
+            let Expr::Name {
+                name: target_name,
+                span: target_span,
+                ..
+            } = target
+            else {
+                return Err(Error::new(
+                    target.span(),
+                    "the text argument must be a CHARS location",
+                ));
+            };
+            let target_ty = self.check_expr(target)?;
+            if target_ty != Type::String {
+                return Err(Error::new(
+                    *target_span,
+                    format!("text location `{target_name}` must have mode CHARS"),
+                ));
+            }
+            if let Some(index) = index {
+                let index_ty = self.check_expr(index)?;
+                if !index_ty.is_int() {
+                    return Err(Error::new(
+                        index.span(),
+                        format!(
+                            "text index must be an integer, found {}",
+                            index_ty.describe()
+                        ),
+                    ));
+                }
+            }
+            let format_ty = self.check_expr(format)?;
+            if format_ty != Type::String {
+                return Err(Error::new(
+                    format.span(),
+                    format!("format text must be CHARS, found {}", format_ty.describe()),
+                ));
+            }
+            self.resolutions.insert(span, ApplyResolution::TextIo(kind));
+            return Ok(None);
+        }
+
         if let Some(builtin) = crate::builtins::lookup(name) {
             let result = match builtin {
                 crate::builtins::Builtin::Write | crate::builtins::Builtin::WriteLine => {
@@ -3025,6 +3082,20 @@ END B;
             "{}",
             error.message
         );
+    }
+
+    #[test]
+    fn text_io_requires_a_chars_location() {
+        let error = check_source(
+            r#"
+M: MODULE
+  DCL n INT;
+  WRITETEXT(n, "x");
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("CHARS"), "{}", error.message);
     }
 
     #[test]
