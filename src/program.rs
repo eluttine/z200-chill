@@ -692,6 +692,7 @@ pub fn add_external_exports(
                         Some(ty) => Some(resolve_external_type(ty, ids)?),
                         None => None,
                     },
+                    exceptions: None,
                 }),
                 ExportInfoKind::Mode(mode) => {
                     let id = ids.get(&mode.symbol()).ok_or_else(|| {
@@ -900,9 +901,12 @@ fn collect_reach_exports(
                 }
             }
             Declaration::Proc(proc_def) => {
-                if let Ok(signature) =
-                    signature_from_params_with(&proc_def.params, &proc_def.result, &mode_names)
-                {
+                if let Ok(signature) = signature_from_params_with(
+                    &proc_def.params,
+                    &proc_def.result,
+                    &proc_def.exceptions,
+                    &mode_names,
+                ) {
                     grantable.insert(proc_def.name.clone(), ReachExportKind::Proc(signature));
                 }
             }
@@ -1253,6 +1257,7 @@ pub fn collect_interface(
                 let signature = match signature_from_params_with(
                     &proc_def.params,
                     &proc_def.result,
+                    &proc_def.exceptions,
                     mode_names,
                 ) {
                     Ok(signature) => signature,
@@ -1277,6 +1282,7 @@ pub fn collect_interface(
                 let proc_sig = match signature_from_params_with(
                     &signature.params,
                     &signature.result,
+                    &signature.exceptions,
                     mode_names,
                 ) {
                     Ok(proc_sig) => proc_sig,
@@ -1316,13 +1322,15 @@ fn has_seized_mode(params: &[Param], result: &Option<ModeRef>, seized: &HashSet<
 pub fn signature_from_params(
     params: &[Param],
     result: &Option<ModeRef>,
+    exceptions: &[String],
 ) -> Result<ProcType, Error> {
-    signature_from_params_with(params, result, &HashMap::new())
+    signature_from_params_with(params, result, exceptions, &HashMap::new())
 }
 
 pub fn signature_from_params_with(
     params: &[Param],
     result: &Option<ModeRef>,
+    exceptions: &[String],
     mode_names: &HashMap<String, Type>,
 ) -> Result<ProcType, Error> {
     let mut param_types = Vec::with_capacity(params.len());
@@ -1355,6 +1363,7 @@ pub fn signature_from_params_with(
     Ok(ProcType {
         params: param_types,
         result: result_type,
+        exceptions: Some(exceptions.to_vec()),
     })
 }
 
@@ -1406,6 +1415,7 @@ fn check_contexts(module: &Module, index: usize, exports: &[ExportEntry]) -> Res
                     let ty = signature_from_params_with(
                         &signature.params,
                         &signature.result,
+                        &signature.exceptions,
                         &empty_modes,
                     )?;
                     if !declared_names.insert(signature.name.clone()) {
@@ -1421,6 +1431,7 @@ fn check_contexts(module: &Module, index: usize, exports: &[ExportEntry]) -> Res
                     let ty = signature_from_params_with(
                         &proc_def.params,
                         &proc_def.result,
+                        &proc_def.exceptions,
                         &empty_modes,
                     )?;
                     if !declared_names.insert(proc_def.name.clone()) {

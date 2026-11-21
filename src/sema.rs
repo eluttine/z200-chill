@@ -195,6 +195,7 @@ pub fn analyze_with_externals(
         diagnostics: Vec::new(),
         types: HashMap::new(),
         resolutions: HashMap::new(),
+        exception_sets: Vec::new(),
     };
     for (index, module) in program.modules.iter().enumerate() {
         checker.current_module = index;
@@ -273,6 +274,9 @@ struct Checker {
     diagnostics: Vec<Diagnostic>,
     types: HashMap<Span, Type>,
     resolutions: HashMap<Span, ApplyResolution>,
+    /// Statically possible exceptions for the action list currently being
+    /// checked. A new set is pushed around procedure/module bodies and handlers.
+    exception_sets: Vec<HashSet<String>>,
 }
 
 impl Checker {
@@ -284,6 +288,26 @@ impl Checker {
         }
         self.diagnostics
             .push(Diagnostic::new(error.code, Some(error.span), error.message));
+    }
+
+    fn push_exception_set(&mut self) {
+        self.exception_sets.push(HashSet::new());
+    }
+
+    fn take_exception_set(&mut self) -> HashSet<String> {
+        self.exception_sets.pop().unwrap_or_default()
+    }
+
+    fn record_exception(&mut self, name: &str) {
+        if let Some(set) = self.exception_sets.last_mut() {
+            set.insert(name.to_owned());
+        }
+    }
+
+    fn record_exceptions(&mut self, names: impl IntoIterator<Item = String>) {
+        if let Some(set) = self.exception_sets.last_mut() {
+            set.extend(names);
+        }
     }
 
     fn check_module(&mut self, module: &Module) -> Result<(), Error> {
@@ -338,12 +362,17 @@ impl Checker {
         if let Some(name) = &module.name {
             self.labels.push(name.clone());
         }
-        let result = self.check_actions(&module.actions).and_then(|()| {
-            if let Some(handler) = &module.handler {
-                self.check_handler(handler)
+        self.push_exception_set();
+        let result = self.check_actions(&module.actions);
+        let incoming = self.take_exception_set();
+        let result = result.and_then(|()| {
+            let escaping = if let Some(handler) = &module.handler {
+                self.check_handler_flow(handler, incoming)?
             } else {
-                Ok(())
-            }
+                incoming
+            };
+            self.record_exceptions(escaping);
+            Ok(())
         });
         if has_module_label {
             self.labels.pop();
@@ -388,24 +417,38 @@ impl Checker {
         handler: Option<&Handler>,
     ) -> Result<(), Error> {
         self.scopes.push(Scope::default());
+        self.push_exception_set();
         let result = (|| {
             self.collect_declarations(declarations)?;
             reject_nested_procs(declarations)?;
             self.check_initializers(declarations)?;
             self.check_proc_bodies(declarations)?;
             self.seed_reach_exports_at(span);
-            self.check_actions(actions)?;
-            if let Some(handler) = handler {
-                self.check_handler(handler)?;
-            }
-            Ok(())
+            self.check_actions(actions)
         })();
+        let incoming = self.take_exception_set();
+        let result = result.and_then(|()| {
+            let escaping = if let Some(handler) = handler {
+                self.check_handler_flow(handler, incoming)?
+            } else {
+                incoming
+            };
+            self.record_exceptions(escaping);
+            Ok(())
+        });
         self.scopes.pop();
         result
     }
 
-    fn check_handler(&mut self, handler: &Handler) -> Result<(), Error> {
+    /// Check a handler and return the exceptions that may escape it, given the
+    /// exceptions possible in the action it is appended to.
+    fn check_handler_flow(
+        &mut self,
+        handler: &Handler,
+        incoming: HashSet<String>,
+    ) -> Result<HashSet<String>, Error> {
         let mut names = HashSet::new();
+        let mut caught = HashSet::new();
         for alternative in &handler.alternatives {
             for exception in &alternative.exceptions {
                 if !names.insert(exception.clone()) {
@@ -414,13 +457,30 @@ impl Checker {
                         format!("duplicate exception name `{exception}` in handler"),
                     ));
                 }
+                caught.insert(exception.clone());
             }
-            self.check_actions(&alternative.actions)?;
         }
-        if let Some(actions) = &handler.else_actions {
-            self.check_actions(actions)?;
-        }
-        Ok(())
+
+        let mut escaping = if handler.else_actions.is_some() {
+            HashSet::new()
+        } else {
+            incoming.difference(&caught).cloned().collect()
+        };
+
+        self.push_exception_set();
+        let result = (|| {
+            for alternative in &handler.alternatives {
+                self.check_actions(&alternative.actions)?;
+            }
+            if let Some(actions) = &handler.else_actions {
+                self.check_actions(actions)?;
+            }
+            Ok(())
+        })();
+        let from_handler = self.take_exception_set();
+        result?;
+        escaping.extend(from_handler);
+        Ok(escaping)
     }
 
     fn check_nested_module(&mut self, module: &Module) -> Result<(), Error> {
@@ -442,6 +502,7 @@ impl Checker {
         self.scopes.push(Scope::default());
         self.module_floor = self.scopes.len() - 1;
 
+        self.push_exception_set();
         let result = (|| {
             self.preload_module_modes(module)?;
             self.apply_nested_seizes(&module.declarations, &parent)?;
@@ -454,18 +515,22 @@ impl Checker {
             if let Some(name) = &module.name {
                 self.labels.push(name.clone());
             }
-            let result = self.check_actions(&module.actions).and_then(|()| {
-                if let Some(handler) = &module.handler {
-                    self.check_handler(handler)
-                } else {
-                    Ok(())
-                }
-            });
+            let result = self.check_actions(&module.actions);
             if has_label {
                 self.labels.pop();
             }
             result
         })();
+        let incoming = self.take_exception_set();
+        let result = result.and_then(|()| {
+            let escaping = if let Some(handler) = &module.handler {
+                self.check_handler_flow(handler, incoming)?
+            } else {
+                incoming
+            };
+            self.record_exceptions(escaping);
+            Ok(())
+        });
 
         self.scopes.pop();
         self.module_floor = previous_floor;
@@ -547,8 +612,12 @@ impl Checker {
                             ));
                         }
                         current_names.insert(signature.name.clone());
-                        let declared =
-                            self.signature_from_params(&signature.params, &signature.result)?;
+                        let declared = self.signature_from_params(
+                            &signature.params,
+                            &signature.result,
+                            &signature.exceptions,
+                            signature.span,
+                        )?;
                         let parent_sig = parent.procs.get(&signature.name).cloned().or_else(|| {
                             parent.exports.get(&signature.name).and_then(|exports| {
                                 match exports.as_slice() {
@@ -890,13 +959,21 @@ impl Checker {
                     }
                 }
                 Declaration::Proc(proc_def) => {
-                    let signature =
-                        self.signature_from_params(&proc_def.params, &proc_def.result)?;
+                    let signature = self.signature_from_params(
+                        &proc_def.params,
+                        &proc_def.result,
+                        &proc_def.exceptions,
+                        proc_def.span,
+                    )?;
                     self.declare_proc(&proc_def.name, signature, proc_def.span)?;
                 }
                 Declaration::ProcSignature(signature) => {
-                    let proc_sig =
-                        self.signature_from_params(&signature.params, &signature.result)?;
+                    let proc_sig = self.signature_from_params(
+                        &signature.params,
+                        &signature.result,
+                        &signature.exceptions,
+                        signature.span,
+                    )?;
                     self.declare_proc(&signature.name, proc_sig, signature.span)?;
                 }
                 Declaration::Mode(_) => {}
@@ -962,37 +1039,62 @@ impl Checker {
 
     fn check_proc_body(&mut self, proc_def: &ProcDef) -> Result<(), Error> {
         let mut seen = HashSet::new();
-        for param in &proc_def.params {
-            if !seen.insert(param.name.as_str()) {
-                return Err(Error::new(
-                    param.span,
-                    format!("duplicate parameter `{}`", param.name),
-                ));
+        let setup = (|| {
+            for param in &proc_def.params {
+                if !seen.insert(param.name.as_str()) {
+                    return Err(Error::new(
+                        param.span,
+                        format!("duplicate parameter `{}`", param.name),
+                    ));
+                }
+                let ty = self.resolve_mode(&param.mode)?;
+                self.declare_var(&param.name, ty, param.span)?;
             }
-            let ty = self.resolve_mode(&param.mode)?;
-            self.declare_var(&param.name, ty, param.span)?;
-        }
 
-        self.collect_declarations(&proc_def.declarations)?;
-        reject_nested_procs(&proc_def.declarations)?;
-        self.check_initializers(&proc_def.declarations)?;
-        self.check_proc_bodies(&proc_def.declarations)?;
+            self.collect_declarations(&proc_def.declarations)?;
+            reject_nested_procs(&proc_def.declarations)?;
+            self.check_initializers(&proc_def.declarations)?;
+            self.check_proc_bodies(&proc_def.declarations)?;
 
-        let result_type = match &proc_def.result {
-            Some(mode) => Some(self.resolve_mode(mode)?),
-            None => None,
-        };
+            match &proc_def.result {
+                Some(mode) => self.resolve_mode(mode).map(Some),
+                None => Ok(None),
+            }
+        })();
 
+        let result_type = setup?;
+
+        self.push_exception_set();
         self.results.push(result_type);
-        let result = self.check_actions(&proc_def.actions).and_then(|()| {
+        let body = self.check_actions(&proc_def.actions);
+        let incoming = self.take_exception_set();
+        let escaped = body.and_then(|()| {
             if let Some(handler) = &proc_def.handler {
-                self.check_handler(handler)
+                self.check_handler_flow(handler, incoming)
             } else {
-                Ok(())
+                Ok(incoming)
             }
         });
         self.results.pop();
-        result
+
+        let escaped = escaped?;
+        let declared: HashSet<&str> = proc_def.exceptions.iter().map(String::as_str).collect();
+        let mut unlisted: Vec<&String> = escaped
+            .iter()
+            .filter(|exception| !declared.contains(exception.as_str()))
+            .collect();
+        unlisted.sort();
+        if let Some(exception) = unlisted.first() {
+            return Err(Error::coded(
+                "E0410",
+                proc_def.span,
+                format!(
+                    "exception `{exception}` may escape procedure `{}` but is not listed in EXCEPTIONS",
+                    proc_def.name
+                ),
+            ));
+        }
+        Ok(())
     }
 
     fn declare_var(&mut self, name: &str, ty: Type, span: Span) -> Result<(), Error> {
@@ -1042,6 +1144,8 @@ impl Checker {
         &self,
         params: &[Param],
         result: &Option<ModeRef>,
+        exceptions: &[String],
+        span: Span,
     ) -> Result<ProcType, Error> {
         let mut param_types = Vec::with_capacity(params.len());
         let mut seen = HashSet::new();
@@ -1058,9 +1162,19 @@ impl Checker {
             Some(mode) => Some(self.resolve_mode(mode)?),
             None => None,
         };
+        let mut exception_names = HashSet::new();
+        for exception in exceptions {
+            if !exception_names.insert(exception.as_str()) {
+                return Err(Error::new(
+                    span,
+                    format!("duplicate exception name `{exception}` in EXCEPTIONS list"),
+                ));
+            }
+        }
         Ok(ProcType {
             params: param_types,
             result,
+            exceptions: Some(exceptions.to_vec()),
         })
     }
 
@@ -1195,6 +1309,7 @@ impl Checker {
                 self.check_constant_range(value, target_ty)
             }
             Action::Assert { condition, .. } => {
+                self.record_exception("ASSERTFAIL");
                 let ty = self.check_expr(condition)?;
                 if ty != Type::Bool {
                     return Err(Error::new(
@@ -1374,12 +1489,20 @@ impl Checker {
                 {
                     self.check_begin(declarations, actions, *span, Some(handler))
                 } else {
-                    self.check_action(action)?;
-                    self.check_handler(handler)
+                    self.push_exception_set();
+                    let inner = self.check_action(action);
+                    let incoming = self.take_exception_set();
+                    inner?;
+                    let escaping = self.check_handler_flow(handler, incoming)?;
+                    self.record_exceptions(escaping);
+                    Ok(())
                 }
             }
             Action::Empty { .. } => Ok(()),
-            Action::Cause { .. } => Ok(()),
+            Action::Cause { name, .. } => {
+                self.record_exception(name);
+                Ok(())
+            }
             Action::Module(module) => self.check_nested_module(module),
         }
     }
@@ -1893,6 +2016,9 @@ impl Checker {
             return Err(Error::new(span, format!("unknown name `{name}`")));
         };
         self.resolutions.insert(span, ApplyResolution::Procedure);
+        if let Some(exceptions) = &signature.exceptions {
+            self.record_exceptions(exceptions.iter().cloned());
+        }
 
         if signature.params.len() != args.len() {
             return Err(Error::new(
@@ -2969,6 +3095,134 @@ END M;
         )
         .unwrap_err();
         assert!(error.message.contains("CHARS"), "{}", error.message);
+    }
+
+    #[test]
+    fn unhandled_cause_must_be_listed_in_proc_exceptions() {
+        let error = check_source(
+            r#"
+M: MODULE
+  P: PROC ();
+    CAUSE fail;
+  END P;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "E0410");
+        assert!(error.message.contains("`fail`"), "{}", error.message);
+        assert!(error.message.contains("EXCEPTIONS"), "{}", error.message);
+    }
+
+    #[test]
+    fn proc_exception_list_allows_cause() {
+        check_source(
+            r#"
+M: MODULE
+  P: PROC () EXCEPTIONS (fail);
+    CAUSE fail;
+  END P;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn proc_handler_catches_cause_without_an_exception_list() {
+        check_source(
+            r#"
+M: MODULE
+  P: PROC ();
+    CAUSE fail;
+  END
+  ON (fail):
+    ;
+  END P;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn called_procedure_exceptions_flow_to_the_caller() {
+        let error = check_source(
+            r#"
+M: MODULE
+  P: PROC () EXCEPTIONS (boom);
+    CAUSE boom;
+  END P;
+  Q: PROC ();
+    P();
+  END Q;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "E0410");
+        assert!(error.message.contains("`boom`"), "{}", error.message);
+        assert!(error.message.contains("`Q`"), "{}", error.message);
+
+        check_source(
+            r#"
+M: MODULE
+  P: PROC () EXCEPTIONS (boom);
+    CAUSE boom;
+  END P;
+  Q: PROC () EXCEPTIONS (boom);
+    P();
+  END Q;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn assert_requires_assertfail_in_proc_exceptions() {
+        let error = check_source(
+            r#"
+M: MODULE
+  P: PROC ();
+    ASSERT TRUE;
+  END P;
+END M;
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "E0410");
+        assert!(error.message.contains("ASSERTFAIL"), "{}", error.message);
+
+        check_source(
+            r#"
+M: MODULE
+  P: PROC () EXCEPTIONS (ASSERTFAIL);
+    ASSERT TRUE;
+  END P;
+END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn action_handler_catches_exception_inside_a_proc() {
+        check_source(
+            r#"
+M: MODULE
+  P: PROC ();
+    BEGIN
+      CAUSE fail;
+    END
+    ON (fail):
+      ;
+    END;
+  END P;
+END M;
+"#,
+        )
+        .unwrap();
     }
 
     #[test]

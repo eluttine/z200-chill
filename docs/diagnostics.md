@@ -64,6 +64,7 @@ multi-file diagnostics do not depend on the entry file.
 | `E0407` | `CASE` / `DO FOR` / `EXIT` / loop-counter restriction |
 | `E0408` | `RETURN` / `RESULT` misuse |
 | `E0409` | unimplemented feature |
+| `E0410` | exception-flow violation |
 
 ### Interpreter
 

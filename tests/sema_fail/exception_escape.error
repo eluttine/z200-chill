@@ -1,0 +1,1 @@
+exception `fail` may escape procedure `P`

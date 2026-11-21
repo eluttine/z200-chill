@@ -90,7 +90,10 @@ all existing tests pass with no new special cases.
 - [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
 - [x] Action-level handlers, including handlers on bracketed actions, assignment,
       assert, and call actions.
-- [ ] Exception-set flow checking (`EXCEPTIONS` lists are parsed but not enforced).
+- [x] Exception-set flow checking for `CAUSE`, `ASSERT`, and called procedures;
+      `EXCEPTIONS` lists are enforced and compared across spec/body signatures.
+      Implicit runtime checks such as `OVERFLOW`, range, and text failures are not
+      statically inferred yet.
 - [x] Implementation-defined text I/O (`WRITE`, `WRITELINE`, `READLINE`).
 - [x] `READTEXT`/`WRITETEXT` for `CHARS` locations with literal format text.
 - [ ] Text modes, associations, format conversion/editing codes, and io lists.

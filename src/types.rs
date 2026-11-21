@@ -60,6 +60,9 @@ pub enum Type {
 pub struct ProcType {
     pub params: Vec<Type>,
     pub result: Option<Type>,
+    /// Exceptions that may escape to the caller. `None` means the set is not
+    /// statically known (for example an interface loaded from a grant file).
+    pub exceptions: Option<Vec<String>>,
 }
 
 impl Type {

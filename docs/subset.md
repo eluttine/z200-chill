@@ -85,6 +85,8 @@ Implemented in `z200c`:
   package-qualified module identity for `run`;
 - action-level handlers on bracketed actions, assignment, assert, and call actions,
   including handlers that see `BEGIN` block declarations;
+- static exception-set flow checking for `CAUSE`, `ASSERT`, and procedure calls, with
+  `EXCEPTIONS` lists enforced and matched between spec and body signatures;
 - source-map diagnostics with stable codes, multi-error checker reporting, a parser
   nesting limit, and fixture-based parser/sema/run tests;
 - a tree-walking interpreter, so `z200c run examples/hello` executes the example and
@@ -95,7 +97,6 @@ Not implemented yet (rejected or deferred with a diagnostic):
 - interface-only external dependencies for `run`;
 - multiple `CASE` selectors and non-integer `CASE` labels;
 - `OUT` / `INOUT` / `LOC` parameter passing;
-- exception-set flow checking (`EXCEPTIONS` lists are parsed but not enforced);
 - standard `READTEXT`/`WRITETEXT` and associations (z200c instead provides the
   implementation-defined `WRITE`, `WRITELINE`, and `READLINE` below);
 - region concurrency/mutual exclusion;
@@ -376,8 +377,15 @@ END;
 - Unhandled exceptions terminate the program with `E0509`.
 - A handler appended to a `BEGIN` block runs in that block's reach and can see its
   declarations. Handlers on other action statements run in the enclosing reach.
-- Static exception-set flow checking is not implemented yet; `EXCEPTIONS` lists are
-  parsed but not enforced.
+- Exception-set flow checking tracks explicit `CAUSE` names, `ASSERTFAIL` from
+  `ASSERT`, and the declared exception sets of called procedures. A handler removes
+  the exceptions it catches (or all exceptions with `ELSE`); exceptions raised by
+  handler actions still escape. A procedure with an `EXCEPTIONS` list may only let
+  those exceptions escape; an absent list means an empty set. Spec and body procedure
+  signatures must declare the same exception list.
+- Implicit runtime checks (`OVERFLOW`, range failures, array bounds, text failures)
+  are not inferred into the static exception set yet. Procedures loaded from grant
+  files have an unknown exception set and do not contribute to the caller's set.
 
 ---
 

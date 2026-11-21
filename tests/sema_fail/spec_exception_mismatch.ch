@@ -1,0 +1,9 @@
+M: SPEC MODULE
+  P: PROC () EXCEPTIONS (boom) END;
+END M;
+
+M: MODULE
+  P: PROC () EXCEPTIONS (other);
+    ;
+  END P;
+END M;
