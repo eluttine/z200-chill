@@ -71,6 +71,16 @@ expression and statement nodes (`ir::Expr`, `ir::Stmt`) that the interpreter con
 This removes expression-level re-inference and AST action traversal from the interpreter.
 See [ir.md](ir.md).
 
+## 10.11 Piecewise compilation (design)
+
+Remote pieces, piece designators, nested spec modules, and regions are a separate
+"piecewise compilation" milestone. Z.200 leaves designator-to-text mapping
+implementation-defined, so the manifest will carry a `[pieces]` text-reference table and
+literal designators resolve package-relative. The proposed architecture is an expansion
+pass that resolves `REMOTE` before semantic analysis, retaining piece provenance for
+diagnostics; regions are a prerequisite for remote regions and spec regions. See
+[piecewise.md](piecewise.md).
+
 ## 10.9 Code generation (open)
 
 A native or C code-generation backend remains future work; the typed IR is the intended

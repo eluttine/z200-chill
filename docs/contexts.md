@@ -202,6 +202,12 @@ do not allocate or initialize anything.
 - A remote context supplies a context list and is merged by the context-body insertion
   rule.
 
+## Piecewise compilation
+
+Remote contexts, remote modulions/specs, and nested spec modules/regions belong to the
+piecewise-compilation milestone. See [piecewise.md](piecewise.md) for the normative
+model, expansion architecture, manifest `[pieces]` lookup, and phased plan.
+
 ## Non-goals
 
 - Contexts as runtime objects or storage.

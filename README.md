@@ -34,4 +34,4 @@ z200-chill/
 │   ├── liblocal/       # Dependency package used by `app`
 │   └── app/            # Directory-dependency linking example
 └── docs/               # subset.md, manifest.md, grant-file.md, diagnostics.md, ir.md,
-                        # contexts.md, decisions.md
+                        # contexts.md, piecewise.md, decisions.md
