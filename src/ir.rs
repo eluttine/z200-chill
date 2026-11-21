@@ -169,6 +169,7 @@ pub enum Stmt {
     If {
         branches: Vec<BranchIr>,
         else_actions: Option<Vec<Stmt>>,
+        else_span: Option<Span>,
         span: Span,
     },
     Do {
@@ -184,6 +185,7 @@ pub enum Stmt {
         selector: Node,
         alternatives: Vec<CaseAlternativeIr>,
         else_actions: Option<Vec<Stmt>>,
+        else_span: Option<Span>,
         span: Span,
     },
     Labelled {
@@ -215,6 +217,7 @@ pub enum Stmt {
 pub struct BranchIr {
     pub condition: Node,
     pub body: Vec<Stmt>,
+    pub span: Span,
 }
 
 #[derive(Debug)]
@@ -416,6 +419,7 @@ impl Lowerer<'_> {
             Action::If {
                 branches,
                 else_actions,
+                else_span,
                 span,
             } => {
                 let mut lowered_branches = Vec::with_capacity(branches.len());
@@ -423,6 +427,7 @@ impl Lowerer<'_> {
                     lowered_branches.push(BranchIr {
                         condition: self.lower_expr(&branch.condition)?,
                         body: self.lower_actions(&branch.body)?,
+                        span: branch.span,
                     });
                 }
                 let else_actions = match else_actions {
@@ -432,6 +437,7 @@ impl Lowerer<'_> {
                 Ok(Stmt::If {
                     branches: lowered_branches,
                     else_actions,
+                    else_span: *else_span,
                     span: *span,
                 })
             }
@@ -475,6 +481,7 @@ impl Lowerer<'_> {
                 selector,
                 alternatives,
                 else_actions,
+                else_span,
                 span,
             } => {
                 let selector = self.lower_expr(selector)?;
@@ -494,6 +501,7 @@ impl Lowerer<'_> {
                     selector,
                     alternatives: lowered_alternatives,
                     else_actions,
+                    else_span: *else_span,
                     span: *span,
                 })
             }

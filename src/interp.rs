@@ -836,16 +836,17 @@ impl<'a> Interpreter<'a> {
                 ir::Stmt::If {
                     branches,
                     else_actions,
+                    else_span,
                     ..
                 } => {
                     for branch in branches {
                         let condition = self.eval_ir(&branch.condition)?;
                         if self.as_bool(condition, branch.condition.span())? {
-                            return self.exec_block(&branch.body, frame);
+                            return self.exec_block(&branch.body, branch.span, frame);
                         }
                     }
-                    if let Some(actions) = else_actions {
-                        return self.exec_block(actions, frame);
+                    if let (Some(actions), Some(span)) = (else_actions, else_span) {
+                        return self.exec_block(actions, *span, frame);
                     }
                 }
                 ir::Stmt::Do {
@@ -858,6 +859,7 @@ impl<'a> Interpreter<'a> {
                     selector,
                     alternatives,
                     else_actions,
+                    else_span,
                     ..
                 } => {
                     let selector_value = self.eval_ir(selector)?;
@@ -877,12 +879,12 @@ impl<'a> Interpreter<'a> {
                             other => explicit_label_matches(*other, value),
                         });
                         if matches {
-                            return self.exec_block(&alternative.body, frame);
+                            return self.exec_block(&alternative.body, alternative.span, frame);
                         }
                     }
 
-                    if let Some(actions) = else_actions {
-                        return self.exec_block(actions, frame);
+                    if let (Some(actions), Some(span)) = (else_actions, else_span) {
+                        return self.exec_block(actions, *span, frame);
                     }
                 }
                 ir::Stmt::Labelled { label, action, .. } => {
@@ -894,7 +896,7 @@ impl<'a> Interpreter<'a> {
                 ir::Stmt::Begin {
                     declarations,
                     actions,
-                    ..
+                    span,
                 } => {
                     self.locals.push(Scope::default());
                     let result = (|| {
@@ -903,6 +905,7 @@ impl<'a> Interpreter<'a> {
                         let mut scope = self.locals.pop().expect("begin scope");
                         let mode_names = self.module_modes[self.active_module].clone();
                         self.hoist_ir_children(actions, &mut scope, &mode_names)?;
+                        self.seed_reach_exports(*span, &mut scope);
                         self.locals.push(scope);
                         self.exec_stmts(actions, frame)
                     })();
@@ -929,10 +932,16 @@ impl<'a> Interpreter<'a> {
         Ok(Flow::Normal)
     }
 
-    fn exec_block(&mut self, stmts: &[ir::Stmt], frame: &mut Frame) -> Result<Flow, Error> {
+    fn exec_block(
+        &mut self,
+        stmts: &[ir::Stmt],
+        span: Span,
+        frame: &mut Frame,
+    ) -> Result<Flow, Error> {
         let mut scope = Scope::default();
         let mode_names = self.module_modes[self.active_module].clone();
         self.hoist_ir_children(stmts, &mut scope, &mode_names)?;
+        self.seed_reach_exports(span, &mut scope);
         self.locals.push(scope);
         let result = self.exec_stmts(stmts, frame);
         self.locals.pop();
@@ -1394,7 +1403,7 @@ impl<'a> Interpreter<'a> {
         span: Span,
     ) -> Result<Flow, Error> {
         match control {
-            ir::DoControlIr::None => match self.exec_block(body, frame)? {
+            ir::DoControlIr::None => match self.exec_block(body, span, frame)? {
                 Flow::Exit(None) => Ok(Flow::Normal),
                 flow => Ok(flow),
             },
@@ -1404,7 +1413,7 @@ impl<'a> Interpreter<'a> {
                     if !self.as_bool(value, condition.span())? {
                         break;
                     }
-                    match self.exec_block(body, frame)? {
+                    match self.exec_block(body, span, frame)? {
                         Flow::Normal => {}
                         Flow::Exit(None) => break,
                         flow => return Ok(flow),
@@ -1414,7 +1423,7 @@ impl<'a> Interpreter<'a> {
             }
             ir::DoControlIr::ForEver => {
                 loop {
-                    match self.exec_block(body, frame)? {
+                    match self.exec_block(body, span, frame)? {
                         Flow::Normal => {}
                         Flow::Exit(None) => break,
                         flow => return Ok(flow),
@@ -1480,6 +1489,7 @@ impl<'a> Interpreter<'a> {
                         let mut scope = self.locals.pop().expect("loop counter scope");
                         let mode_names = self.module_modes[self.active_module].clone();
                         self.hoist_ir_children(body, &mut scope, &mode_names)?;
+                        self.seed_reach_exports(span, &mut scope);
                         self.locals.push(scope);
                     }
 

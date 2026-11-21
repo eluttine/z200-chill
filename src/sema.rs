@@ -352,7 +352,11 @@ impl Checker {
     }
 
     fn seed_reach_exports(&mut self, module: &Module) {
-        let Some(node) = self.reaches.get(module.span) else {
+        self.seed_reach_exports_at(module.span);
+    }
+
+    fn seed_reach_exports_at(&mut self, span: Span) {
+        let Some(node) = self.reaches.get(span) else {
             return;
         };
         let exports = node.exports.clone();
@@ -605,25 +609,6 @@ impl Checker {
                 ));
             }
             mode.forbidden.insert(field);
-        }
-        Ok(())
-    }
-
-    fn preload_child_grants(&mut self, actions: &[Action]) -> Result<(), Error> {
-        let mut base_modes = self.module_modes[self.current_module].clone();
-        for scope in &self.scopes[self.module_floor..] {
-            for (name, ty) in &scope.modes {
-                base_modes.insert(name.clone(), *ty);
-            }
-        }
-        for action in actions {
-            let Action::Module(child) = action else {
-                continue;
-            };
-            for (name, export) in self.collect_module_grants(child, &base_modes)? {
-                let scope = self.scopes.last_mut().expect("scope stack is never empty");
-                scope.exports.entry(name).or_default().push(export);
-            }
         }
         Ok(())
     }
@@ -1304,12 +1289,10 @@ impl Checker {
         None
     }
 
-    fn check_block(&mut self, actions: &[Action]) -> Result<(), Error> {
+    fn check_block(&mut self, actions: &[Action], span: Span) -> Result<(), Error> {
         self.scopes.push(Scope::default());
-        let result = (|| {
-            self.preload_child_grants(actions)?;
-            self.check_actions(actions)
-        })();
+        self.seed_reach_exports_at(span);
+        let result = self.check_actions(actions);
         self.scopes.pop();
         result
     }
@@ -1373,6 +1356,7 @@ impl Checker {
             Action::If {
                 branches,
                 else_actions,
+                else_span,
                 ..
             } => {
                 for branch in branches {
@@ -1383,10 +1367,10 @@ impl Checker {
                             format!("IF condition must be BOOL, found {}", ty.describe()),
                         ));
                     }
-                    self.check_block(&branch.body)?;
+                    self.check_block(&branch.body, branch.span)?;
                 }
-                if let Some(actions) = else_actions {
-                    self.check_block(actions)?;
+                if let (Some(actions), Some(span)) = (else_actions, else_span) {
+                    self.check_block(actions, *span)?;
                 }
                 Ok(())
             }
@@ -1447,14 +1431,14 @@ impl Checker {
                                 .expect("scope stack is never empty")
                                 .readonly
                                 .insert(counter.clone());
-                            self.preload_child_grants(body)?;
+                            self.seed_reach_exports_at(*span);
                             self.check_actions(body)
                         })();
                         self.scopes.pop();
                         return result;
                     }
                 }
-                self.check_block(body)
+                self.check_block(body, *span)
             }
             Action::Exit {
                 label: Some(name),
@@ -1470,6 +1454,7 @@ impl Checker {
                 selector,
                 alternatives,
                 else_actions,
+                else_span,
                 ..
             } => {
                 let selector_ty = self.check_expr(selector)?;
@@ -1493,11 +1478,11 @@ impl Checker {
                             CaseLabel::Else | CaseLabel::Any => {}
                         }
                     }
-                    self.check_block(&alternative.body)?;
+                    self.check_block(&alternative.body, alternative.span)?;
                 }
 
-                if let Some(actions) = else_actions {
-                    self.check_block(actions)?;
+                if let (Some(actions), Some(span)) = (else_actions, else_span) {
+                    self.check_block(actions, *span)?;
                 }
                 Ok(())
             }
@@ -1516,7 +1501,7 @@ impl Checker {
             Action::Begin {
                 declarations,
                 actions,
-                ..
+                span,
             } => {
                 self.scopes.push(Scope::default());
                 let result = (|| {
@@ -1524,7 +1509,7 @@ impl Checker {
                     reject_nested_procs(declarations)?;
                     self.check_initializers(declarations)?;
                     self.check_proc_bodies(declarations)?;
-                    self.preload_child_grants(actions)?;
+                    self.seed_reach_exports_at(*span);
                     self.check_actions(actions)
                 })();
                 self.scopes.pop();

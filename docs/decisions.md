@@ -83,8 +83,10 @@ from a module body, and the module-reach export metadata (owner, kind, prefix/fr
 The interpreter's module-body hoisting follows that plan, and both the checker and
 interpreter seed module-scope exports from the tree instead of recomputing module-body
 grants. Top-level child-export collection for `GRANT` re-exports now also reads the tree.
-Block reaches (`BEGIN`/`IF`/`DO`/`CASE`) still use dynamic per-layer preloading; that is
-the remaining reach-tree stage.
+Block reaches (`BEGIN`/`IF`/`DO`/`CASE`) are tree nodes keyed by block/branch/
+alternative spans; checker and interpreter block scopes are seeded from them instead of
+rescanning child modules. Only checker grant validation still recomputes grant sets for
+diagnostics/`FORBID`.
 
 ## 10.14 Text I/O (implementation-defined, resolved for now)
 

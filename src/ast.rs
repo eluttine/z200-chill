@@ -277,6 +277,7 @@ pub enum Action {
     If {
         branches: Vec<Branch>,
         else_actions: Option<Vec<Action>>,
+        else_span: Option<Span>,
         span: Span,
     },
     Do {
@@ -292,6 +293,7 @@ pub enum Action {
         selector: Expr,
         alternatives: Vec<CaseAlternative>,
         else_actions: Option<Vec<Action>>,
+        else_span: Option<Span>,
         span: Span,
     },
     Labelled {
@@ -319,6 +321,7 @@ pub enum Action {
 pub struct Branch {
     pub condition: Expr,
     pub body: Vec<Action>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

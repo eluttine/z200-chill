@@ -21,8 +21,10 @@ land as a small, green change.
       used to seed checker and interpreter module scopes.
 - [x] Top-level `GRANT` child-export collection now uses the tree; removed the separate
       `collect_child_grants`/`collect_module_exports` path.
-- [ ] Remaining: block-level reach exports (`BEGIN`/`IF`/`DO`/`CASE`) still use dynamic
-      preloading, and checker grant validation still recomputes some grant sets.
+- [x] Block-level reach exports (`BEGIN`/`IF`/`DO`/`CASE`) are tree nodes keyed by
+      block/branch/alternative spans and seed both checker and interpreter scopes.
+- [ ] Remaining: checker grant validation still recomputes some grant sets for
+      diagnostics/`FORBID`; this can eventually validate against the tree.
 
 Acceptance for completion: no duplicate reach-matching or reach-building logic remains;
 all existing tests pass with no new special cases.

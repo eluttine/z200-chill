@@ -849,6 +849,37 @@ fn collect_child_exports(
     Ok(exports)
 }
 
+fn add_block_reach(span: Span, parent: usize, tree: &mut ReachTree) -> usize {
+    let id = tree.nodes.len();
+    tree.by_span.insert(span, id);
+    tree.nodes.push(ReachNode {
+        span,
+        parent: Some(parent),
+        children: Vec::new(),
+        hoisted: false,
+        interface: ModuleInterface::default(),
+        exports: HashMap::new(),
+    });
+    tree.nodes[parent].children.push(id);
+    id
+}
+
+fn collect_block_exports(
+    actions: &[Action],
+    span_modes: &HashMap<Span, HashMap<String, Type>>,
+) -> Result<HashMap<String, Vec<ReachExport>>, Error> {
+    let mut exports: HashMap<String, Vec<ReachExport>> = HashMap::new();
+    for action in actions {
+        let Action::Module(child) = action else {
+            continue;
+        };
+        for (name, entries) in collect_reach_exports(child, span_modes)? {
+            exports.entry(name).or_default().extend(entries);
+        }
+    }
+    Ok(exports)
+}
+
 fn collect_reach_exports(
     module: &Module,
     span_modes: &HashMap<Span, HashMap<String, Type>>,
@@ -1002,37 +1033,53 @@ fn add_nested_reaches(
             Action::If {
                 branches,
                 else_actions,
+                else_span,
                 ..
             } => {
                 for branch in branches {
-                    add_nested_reaches(&branch.body, parent, true, tree, span_modes)?;
+                    let id = add_block_reach(branch.span, parent, tree);
+                    add_nested_reaches(&branch.body, id, true, tree, span_modes)?;
+                    tree.nodes[id].exports = collect_block_exports(&branch.body, span_modes)?;
                 }
-                if let Some(actions) = else_actions {
-                    add_nested_reaches(actions, parent, true, tree, span_modes)?;
+                if let (Some(actions), Some(span)) = (else_actions, else_span) {
+                    let id = add_block_reach(*span, parent, tree);
+                    add_nested_reaches(actions, id, true, tree, span_modes)?;
+                    tree.nodes[id].exports = collect_block_exports(actions, span_modes)?;
                 }
             }
-            Action::Do { body, .. } => add_nested_reaches(body, parent, true, tree, span_modes)?,
+            Action::Do { body, span, .. } => {
+                let id = add_block_reach(*span, parent, tree);
+                add_nested_reaches(body, id, true, tree, span_modes)?;
+                tree.nodes[id].exports = collect_block_exports(body, span_modes)?;
+            }
             Action::Case {
                 alternatives,
                 else_actions,
+                else_span,
                 ..
             } => {
                 for alternative in alternatives {
-                    add_nested_reaches(&alternative.body, parent, true, tree, span_modes)?;
+                    let id = add_block_reach(alternative.span, parent, tree);
+                    add_nested_reaches(&alternative.body, id, true, tree, span_modes)?;
+                    tree.nodes[id].exports = collect_block_exports(&alternative.body, span_modes)?;
                 }
-                if let Some(actions) = else_actions {
-                    add_nested_reaches(actions, parent, true, tree, span_modes)?;
+                if let (Some(actions), Some(span)) = (else_actions, else_span) {
+                    let id = add_block_reach(*span, parent, tree);
+                    add_nested_reaches(actions, id, true, tree, span_modes)?;
+                    tree.nodes[id].exports = collect_block_exports(actions, span_modes)?;
                 }
             }
             Action::Labelled { action, .. } => add_nested_reaches(
                 std::slice::from_ref(action.as_ref()),
                 parent,
-                true,
+                in_block,
                 tree,
                 span_modes,
             )?,
-            Action::Begin { actions, .. } => {
-                add_nested_reaches(actions, parent, true, tree, span_modes)?
+            Action::Begin { actions, span, .. } => {
+                let id = add_block_reach(*span, parent, tree);
+                add_nested_reaches(actions, id, true, tree, span_modes)?;
+                tree.nodes[id].exports = collect_block_exports(actions, span_modes)?;
             }
             _ => {}
         }

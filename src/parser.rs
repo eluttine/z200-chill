@@ -69,6 +69,14 @@ pub fn parse_context_piece(tokens: &[Token]) -> Result<Vec<Context>, Error> {
     Ok(contexts)
 }
 
+fn body_span(source: SourceId, start: Span, body: &[Action]) -> Span {
+    let end = body
+        .last()
+        .map(|action| action.span().end)
+        .unwrap_or(start.end);
+    Span::new(source, start.start, end)
+}
+
 struct Parser<'a> {
     tokens: &'a [Token],
     index: usize,
@@ -1131,21 +1139,35 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Keyword::If)?;
 
         let condition = self.parse_expr()?;
+        let branch_start = condition.span();
         self.expect_keyword(Keyword::Then)?;
         let body = self.parse_actions_until(&[Keyword::Elsif, Keyword::Else, Keyword::Fi])?;
-        let mut branches = vec![Branch { condition, body }];
+        let mut branches = vec![Branch {
+            condition,
+            span: body_span(self.source, branch_start, &body),
+            body,
+        }];
 
         while self.at_keyword(Keyword::Elsif) {
             self.advance();
             let condition = self.parse_expr()?;
+            let branch_start = condition.span();
             self.expect_keyword(Keyword::Then)?;
             let body = self.parse_actions_until(&[Keyword::Elsif, Keyword::Else, Keyword::Fi])?;
-            branches.push(Branch { condition, body });
+            branches.push(Branch {
+                condition,
+                span: body_span(self.source, branch_start, &body),
+                body,
+            });
         }
 
+        let mut else_span = None;
         let else_actions = if self.at_keyword(Keyword::Else) {
+            let start = self.current_span();
             self.advance();
-            Some(self.parse_actions_until(&[Keyword::Fi])?)
+            let actions = self.parse_actions_until(&[Keyword::Fi])?;
+            else_span = Some(body_span(self.source, start, &actions));
+            Some(actions)
         } else {
             None
         };
@@ -1155,6 +1177,7 @@ impl<'a> Parser<'a> {
         Ok(Action::If {
             branches,
             else_actions,
+            else_span,
             span: Span::new(self.source, start.start, end.end),
         })
     }
@@ -1189,9 +1212,13 @@ impl<'a> Parser<'a> {
             });
         }
 
+        let mut else_span = None;
         let else_actions = if self.at_keyword(Keyword::Else) {
+            let start = self.current_span();
             self.advance();
-            Some(self.parse_actions_until(&[Keyword::Esac])?)
+            let actions = self.parse_actions_until(&[Keyword::Esac])?;
+            else_span = Some(body_span(self.source, start, &actions));
+            Some(actions)
         } else {
             None
         };
@@ -1211,6 +1238,7 @@ impl<'a> Parser<'a> {
             selector,
             alternatives,
             else_actions,
+            else_span,
             span: Span::new(self.source, start.start, end.end),
         })
     }
