@@ -4,7 +4,7 @@ use crate::program::{self, ExportInfo, ExportInfoKind};
 use crate::types::{self, Type};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA: u32 = 3;
+pub const SCHEMA: u32 = 4;
 
 /// A compiled interface artifact for a package. It records the names the
 /// package exports so another compilation unit can later resolve `SEIZE`.
@@ -16,7 +16,6 @@ pub const SCHEMA: u32 = 3;
 pub struct GrantFile {
     pub schema: u32,
     pub package: String,
-    pub edition: String,
     /// Optional absolute path to the source package. `run` uses it to link
     /// grant-file dependencies when the source is available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -162,7 +161,6 @@ impl GrantFile {
         Ok(Self {
             schema: SCHEMA,
             package: manifest.package.name.clone(),
-            edition: manifest.package.edition.as_str().to_owned(),
             package_dir: None,
             modes,
             exports: entries,
@@ -336,7 +334,6 @@ mod tests {
 
         assert_eq!(grant.schema, SCHEMA);
         assert_eq!(grant.package, "modules");
-        assert_eq!(grant.edition, "z200-11/99");
         assert_eq!(grant.exports.len(), 2);
 
         let bump = grant.exports.iter().find(|e| e.name == "Bump").unwrap();
@@ -358,7 +355,6 @@ mod tests {
 [package]
 name = "dup"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -402,7 +398,6 @@ END B;
 [package]
 name = "pref"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -468,7 +463,6 @@ END A;
 [package]
 name = "structs"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -507,7 +501,7 @@ END A;
         assert_eq!(export.friends, vec!["B".to_owned()]);
 
         let text = grant.to_toml().unwrap();
-        assert!(text.contains("schema = 3"));
+        assert!(text.contains("schema = 4"));
         assert!(text.contains("[[modes]]"));
 
         let interface = grant.to_interface().unwrap();
@@ -536,7 +530,6 @@ END A;
 [package]
 name = "regrant"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -576,7 +569,6 @@ END M;
         let text = r#"
 schema = 999
 package = "x"
-edition = "z200-11/99"
 exports = []
 "#;
         let error = GrantFile::from_toml(text).unwrap_err();

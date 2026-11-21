@@ -33,8 +33,7 @@ need I/O:
 v0 implements `SPEC MODULE` pairing, writes a TOML grant file from `z200c grant`, and
 consumes dependency grant files for `SEIZE` resolution in `check` and `grant`.
 Package-directory dependencies are loaded recursively and linked for `run`; a grant file
-that records `package_dir` is also source-linked for `run`. Dependencies and the root
-must share edition and width profile. Modules are identified by package plus simple name,
+that records `package_dir` is also source-linked for `run`. Dependencies share the compiler's fixed language revision and integer widths. Modules are identified by package plus simple name,
 so different packages may contain a module with the same name. `SEIZE` supports
 `Module!name` and `package!Module!name`, plus `GRANT ALL`/`SEIZE ALL` and `TO` friend
 restrictions. Emitted grant files record each export's module/package names, so

@@ -6,7 +6,6 @@ A z200-chill package is described by a `Chill.toml` next to its sources.
 [package]
 name = "hello"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -21,8 +20,6 @@ counter = "pieces/counter.ch"
 
 - `name` — non-empty package name.
 - `version` — non-empty package version string.
-- `edition` — `z200-11/99` (the current in-force edition) or `z200-1988`.
-  `z200-1999` is accepted as an alias for `z200-11/99`.
 
 ## `[build]`
 
@@ -84,7 +81,6 @@ lib = "../lib/target/z200c/lib.grt.toml"         # interface-only dependency
   check/build-only, and `run` rejects a seized external name from them.
 - Directory dependencies are loaded once; cycles and duplicate package loads are
   detected.
-- The dependency's `edition` must match.
 - Exported simple names may repeat across modules/packages. An unqualified `SEIZE name`
   is then ambiguous; use `Module!name` or `package!Module!name`. `GRANT ... TO ...`
   restricts visibility to named friend modules.

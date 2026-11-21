@@ -18,7 +18,7 @@ Superseded editions (useful for historical compatibility work): Z.200 (1984), (1
 removed from GCC in 2002 (GCC 3.0 omitted it; the source was deleted in April 2002).
 
 Section references below are to Z.200 (11/99) unless stated otherwise. The example
-manifest declares `edition = "z200-11/99"`, matching the current in-force edition
+compiler targets `z200-11/99`, the current in-force edition
 (11/99); every construct used by the subset and the hello example is also valid in
 earlier editions, but 1999 is the normative target.
 

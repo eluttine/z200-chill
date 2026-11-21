@@ -146,9 +146,8 @@ fn checks_against_dependency_grant_file() {
     std::fs::write(
         dir.join("lib.grt.toml"),
         r#"
-schema = 3
+schema = 4
 package = "lib"
-edition = "z200-11/99"
 
 [[exports]]
 name = "x"
@@ -169,7 +168,6 @@ result = "INT"
 [package]
 name = "client"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -216,9 +214,8 @@ fn run_allows_unused_dependency() {
     std::fs::write(
         dir.join("lib.grt.toml"),
         r#"
-schema = 3
+schema = 4
 package = "lib"
-edition = "z200-11/99"
 
 [[exports]]
 name = "unused"
@@ -234,7 +231,6 @@ mode = "INT"
 [package]
 name = "client"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -278,7 +274,6 @@ fn check_reports_multiple_semantic_errors() {
 [package]
 name = "multi"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -337,7 +332,6 @@ fn run_links_grant_file_with_source_metadata() {
 [package]
 name = "client"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -402,7 +396,6 @@ fn check_resolves_qualified_grant_exports() {
 [package]
 name = "client"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -451,7 +444,6 @@ fn duplicate_module_names_across_packages_are_allowed() {
 [package]
 name = "{name}"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -481,7 +473,6 @@ END Library;
 [package]
 name = "client"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -528,7 +519,6 @@ fn runs_with_structure_mode_from_grant_file() {
 [package]
 name = "structlib"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -555,7 +545,7 @@ END A;
     );
     let grant_path = lib.join("target/z200c/structlib.grt.toml");
     let text = std::fs::read_to_string(&grant_path).unwrap();
-    assert!(text.contains("schema = 3"));
+    assert!(text.contains("schema = 4"));
     assert!(text.contains("[[modes]]"));
     assert!(text.contains("mode = \"structlib!A!S\""));
 
@@ -568,7 +558,6 @@ END A;
 [package]
 name = "client"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -631,7 +620,6 @@ fn remote_piece_must_exist() {
 [package]
 name = "remote"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -662,7 +650,6 @@ fn remote_piece_is_expanded() {
 [package]
 name = "remote"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -706,7 +693,6 @@ END Helper;
 [package]
 name = "remote"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -751,7 +737,6 @@ END Counter;
 [package]
 name = "remote"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -792,7 +777,6 @@ fn nested_spec_grants_become_virtual_grants() {
 [package]
 name = "nested"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -841,7 +825,6 @@ fn spec_region_pairs_with_a_region_body() {
 [package]
 name = "region"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -900,7 +883,6 @@ END R;
 [package]
 name = "region"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -931,7 +913,6 @@ fn nested_spec_in_a_context_pairs_with_the_body_module() {
 [package]
 name = "nested"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -979,7 +960,6 @@ fn nested_specs_are_checked_recursively() {
 [package]
 name = "nested"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -1033,7 +1013,6 @@ fn nested_spec_interface_must_match_its_body() {
 [package]
 name = "nested"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -1089,7 +1068,6 @@ FOR
 [package]
 name = "remote"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -1147,7 +1125,6 @@ FOR
 [package]
 name = "remote"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -1191,7 +1168,6 @@ fn remote_context_target_must_be_a_context_list() {
 [package]
 name = "remote"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
@@ -1233,7 +1209,6 @@ fn remote_piece_kind_mismatch_is_reported() {
 [package]
 name = "remote"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"

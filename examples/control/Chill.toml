@@ -1,7 +1,6 @@
 [package]
 name = "control"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"

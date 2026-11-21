@@ -4,38 +4,6 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The Z.200 edition a package targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Edition {
-    V1988,
-    V1999,
-}
-
-impl Edition {
-    pub fn parse(text: &str) -> Result<Self, String> {
-        match text {
-            "z200-11/99" | "z200-1999" => Ok(Self::V1999),
-            "z200-1988" => Ok(Self::V1988),
-            other => Err(format!(
-                "unsupported edition `{other}`; expected `z200-11/99` (or `z200-1988`)"
-            )),
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::V1988 => "z200-1988",
-            Self::V1999 => "z200-11/99",
-        }
-    }
-}
-
-impl fmt::Display for Edition {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 /// Integer widths for `SHORT_INT`, `INT`, and `LONG_INT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WidthProfile {
@@ -73,7 +41,6 @@ pub struct Manifest {
 pub struct Package {
     pub name: String,
     pub version: String,
-    pub edition: Edition,
 }
 
 #[derive(Debug, Clone)]
@@ -96,7 +63,6 @@ struct RawManifest {
 struct RawPackage {
     name: String,
     version: String,
-    edition: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,8 +92,6 @@ impl Manifest {
         if raw.build.entry.trim().is_empty() {
             return Err("build.entry must not be empty".to_owned());
         }
-
-        let edition = Edition::parse(raw.package.edition.trim())?;
 
         let mut sources = Vec::with_capacity(raw.build.sources.len());
         for source in raw.build.sources {
@@ -168,7 +132,6 @@ impl Manifest {
             package: Package {
                 name: raw.package.name.trim().to_owned(),
                 version: raw.package.version.trim().to_owned(),
-                edition,
             },
             build: Build {
                 entry: PathBuf::from(raw.build.entry.trim()),
@@ -188,18 +151,10 @@ mod tests {
 [package]
 name = "hello"
 version = "0.1.0"
-edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
 "#;
-
-    #[test]
-    fn rejects_unknown_edition() {
-        let text = MANIFEST.replace("z200-11/99", "z200-3000");
-        let err = Manifest::parse(&text).unwrap_err();
-        assert!(err.contains("unsupported edition"));
-    }
 
     #[test]
     fn rejects_empty_entry() {

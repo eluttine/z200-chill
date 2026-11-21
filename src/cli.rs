@@ -146,9 +146,8 @@ fn check_impl(target: &Path) -> Result<String, String> {
     }
 
     Ok(format!(
-        "checked {} (edition {}, widths {})\n  {}: {} tokens, {} module(s)",
+        "checked {} (widths {})\n  {}: {} tokens, {} module(s)",
         package.manifest.package.name,
-        package.manifest.package.edition,
         crate::manifest::WidthProfile::default(),
         package.entry_path.display(),
         package.token_count,
@@ -203,7 +202,6 @@ struct Loader {
     loaded: HashSet<PathBuf>,
     next_package: usize,
     link_grant_sources: bool,
-    root_edition: crate::manifest::Edition,
 }
 
 fn load_package(target: &Path, link_grant_sources: bool) -> Result<LoadedPackage, String> {
@@ -229,7 +227,6 @@ fn load_package(target: &Path, link_grant_sources: bool) -> Result<LoadedPackage
         loaded: HashSet::new(),
         next_package: 0,
         link_grant_sources,
-        root_edition: manifest.package.edition,
     };
     loader.load_package(&manifest_path)?;
 
@@ -273,15 +270,6 @@ impl Loader {
     fn load_package_inner(&mut self, manifest_path: &Path) -> Result<(), String> {
         let manifest =
             Manifest::load(manifest_path).map_err(|error| format!("error[E0300]: {error}"))?;
-
-        if manifest.package.edition != self.root_edition {
-            return Err(format!(
-                "error[E0600]: {} uses edition {}, expected {}",
-                manifest_path.display(),
-                manifest.package.edition,
-                self.root_edition
-            ));
-        }
 
         let package = self.next_package;
         self.next_package += 1;
@@ -668,13 +656,6 @@ impl Loader {
         })?;
         let grant_file = grant::GrantFile::from_toml(&text)
             .map_err(|error| format!("error[E0600]: {}: {error}", path.display()))?;
-
-        if grant_file.edition != self.root_edition.as_str() {
-            return Err(format!(
-                "error[E0600]: dependency `{name}` uses edition {}, expected {}",
-                grant_file.edition, self.root_edition
-            ));
-        }
 
         if self.link_grant_sources {
             if let Some(package_dir) = &grant_file.package_dir {
