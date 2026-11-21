@@ -188,7 +188,7 @@ pub fn analyze_with_externals(
         checker.current_package = module.package;
         checker.current_package_name = module.package_name.clone();
         checker.current_module_name = module.name.clone();
-        let result = if module.kind == ModuleKind::Spec {
+        let result = if module.kind.is_spec() {
             checker.check_spec_module(module)
         } else {
             checker.check_module(module)

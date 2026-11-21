@@ -834,6 +834,96 @@ END Outer;
 }
 
 #[test]
+fn spec_region_pairs_with_a_region_body() {
+    let dir = std::env::temp_dir().join(format!("z200-region-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "region"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+R: SPEC REGION
+  GRANT x;
+  DCL x INT;
+END R;
+
+R: REGION
+  DCL x INT INIT := 1;
+END R;
+
+Client: MODULE
+  SEIZE x;
+  ASSERT x = 1;
+END Client;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("run").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn remote_region_expands() {
+    let dir = std::env::temp_dir().join(format!("z200-region-remote-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("pieces")).unwrap();
+    std::fs::write(
+        dir.join("pieces/region.ch"),
+        r#"
+R: REGION
+  DCL x INT INIT := 1;
+END R;
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "region"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/main.ch"), "REMOTE \"pieces/region.ch\";\n").unwrap();
+
+    let output = z200c().arg("run").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn nested_spec_in_a_context_pairs_with_the_body_module() {
     let dir = std::env::temp_dir().join(format!("z200-ctx-spec-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

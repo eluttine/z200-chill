@@ -618,17 +618,15 @@ impl Loader {
             let module = &modules[0];
 
             match remote.kind {
-                crate::ast::RemoteKind::Module if module.kind != crate::ast::ModuleKind::Body => {
+                crate::ast::RemoteKind::Module if !module.kind.is_body() => {
                     return Err(format!(
-                        "error[E0700]: piece {} is not a module",
+                        "error[E0700]: piece {} is not a module or region",
                         canonical.display()
                     ));
                 }
-                crate::ast::RemoteKind::SpecModule
-                    if module.kind != crate::ast::ModuleKind::Spec =>
-                {
+                crate::ast::RemoteKind::SpecModule if !module.kind.is_spec() => {
                     return Err(format!(
-                        "error[E0700]: piece {} is not a spec module",
+                        "error[E0700]: piece {} is not a spec module or spec region",
                         canonical.display()
                     ));
                 }

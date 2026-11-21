@@ -1,11 +1,11 @@
 # Piecewise compilation (design)
 
-Status: **Phases 0–3 implemented, except spec regions.** Remote syntax, piece
+Status: **Phases 0–4 implemented for the current region subset.** Remote syntax, piece
 designators, manifest `[pieces]`, the resolver, expansion of remote modules/spec
 modules/program units, remote contexts, `CONTEXT MODULE REMOTE` desugaring, nested spec
-modules (including inside contexts and recursively), and virtual grants exist. Regions
-and spec regions remain; regions are a separate prerequisite and are not implemented
-yet.
+modules (including inside contexts and recursively), virtual grants, regions, and spec
+regions exist. Region concurrency/mutual exclusion and nested regions are not
+implemented.
 
 ## Normative model
 
@@ -279,11 +279,22 @@ Implemented:
 
 Still to do: spec regions (after regions exist).
 
-### Phase 4 — Regions and spec regions
+### Phase 4 — Regions and spec regions (current subset implemented)
 
-- Implement the region milestone above.
-- Add spec-region pairing and remote regions.
-- Tests: region reach/visibility, spec region matching, remote region.
+- `REGION`, `REGION BODY`, `REGION SPEC`, and `SPEC REGION` parse as top-level
+  program units.
+- Region bodies may contain declarations and visibility statements but no actions.
+- Regions reuse the module reach/visibility/export rules and the interpreter’s module
+  scope; a region is entered once and its declarations are initialized.
+- Spec regions pair with regions by package + name, with interface checking and
+  spec-side grants (virtual grants).
+- Remote modulion designators accept modules or regions; remote spec designators accept
+  spec modules or spec regions.
+- Tests: region parsing/action rejection, spec-region pairing and execution, remote
+  region expansion.
+
+Still to do: region concurrency/mutual exclusion, nested regions inside module bodies,
+and spec-region nesting inside spec regions.
 
 ### Phase 5 — Cross-file provenance and grant files
 

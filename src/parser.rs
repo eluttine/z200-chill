@@ -281,10 +281,17 @@ impl<'a> Parser<'a> {
 
         let kind = if self.at_keyword(Keyword::Spec) {
             self.advance();
-            self.expect_keyword(Keyword::Module)?;
-            ModuleKind::Spec
-        } else {
-            self.expect_keyword(Keyword::Module)?;
+            if self.at_keyword(Keyword::Module) {
+                self.advance();
+                ModuleKind::Spec
+            } else if self.at_keyword(Keyword::Region) {
+                self.advance();
+                ModuleKind::SpecRegion
+            } else {
+                return Err(self.error_here("expected MODULE or REGION after SPEC"));
+            }
+        } else if self.at_keyword(Keyword::Module) {
+            self.advance();
             if self.at_keyword(Keyword::Spec) {
                 self.advance();
                 ModuleKind::Spec
@@ -294,16 +301,37 @@ impl<'a> Parser<'a> {
                 }
                 ModuleKind::Body
             }
+        } else if self.at_keyword(Keyword::Region) {
+            self.advance();
+            if self.at_keyword(Keyword::Spec) {
+                self.advance();
+                ModuleKind::SpecRegion
+            } else {
+                if self.at_keyword(Keyword::Body) {
+                    self.advance();
+                }
+                ModuleKind::Region
+            }
+        } else {
+            return Err(self.error_here("expected MODULE or REGION"));
         };
 
-        if kind == ModuleKind::Spec && name.is_none() {
-            return Err(self.error_here_code("E0204", "spec module must be named"));
+        if kind.is_spec() && name.is_none() {
+            return Err(self.error_here_code("E0204", "spec module or spec region must be named"));
         }
 
-        let declarations = self.parse_declarations(true, kind == ModuleKind::Spec)?;
-        let actions = if kind == ModuleKind::Spec {
+        let declarations = self.parse_declarations(true, kind.is_spec())?;
+        let actions = if kind.is_spec() {
             if !self.at_keyword(Keyword::End) {
-                return Err(self.error_here_code("E0204", "spec module cannot contain actions"));
+                return Err(self.error_here_code(
+                    "E0204",
+                    "spec module or spec region cannot contain actions",
+                ));
+            }
+            Vec::new()
+        } else if kind.is_region() {
+            if !self.at_keyword(Keyword::End) {
+                return Err(self.error_here_code("E0204", "a region cannot contain actions"));
             }
             Vec::new()
         } else {
@@ -1788,7 +1816,7 @@ END M;
         )
         .unwrap();
         let error = parse(&tokens).unwrap_err();
-        assert!(error.message.contains("spec module cannot contain actions"));
+        assert!(error.message.contains("cannot contain actions"));
     }
 
     #[test]
@@ -2017,6 +2045,44 @@ END M;
         let module = &program.modules[0];
         assert_eq!(module.contexts.len(), 1);
         assert_eq!(module.contexts[0].declarations.len(), 2);
+    }
+
+    #[test]
+    fn parses_regions_and_spec_regions() {
+        let program = parse_source(
+            r#"
+R: REGION
+  DCL x INT;
+END R;
+
+S: SPEC REGION
+  GRANT x;
+  DCL x INT;
+END S;
+
+T: REGION SPEC
+  DCL y INT;
+END T;
+"#,
+        );
+
+        assert_eq!(program.modules[0].kind, ModuleKind::Region);
+        assert_eq!(program.modules[1].kind, ModuleKind::SpecRegion);
+        assert_eq!(program.modules[2].kind, ModuleKind::SpecRegion);
+    }
+
+    #[test]
+    fn regions_reject_actions() {
+        let tokens = lexer::tokenize(
+            r#"
+R: REGION
+  ASSERT TRUE;
+END R;
+"#,
+        )
+        .unwrap();
+        let error = parse(&tokens).unwrap_err();
+        assert!(error.message.contains("region cannot contain actions"));
     }
 
     #[test]

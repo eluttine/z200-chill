@@ -280,19 +280,26 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
         .map(|(index, module)| collect_interface(module, &module_modes[index]))
         .collect::<Result<_, _>>()?;
 
-    let mut body_by_name: HashMap<(usize, String), usize> = HashMap::new();
-    let mut spec_by_name: HashMap<(usize, String), usize> = HashMap::new();
+    let mut module_bodies: HashMap<(usize, String), usize> = HashMap::new();
+    let mut module_specs: HashMap<(usize, String), usize> = HashMap::new();
+    let mut region_bodies: HashMap<(usize, String), usize> = HashMap::new();
+    let mut region_specs: HashMap<(usize, String), usize> = HashMap::new();
 
     for (index, module) in program.modules.iter().enumerate() {
         let Some(name) = &module.name else {
-            if module.kind == ModuleKind::Spec {
-                return Err(Error::new(module.span, "spec module must be named"));
+            if module.kind.is_spec() {
+                return Err(Error::new(
+                    module.span,
+                    "spec module or spec region must be named",
+                ));
             }
             continue;
         };
         let target = match module.kind {
-            ModuleKind::Body => &mut body_by_name,
-            ModuleKind::Spec => &mut spec_by_name,
+            ModuleKind::Body => &mut module_bodies,
+            ModuleKind::Spec => &mut module_specs,
+            ModuleKind::Region => &mut region_bodies,
+            ModuleKind::SpecRegion => &mut region_specs,
         };
         if target
             .insert((module.package, name.clone()), index)
@@ -300,7 +307,7 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
         {
             return Err(Error::new(
                 module.span,
-                format!("duplicate module name `{name}`"),
+                format!("duplicate module/region name `{name}`"),
             ));
         }
     }
@@ -309,35 +316,40 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
     let mut body_for_spec = HashMap::new();
     let mut spec_for_body = HashMap::new();
 
-    for ((package, name), spec_index) in &spec_by_name {
-        let Some(body_index) = body_by_name.get(&(*package, name.clone())).copied() else {
-            return Err(Error::new(
-                program.modules[*spec_index].span,
-                format!("spec module `{name}` has no body"),
-            ));
-        };
-        body_for_spec.insert(*spec_index, body_index);
-        spec_for_body.insert(body_index, *spec_index);
+    for (spec_map, body_map, label) in [
+        (&module_specs, &module_bodies, "module"),
+        (&region_specs, &region_bodies, "region"),
+    ] {
+        for ((package, name), spec_index) in spec_map {
+            let Some(body_index) = body_map.get(&(*package, name.clone())).copied() else {
+                return Err(Error::new(
+                    program.modules[*spec_index].span,
+                    format!("spec {label} `{name}` has no body"),
+                ));
+            };
+            body_for_spec.insert(*spec_index, body_index);
+            spec_for_body.insert(body_index, *spec_index);
 
-        let spec = &program.modules[*spec_index];
-        let body = &program.modules[body_index];
+            let spec = &program.modules[*spec_index];
+            let body = &program.modules[body_index];
 
-        if has_grant(body) {
-            return Err(Error::new(
-                body.span,
-                format!("module `{name}` has a SPEC; GRANT must be in the spec module"),
-            ));
+            if has_grant(body) {
+                return Err(Error::new(
+                    body.span,
+                    format!("{label} `{name}` has a SPEC; GRANT must be in the spec {label}"),
+                ));
+            }
+
+            check_interface(&interfaces[*spec_index], &interfaces[body_index], spec.span)?;
+            add_grants(
+                spec,
+                &interfaces[*spec_index],
+                body_index,
+                &mut exports,
+                &mut modes,
+                &HashMap::new(),
+            )?;
         }
-
-        check_interface(&interfaces[*spec_index], &interfaces[body_index], spec.span)?;
-        add_grants(
-            spec,
-            &interfaces[*spec_index],
-            body_index,
-            &mut exports,
-            &mut modes,
-            &HashMap::new(),
-        )?;
     }
 
     for (index, module) in program.modules.iter().enumerate() {
@@ -356,7 +368,7 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
     }
 
     for (index, module) in program.modules.iter().enumerate() {
-        if module.kind == ModuleKind::Body && !spec_for_body.contains_key(&index) {
+        if module.kind.is_body() && !spec_for_body.contains_key(&index) {
             let reach_vars =
                 collect_child_grants(module, &module_modes[index], &module_modes_by_span)?;
             add_grants(
@@ -1648,6 +1660,7 @@ pub fn apply_virtual_grants(modules: &mut [Module]) -> Result<(), Error> {
                 }
             }
             ModuleKind::Body => bodies.push(index),
+            ModuleKind::Region | ModuleKind::SpecRegion => {}
         }
     }
 

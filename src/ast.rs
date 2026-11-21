@@ -63,6 +63,22 @@ pub struct Context {
 pub enum ModuleKind {
     Body,
     Spec,
+    Region,
+    SpecRegion,
+}
+
+impl ModuleKind {
+    pub fn is_spec(self) -> bool {
+        matches!(self, Self::Spec | Self::SpecRegion)
+    }
+
+    pub fn is_region(self) -> bool {
+        matches!(self, Self::Region | Self::SpecRegion)
+    }
+
+    pub fn is_body(self) -> bool {
+        !self.is_spec()
+    }
 }
 
 #[derive(Debug, Clone)]

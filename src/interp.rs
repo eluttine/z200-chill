@@ -133,7 +133,7 @@ pub fn run_checked(
     // mode seizes before any variable is declared.
     let mut module_modes = module_modes;
     for (index, module) in program.modules.iter().enumerate() {
-        if module.kind == ModuleKind::Spec {
+        if module.kind.is_spec() {
             continue;
         }
         let package_name = module.package_name.as_deref();
@@ -200,7 +200,7 @@ pub fn run_checked(
     interpreter.apply_seizes(program)?;
 
     for (index, module) in program.modules.iter().enumerate() {
-        if module.kind == ModuleKind::Spec {
+        if module.kind.is_spec() {
             continue;
         }
         interpreter.active_module = index;
@@ -344,7 +344,7 @@ impl<'a> Interpreter<'a> {
                 modes: mode_names.clone(),
                 ..Scope::default()
             };
-            if module.kind == ModuleKind::Body {
+            if module.kind.is_body() {
                 declare_into_scope(
                     &mut scope,
                     &module.declarations,
@@ -355,7 +355,7 @@ impl<'a> Interpreter<'a> {
                 )?;
             }
             self.modules.push(scope);
-            if module.kind == ModuleKind::Body {
+            if module.kind.is_body() {
                 self.hoist_top_module(module, index)?;
             }
         }
@@ -418,7 +418,7 @@ impl<'a> Interpreter<'a> {
         let mut imports = Vec::new();
 
         for (current, module) in program.modules.iter().enumerate() {
-            if module.kind == ModuleKind::Spec {
+            if module.kind.is_spec() {
                 continue;
             }
             let package_name = module.package_name.as_deref();
