@@ -1604,6 +1604,8 @@ fn check_nested_specs(
 
 /// Copy `GRANT`/`SEIZE` declarations from nested spec modules into their matching
 /// nested body modules. This is the virtual-grant step for nested specs.
+type PendingVirtualGrants = Vec<(usize, Vec<(String, Vec<Declaration>)>)>;
+
 pub fn apply_virtual_grants(modules: &mut [Module]) -> Result<(), Error> {
     let mut specs: HashMap<(usize, String), usize> = HashMap::new();
     let mut bodies: HashMap<(usize, String), usize> = HashMap::new();
@@ -1622,7 +1624,7 @@ pub fn apply_virtual_grants(modules: &mut [Module]) -> Result<(), Error> {
         }
     }
 
-    let mut pending: Vec<(usize, Vec<(String, Vec<Declaration>)>)> = Vec::new();
+    let mut pending: PendingVirtualGrants = Vec::new();
     for (key, spec_index) in &specs {
         let Some(body_index) = bodies.get(key).copied() else {
             continue;
