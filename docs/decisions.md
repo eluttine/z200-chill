@@ -85,8 +85,9 @@ interpreter seed module-scope exports from the tree instead of recomputing modul
 grants. Top-level child-export collection for `GRANT` re-exports now also reads the tree.
 Block reaches (`BEGIN`/`IF`/`DO`/`CASE`) are tree nodes keyed by block/branch/
 alternative spans; checker and interpreter block scopes are seeded from them instead of
-rescanning child modules. Only checker grant validation still recomputes grant sets for
-diagnostics/`FORBID`.
+rescanning child modules. Nested `GRANT` validation and `FORBID` application happen once
+while building the tree, so the checker no longer collects nested grant sets and the
+interpreter no longer registers grants at module execution time.
 
 ## 10.14 Text I/O (implementation-defined, resolved for now)
 

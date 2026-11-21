@@ -1000,7 +1000,6 @@ impl<'a> Interpreter<'a> {
             return self.exec_hoisted_module(label, declarations, actions, span, scope);
         }
 
-        let parent_is_local = !self.locals.is_empty();
         let parent = self.current_reach();
         self.locals.push(Scope {
             modes: self
@@ -1020,7 +1019,6 @@ impl<'a> Interpreter<'a> {
             self.apply_nested_seizes(declarations, &parent)?;
             self.declare_local_vars(declarations)?;
             self.initialize_declarations(declarations)?;
-            self.register_nested_grants(declarations, parent_is_local)?;
 
             let mut frame = Frame {
                 result_type: None,
@@ -1297,99 +1295,6 @@ impl<'a> Interpreter<'a> {
             }
             ReachKind::Mode(ty) => {
                 scope.modes.insert(name.to_owned(), ty);
-            }
-        }
-        Ok(())
-    }
-
-    fn register_nested_grants(
-        &mut self,
-        declarations: &[Declaration],
-        parent_is_local: bool,
-    ) -> Result<(), Error> {
-        let module_name = self
-            .active_scope_key
-            .and_then(|key| self.modules_by_span.get(&key))
-            .and_then(|module| module.name.clone());
-        let scope = self.locals.last().cloned().unwrap_or_default();
-        let mut grantable: HashMap<String, ReachKind<'a>> = HashMap::new();
-        for (name, cell) in &scope.vars {
-            grantable.insert(name.clone(), ReachKind::Var(cell.clone()));
-        }
-        for (name, proc_ref) in &scope.procs {
-            grantable.insert(name.clone(), ReachKind::Proc(*proc_ref));
-        }
-        for (name, ty) in &scope.modes {
-            grantable.insert(name.clone(), ReachKind::Mode(*ty));
-        }
-        for (name, exports) in &scope.exports {
-            if let [export] = exports.as_slice() {
-                if export.meta.prefix.is_empty() {
-                    grantable
-                        .entry(name.clone())
-                        .or_insert_with(|| export.kind.clone());
-                }
-            }
-        }
-
-        for declaration in declarations {
-            let Declaration::Visibility(visibility) = declaration else {
-                continue;
-            };
-            if visibility.kind != VisibilityKind::Grant {
-                continue;
-            }
-            let prefix = reach_grant_prefix(visibility, module_name.as_deref())?;
-            let friends = if visibility.friends.is_empty() {
-                None
-            } else {
-                Some(
-                    visibility
-                        .friends
-                        .iter()
-                        .map(|friend| friend.qualified())
-                        .collect::<Vec<_>>(),
-                )
-            };
-            let names: Vec<(String, Span)> = if visibility.all {
-                grantable
-                    .keys()
-                    .map(|name| (name.clone(), visibility.span))
-                    .collect()
-            } else {
-                visibility
-                    .names
-                    .iter()
-                    .map(|name| (name.name.clone(), name.span))
-                    .collect()
-            };
-
-            for (name, span) in names {
-                let Some(kind) = grantable.get(&name).cloned() else {
-                    return Err(Error::new(
-                        span,
-                        format!("cannot GRANT `{name}`: not a declaration of this module"),
-                    ));
-                };
-                let binding = ReachBinding {
-                    kind,
-                    meta: crate::reach::ExportMeta {
-                        prefix: prefix.clone(),
-                        friends: friends.clone(),
-                    },
-                };
-                let parent_index = self.locals.len().checked_sub(2);
-                let parent_scope = if parent_is_local {
-                    let index = parent_index.expect("parent scope exists");
-                    &mut self.locals[index]
-                } else {
-                    &mut self.modules[self.active_module]
-                };
-                parent_scope
-                    .exports
-                    .entry(name.clone())
-                    .or_default()
-                    .push(binding);
             }
         }
         Ok(())
@@ -2417,34 +2322,6 @@ fn declare_into_scope<'a>(
         }
     }
     Ok(())
-}
-
-fn reach_grant_prefix(
-    visibility: &crate::ast::Visibility,
-    module_name: Option<&str>,
-) -> Result<Vec<String>, Error> {
-    match &visibility.prefix {
-        None => Ok(Vec::new()),
-        Some(crate::ast::PrefixClause::Prefixed(Some(prefix))) => Ok(prefix.clone()),
-        Some(crate::ast::PrefixClause::Prefixed(None)) => module_name
-            .map(|name| vec![name.to_owned()])
-            .ok_or_else(|| {
-                Error::new(
-                    visibility.span,
-                    "GRANT ... PREFIXED without a prefix requires a named module",
-                )
-            }),
-        Some(crate::ast::PrefixClause::Rename { old, new }) => {
-            if old.is_empty() {
-                Ok(new.clone())
-            } else {
-                Err(Error::new(
-                    visibility.span,
-                    "non-empty old prefixes in a GRANT are not supported here",
-                ))
-            }
-        }
-    }
 }
 
 fn read_array_element(value: Value, index: i128, span: Span) -> Result<Value, Error> {

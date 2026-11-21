@@ -23,8 +23,9 @@ land as a small, green change.
       `collect_child_grants`/`collect_module_exports` path.
 - [x] Block-level reach exports (`BEGIN`/`IF`/`DO`/`CASE`) are tree nodes keyed by
       block/branch/alternative spans and seed both checker and interpreter scopes.
-- [ ] Remaining: checker grant validation still recomputes some grant sets for
-      diagnostics/`FORBID`; this can eventually validate against the tree.
+- [x] Nested `GRANT` validation (duplicate/unknown names, unsupported old prefixes) and
+      `FORBID` application moved into reach-tree construction; removed the checker's
+      `collect_module_grants` and the interpreter's runtime grant registration.
 
 Acceptance for completion: no duplicate reach-matching or reach-building logic remains;
 all existing tests pass with no new special cases.
