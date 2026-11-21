@@ -183,6 +183,7 @@ pub fn run_checked(
         exports,
         modes,
         module_modes,
+        nested_scopes: HashMap::new(),
         exprs: lowered.exprs,
         bodies: lowered.bodies,
     };
@@ -249,6 +250,8 @@ struct Scope<'a> {
     modes: HashMap<String, Type>,
     /// Variable names granted into this reach by directly enclosed modules.
     exports: HashMap<String, Vec<VarCell>>,
+    /// Whether hoisted-module `SEIZE`s have been applied.
+    seizes_applied: bool,
 }
 
 struct Frame {
@@ -278,6 +281,8 @@ struct Interpreter<'a> {
     exports: Vec<program::ExportEntry>,
     modes: Rc<crate::modes::ModeTable>,
     module_modes: Vec<HashMap<String, Type>>,
+    /// Scopes for nested modules declared in a module body, keyed by span.
+    nested_scopes: HashMap<Span, Scope<'a>>,
     exprs: ir::ExprTable,
     bodies: ir::BodyTable,
 }
@@ -295,6 +300,41 @@ impl<'a> Interpreter<'a> {
                 declare_into_scope(&mut scope, &module.declarations, index, &mode_names, &modes)?;
             }
             self.modules.push(scope);
+            if module.kind == ModuleKind::Body {
+                self.hoist_top_module(module, index)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn hoist_top_module(&mut self, module: &'a Module, index: usize) -> Result<(), Error> {
+        let mut parent = std::mem::take(&mut self.modules[index]);
+        let mode_names = self.module_modes[index].clone();
+        let modes = Rc::clone(&self.modes);
+        self.hoist_children(&module.actions, &mut parent, index, &mode_names, &modes)?;
+        self.modules[index] = parent;
+        Ok(())
+    }
+
+    fn hoist_children(
+        &mut self,
+        actions: &'a [Action],
+        parent: &mut Scope<'a>,
+        top: usize,
+        mode_names: &HashMap<String, Type>,
+        modes: &crate::modes::ModeTable,
+    ) -> Result<(), Error> {
+        for action in actions {
+            let Action::Module(child) = action else {
+                continue;
+            };
+            let mut child_modes = parent.modes.clone();
+            child_modes.extend(mode_names.clone());
+            let mut scope = Scope::default();
+            declare_into_scope(&mut scope, &child.declarations, top, &child_modes, modes)?;
+            self.hoist_children(&child.actions, &mut scope, top, mode_names, modes)?;
+            register_hoisted_grants(child, &scope, parent)?;
+            self.nested_scopes.insert(child.span, scope);
         }
         Ok(())
     }
@@ -415,6 +455,10 @@ impl<'a> Interpreter<'a> {
                         .vars
                         .get(&name)
                         .cloned()
+                        .or_else(|| match self.modules[source].exports.get(&name) {
+                            Some(cells) if cells.len() == 1 => Some(cells[0].clone()),
+                            _ => None,
+                        })
                         .ok_or_else(|| {
                             Error::new(span, format!("cannot SEIZE `{name}`: not a location"))
                         })?;
@@ -677,8 +721,12 @@ impl<'a> Interpreter<'a> {
         label: Option<&str>,
         declarations: &[Declaration],
         actions: &[ir::Stmt],
-        _span: Span,
+        span: Span,
     ) -> Result<Flow, Error> {
+        if let Some(scope) = self.nested_scopes.remove(&span) {
+            return self.exec_hoisted_module(label, declarations, actions, span, scope);
+        }
+
         let parent_is_local = !self.locals.is_empty();
         let parent = self.current_reach();
         self.locals.push(Scope::default());
@@ -704,6 +752,46 @@ impl<'a> Interpreter<'a> {
 
         self.module_floor = previous_floor;
         self.locals.pop();
+        result
+    }
+
+    fn exec_hoisted_module(
+        &mut self,
+        label: Option<&str>,
+        declarations: &[Declaration],
+        actions: &[ir::Stmt],
+        span: Span,
+        scope: Scope<'a>,
+    ) -> Result<Flow, Error> {
+        let parent = self.current_reach();
+        self.locals.push(scope);
+        let previous_floor = self.module_floor;
+        self.module_floor = self.locals.len() - 1;
+
+        let result = (|| {
+            if !self.locals.last().expect("hoisted scope").seizes_applied {
+                self.apply_nested_seizes(declarations, &parent)?;
+                self.locals
+                    .last_mut()
+                    .expect("hoisted scope")
+                    .seizes_applied = true;
+            }
+            self.initialize_declarations(declarations)?;
+
+            let mut frame = Frame {
+                result_type: None,
+                result: None,
+            };
+            match self.exec_stmts(actions, &mut frame)? {
+                Flow::Normal | Flow::Exit(None) => Ok(Flow::Normal),
+                Flow::Exit(Some(name)) if label == Some(name.as_str()) => Ok(Flow::Normal),
+                flow => Ok(flow),
+            }
+        })();
+
+        self.module_floor = previous_floor;
+        let scope = self.locals.pop().expect("hoisted scope");
+        self.nested_scopes.insert(span, scope);
         result
     }
 
@@ -1612,6 +1700,60 @@ fn declare_into_scope<'a>(
     Ok(())
 }
 
+fn register_hoisted_grants<'a>(
+    module: &Module,
+    scope: &Scope<'a>,
+    parent: &mut Scope<'a>,
+) -> Result<(), Error> {
+    let mut grantable: HashMap<String, VarCell> = scope.vars.clone();
+    for (name, cells) in &scope.exports {
+        if let [cell] = cells.as_slice() {
+            grantable
+                .entry(name.clone())
+                .or_insert_with(|| cell.clone());
+        }
+    }
+
+    for declaration in &module.declarations {
+        let Declaration::Visibility(visibility) = declaration else {
+            continue;
+        };
+        if visibility.kind != VisibilityKind::Grant {
+            continue;
+        }
+        if visibility.prefix.is_some()
+            || !visibility.friends.is_empty()
+            || visibility.forbid.is_some()
+        {
+            continue;
+        }
+        let names: Vec<(String, Span)> = if visibility.all {
+            grantable
+                .keys()
+                .map(|name| (name.clone(), visibility.span))
+                .collect()
+        } else {
+            visibility
+                .names
+                .iter()
+                .map(|name| (name.name.clone(), name.span))
+                .collect()
+        };
+        for (name, span) in names {
+            let Some(cell) = grantable.get(&name) else {
+                return Err(Error::new(
+                    span,
+                    format!(
+                        "cannot GRANT `{name}`: not a declaration or child grant in this reach"
+                    ),
+                ));
+            };
+            parent.exports.entry(name).or_default().push(cell.clone());
+        }
+    }
+    Ok(())
+}
+
 fn single_reach_export(name: &str, cells: &[VarCell], span: Span) -> Result<VarCell, Error> {
     match cells {
         [cell] => Ok(cell.clone()),
@@ -1874,6 +2016,51 @@ M: MODULE
     ASSERT x = 3;
   END Helper;
 END M;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn parent_regrants_a_child_grant_at_runtime() {
+        run_source(
+            r#"
+M: MODULE
+  GRANT x;
+  A: MODULE
+    GRANT x;
+    DCL x INT INIT := 1;
+  END A;
+END M;
+
+N: MODULE
+  SEIZE x;
+  ASSERT x = 1;
+END N;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn parent_regrants_a_grandchild_grant_at_runtime() {
+        run_source(
+            r#"
+M: MODULE
+  GRANT x;
+  A: MODULE
+    GRANT x;
+    B: MODULE
+      GRANT x;
+      DCL x INT INIT := 2;
+    END B;
+  END A;
+END M;
+
+N: MODULE
+  SEIZE x;
+  ASSERT x = 2;
+END N;
 "#,
         )
         .unwrap();

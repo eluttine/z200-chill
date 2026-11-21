@@ -66,9 +66,11 @@ Implemented in `z200c`:
 - `CONTEXT ... FOR` lists on top-level and nested body modules, with quasi
   variable/procedure declarations checked against the enclosing reach;
 - nested body modules executed as actions, with `SEIZE` from the immediate parent
-  reach and `GRANT` of their own variable declarations into that reach; sibling grants
-  are visible to sibling `SEIZE`, while procedures and mode definitions inside nested
-  modules are not implemented yet (see [contexts.md](contexts.md));
+  reach and `GRANT` of their own, child, or grandchild variable declarations into that
+  reach; siblings and parents can seize/re-grant those grants, and direct nested module
+  declarations are hoisted so runtime visibility is order-independent; procedures,
+  mode definitions, and grants inside action blocks are not implemented yet (see
+  [contexts.md](contexts.md));
 - `z200c grant`, which writes a TOML grant file describing the package interface and
   (optionally) its source package directory;
 - loading dependency grant files from `[dependencies]` for static `SEIZE` resolution in

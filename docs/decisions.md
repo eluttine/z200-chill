@@ -84,13 +84,16 @@ signatures are validated against the grants that enter the imaginary outermost r
 runtime effect. Nested body modules are supported as actions: they execute in order,
 `SEIZE` from the immediate parent reach (variables, procedures, modes), and accept
 contexts checked against that reach. `module_floor` hides parent names unless seized.
-Nested modules can `GRANT` their own variable declarations into the parent reach, and
-siblings can `SEIZE` them; duplicate sibling grants are ambiguous at the `SEIZE`. The
-parent reach can use a child's grant directly. Still open: parent re-granting a child's
-grant, static preloading for grants inside action blocks, procedure/mode definitions
-inside nested modules, prefix/`TO`/`FORBID` in nested `GRANT`, Z.200 location lifetime
-for nested modules (runtime currently requires the grant to be registered first),
-context visibility statements, remote pieces, and nested spec modules/regions.
+Nested modules can `GRANT` their own, child, and grandchild variable declarations into
+the parent reach; siblings can `SEIZE` them, and the parent can re-grant them outward.
+Duplicate sibling grants are ambiguous at the `SEIZE`. The parent reach can use a
+child's grant directly. Nested module declarations are hoisted when the enclosing
+module scope is created, so grants are registered and re-granted before module bodies
+execute; initializers still run when the module action is entered. Top-level re-grants
+appear in the package interface and grant files. Still open: static preloading/hoisting
+for grants inside `BEGIN`/`IF`/`DO` action blocks, procedure/mode definitions inside
+nested modules, prefix/`TO`/`FORBID` in nested `GRANT`, context visibility statements,
+remote pieces, and nested spec modules/regions.
 See [contexts.md](contexts.md).
 
 ---

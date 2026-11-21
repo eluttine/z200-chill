@@ -351,8 +351,8 @@ impl Checker {
             self.apply_nested_seizes(&module.declarations, &parent)?;
             self.collect_declarations(&module.declarations)?;
             self.check_initializers(&module.declarations)?;
-            self.check_nested_grants(module)?;
             self.preload_child_grants(&module.actions)?;
+            self.check_nested_grants(module)?;
 
             let has_label = module.name.is_some();
             if let Some(name) = &module.name {
@@ -371,13 +371,19 @@ impl Checker {
     }
 
     fn check_nested_grants(&mut self, module: &Module) -> Result<(), Error> {
-        let mut local_vars: HashMap<String, Type> = HashMap::new();
+        let mut grantable: HashMap<String, Type> = HashMap::new();
         for declaration in &module.declarations {
             if let Declaration::Var(list) = declaration {
                 for var in list {
                     let ty = self.resolve_mode(&var.mode)?;
-                    local_vars.insert(var.name.clone(), ty);
+                    grantable.insert(var.name.clone(), ty);
                 }
+            }
+        }
+        let scope = self.scopes.last().expect("scope stack is never empty");
+        for (name, types) in &scope.exports {
+            if let [ty] = types.as_slice() {
+                grantable.insert(name.clone(), *ty);
             }
         }
 
@@ -404,12 +410,12 @@ impl Checker {
             if visibility.forbid.is_some() {
                 return Err(Error::new(
                     visibility.span,
-                    "FORBID in a nested GRANT is not supported yet",
+                    "FORBID in a nested GRANT are not supported yet",
                 ));
             }
 
             let names: Vec<(String, Span)> = if visibility.all {
-                local_vars
+                grantable
                     .keys()
                     .map(|name| (name.clone(), visibility.span))
                     .collect()
@@ -428,14 +434,91 @@ impl Checker {
                         format!("`{name}` is granted more than once"),
                     ));
                 }
-                if !local_vars.contains_key(&name) {
+                if !grantable.contains_key(&name) {
                     return Err(Error::new(
                         span,
                         format!(
-                            "cannot GRANT `{name}`: only declarations of this module are grantable in a nested module"
+                            "cannot GRANT `{name}`: not a declaration or child grant in this reach"
                         ),
                     ));
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Collect the names a module grants into its parent reach, recursively
+    /// accounting for grants from directly enclosed modules.
+    fn collect_module_grants(&mut self, module: &Module) -> Result<HashMap<String, Type>, Error> {
+        let mut grantable: HashMap<String, Type> = HashMap::new();
+        for declaration in &module.declarations {
+            if let Declaration::Var(list) = declaration {
+                for var in list {
+                    let ty = self.resolve_mode(&var.mode)?;
+                    grantable.insert(var.name.clone(), ty);
+                }
+            }
+        }
+
+        for action in &module.actions {
+            let Action::Module(child) = action else {
+                continue;
+            };
+            for (name, ty) in self.collect_module_grants(child)? {
+                grantable.entry(name).or_insert(ty);
+            }
+        }
+
+        let mut exports = HashMap::new();
+        let mut granted = HashSet::new();
+        for declaration in &module.declarations {
+            let Declaration::Visibility(visibility) = declaration else {
+                continue;
+            };
+            if visibility.kind != VisibilityKind::Grant {
+                continue;
+            }
+            if visibility.prefix.is_some() || !visibility.friends.is_empty() {
+                continue;
+            }
+            let names: Vec<String> = if visibility.all {
+                grantable.keys().cloned().collect()
+            } else {
+                visibility
+                    .names
+                    .iter()
+                    .map(|name| name.name.clone())
+                    .collect()
+            };
+            for name in names {
+                if !granted.insert(name.clone()) {
+                    return Err(Error::new(
+                        visibility.span,
+                        format!("`{name}` is granted more than once"),
+                    ));
+                }
+                let Some(ty) = grantable.get(&name) else {
+                    return Err(Error::new(
+                        visibility.span,
+                        format!(
+                            "cannot GRANT `{name}`: not a declaration or child grant in this reach"
+                        ),
+                    ));
+                };
+                exports.insert(name, *ty);
+            }
+        }
+        Ok(exports)
+    }
+
+    fn preload_child_grants(&mut self, actions: &[Action]) -> Result<(), Error> {
+        for action in actions {
+            let Action::Module(child) = action else {
+                continue;
+            };
+            for (name, ty) in self.collect_module_grants(child)? {
+                let scope = self.scopes.last_mut().expect("scope stack is never empty");
+                scope.exports.entry(name).or_default().push(ty);
             }
         }
         Ok(())
@@ -449,54 +532,6 @@ impl Checker {
                 format!("SEIZE `{name}` is ambiguous; several sibling modules grant it"),
             )),
         }
-    }
-
-    fn preload_child_grants(&mut self, actions: &[Action]) -> Result<(), Error> {
-        for action in actions {
-            let Action::Module(child) = action else {
-                continue;
-            };
-
-            let mut vars: HashMap<String, Type> = HashMap::new();
-            for declaration in &child.declarations {
-                if let Declaration::Var(list) = declaration {
-                    for var in list {
-                        if let Ok(ty) = self.resolve_mode(&var.mode) {
-                            vars.entry(var.name.clone()).or_insert(ty);
-                        }
-                    }
-                }
-            }
-
-            for declaration in &child.declarations {
-                let Declaration::Visibility(visibility) = declaration else {
-                    continue;
-                };
-                if visibility.kind != VisibilityKind::Grant {
-                    continue;
-                }
-                if visibility.prefix.is_some() || !visibility.friends.is_empty() {
-                    continue;
-                }
-                let names: Vec<String> = if visibility.all {
-                    vars.keys().cloned().collect()
-                } else {
-                    visibility
-                        .names
-                        .iter()
-                        .map(|name| name.name.clone())
-                        .collect()
-                };
-                for name in names {
-                    let Some(ty) = vars.get(&name) else {
-                        continue;
-                    };
-                    let scope = self.scopes.last_mut().expect("scope stack is never empty");
-                    scope.exports.entry(name).or_default().push(*ty);
-                }
-            }
-        }
-        Ok(())
     }
 
     fn check_nested_contexts(&self, module: &Module, parent: &Scope) -> Result<(), Error> {
@@ -2132,6 +2167,51 @@ END M;
     }
 
     #[test]
+    fn parent_can_regrant_a_child_grant() {
+        check_source(
+            r#"
+M: MODULE
+  GRANT x;
+  A: MODULE
+    GRANT x;
+    DCL x INT INIT := 1;
+  END A;
+END M;
+
+N: MODULE
+  SEIZE x;
+  ASSERT x = 1;
+END N;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn parent_regrant_of_a_grandchild_grant_works() {
+        check_source(
+            r#"
+M: MODULE
+  GRANT x;
+  A: MODULE
+    GRANT x;
+    B: MODULE
+      GRANT x;
+      DCL x INT INIT := 1;
+    END B;
+  END A;
+END M;
+
+N: MODULE
+  SEIZE x;
+  ASSERT x = 1;
+END N;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn parent_reach_can_use_a_child_grant() {
         check_source(
             r#"
@@ -2251,7 +2331,9 @@ END M;
         )
         .unwrap_err();
         assert!(
-            error.message.contains("only declarations of this module"),
+            error
+                .message
+                .contains("not a declaration or child grant in this reach"),
             "{}",
             error.message
         );

@@ -536,6 +536,49 @@ END A;
     }
 
     #[test]
+    fn emits_regranted_child_export() {
+        let manifest = Manifest::parse(
+            r#"
+[package]
+name = "regrant"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+int_widths = "16-32-64"
+"#,
+        )
+        .unwrap();
+        let tokens = lexer::tokenize(
+            r#"
+M: MODULE
+  GRANT x;
+  A: MODULE
+    GRANT x;
+    DCL x INT INIT := 1;
+  END A;
+END M;
+"#,
+        )
+        .unwrap();
+        let mut program = parser::parse(&tokens).unwrap();
+        for module in &mut program.modules {
+            module.package_name = Some("regrant".to_owned());
+        }
+
+        let grant = GrantFile::from_package(&manifest, &program).unwrap();
+        let export = grant
+            .exports
+            .iter()
+            .find(|export| export.name == "x")
+            .unwrap();
+        assert_eq!(export.kind, GrantKind::Variable);
+        assert_eq!(export.module.as_deref(), Some("M"));
+        assert_eq!(export.mode.as_deref(), Some("INT"));
+    }
+
+    #[test]
     fn rejects_unknown_schema() {
         let text = r#"
 schema = 999

@@ -1,6 +1,6 @@
 use crate::ast::{
-    Declaration, ModeRef, Module, ModuleKind, NameRef, Param, Passing, PrefixClause, Program,
-    VisibilityKind,
+    Action, Declaration, ModeRef, Module, ModuleKind, NameRef, Param, Passing, PrefixClause,
+    Program, VisibilityKind,
 };
 use crate::lexer::Span;
 use crate::modes::{FieldInfo, ModeTable, StructMode};
@@ -317,12 +317,21 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
             body_index,
             &mut exports,
             &mut modes,
+            &HashMap::new(),
         )?;
     }
 
     for (index, module) in program.modules.iter().enumerate() {
         if module.kind == ModuleKind::Body && !spec_for_body.contains_key(&index) {
-            add_grants(module, &interfaces[index], index, &mut exports, &mut modes)?;
+            let reach_vars = collect_child_grants(module, &module_modes[index])?;
+            add_grants(
+                module,
+                &interfaces[index],
+                index,
+                &mut exports,
+                &mut modes,
+                &reach_vars,
+            )?;
         }
     }
 
@@ -994,6 +1003,98 @@ fn context_export<'a>(
     }
 }
 
+/// Names granted by a module's directly enclosed modules into its reach.
+fn collect_child_grants(
+    module: &Module,
+    mode_names: &HashMap<String, Type>,
+) -> Result<HashMap<String, Type>, Error> {
+    let mut grants = HashMap::new();
+    for action in &module.actions {
+        let Action::Module(child) = action else {
+            continue;
+        };
+        for (name, ty) in collect_module_exports(child, mode_names)? {
+            // Duplicate sibling grants are allowed; ambiguity is reported if
+            // the parent re-grants or another module seizes the name.
+            grants.entry(name).or_insert(ty);
+        }
+    }
+    Ok(grants)
+}
+
+/// Names a module grants into its parent reach. Accounts recursively for
+/// grants from directly enclosed modules.
+fn collect_module_exports(
+    module: &Module,
+    mode_names: &HashMap<String, Type>,
+) -> Result<HashMap<String, Type>, Error> {
+    let mut grantable = HashMap::new();
+    for declaration in &module.declarations {
+        if let Declaration::Var(list) = declaration {
+            for var in list {
+                let ty = resolve_mode_with(&var.mode, mode_names)?;
+                grantable.insert(var.name.clone(), ty);
+            }
+        }
+    }
+    for action in &module.actions {
+        let Action::Module(child) = action else {
+            continue;
+        };
+        for (name, ty) in collect_module_exports(child, mode_names)? {
+            grantable.entry(name).or_insert(ty);
+        }
+    }
+
+    let mut exports = HashMap::new();
+    let mut granted = HashSet::new();
+    for declaration in &module.declarations {
+        let Declaration::Visibility(visibility) = declaration else {
+            continue;
+        };
+        if visibility.kind != VisibilityKind::Grant {
+            continue;
+        }
+        // Advanced nested grant clauses are validated by the checker.
+        if visibility.prefix.is_some()
+            || !visibility.friends.is_empty()
+            || visibility.forbid.is_some()
+        {
+            continue;
+        }
+        let names: Vec<(String, Span)> = if visibility.all {
+            grantable
+                .keys()
+                .map(|name| (name.clone(), visibility.span))
+                .collect()
+        } else {
+            visibility
+                .names
+                .iter()
+                .map(|name| (name.name.clone(), name.span))
+                .collect()
+        };
+        for (name, span) in names {
+            if !granted.insert(name.clone()) {
+                return Err(Error::new(
+                    span,
+                    format!("`{name}` is granted more than once"),
+                ));
+            }
+            let Some(ty) = grantable.get(&name) else {
+                return Err(Error::new(
+                    span,
+                    format!(
+                        "cannot GRANT `{name}`: not a declaration or child grant in this reach"
+                    ),
+                ));
+            };
+            exports.insert(name, *ty);
+        }
+    }
+    Ok(exports)
+}
+
 /// Old and new prefixes of a visibility statement, following §12.2.3.3.
 ///
 /// `PREFIXED` is shorthand: for `GRANT` the new prefix is attached and the old
@@ -1058,6 +1159,7 @@ fn add_grants(
     export_module: usize,
     exports: &mut Vec<ExportEntry>,
     modes: &mut ModeTable,
+    reach_vars: &HashMap<String, Type>,
 ) -> Result<(), Error> {
     let module_name = module.name.clone();
     let package = module.package;
@@ -1184,6 +1286,14 @@ fn add_grants(
                     ));
                 }
                 ExportKind::Proc(signature.clone())
+            } else if let Some(ty) = reach_vars.get(&name) {
+                if visibility.forbid.is_some() {
+                    return Err(Error::new(
+                        span,
+                        format!("FORBID requires a structure mode, not `{name}`"),
+                    ));
+                }
+                ExportKind::Var(*ty)
             } else {
                 return Err(Error::new(
                     span,
