@@ -2209,20 +2209,6 @@ fn reach_grant_prefix(
     }
 }
 
-fn single_reach_export<'a, 'e>(
-    name: &str,
-    exports: &'e [ReachExport<'a>],
-    span: Span,
-) -> Result<&'e ReachExport<'a>, Error> {
-    match exports {
-        [export] => Ok(export),
-        _ => Err(Error::new(
-            span,
-            format!("SEIZE `{name}` is ambiguous; several sibling modules grant it"),
-        )),
-    }
-}
-
 fn read_field(value: Value, field: &str, span: Span) -> Result<Value, Error> {
     let Value::Struct(fields) = value else {
         return Err(Error::new(span, "expected a structure value"));
