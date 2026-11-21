@@ -205,9 +205,8 @@ do not allocate or initialize anything.
 ## Piecewise compilation
 
 Remote contexts and remote modulions/specs are expanded during loading; see
-[piecewise.md](piecewise.md). Nested spec modules inside top-level spec modules and
-their virtual grants are implemented; nested specs inside contexts and spec regions
-remain.
+[piecewise.md](piecewise.md). Nested spec modules (including inside contexts and recursively) and their virtual
+grants are implemented; spec regions remain.
 
 ## Non-goals
 

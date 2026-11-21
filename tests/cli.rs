@@ -834,6 +834,108 @@ END Outer;
 }
 
 #[test]
+fn nested_spec_in_a_context_pairs_with_the_body_module() {
+    let dir = std::env::temp_dir().join(format!("z200-ctx-spec-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nested"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+CONTEXT
+  Inner: SPEC MODULE
+    DCL x INT;
+    GRANT x;
+  END Inner;
+FOR
+Outer: MODULE
+  Inner: MODULE
+    DCL x INT INIT := 1;
+  END Inner;
+  ASSERT x = 1;
+END Outer;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("run").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn nested_specs_are_checked_recursively() {
+    let dir = std::env::temp_dir().join(format!("z200-deep-spec-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nested"
+version = "0.1.0"
+edition = "z200-11/99"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+Outer: SPEC MODULE
+  Inner: SPEC MODULE
+    GRANT x;
+    Deep: SPEC MODULE
+      DCL x INT;
+      GRANT x;
+    END Deep;
+  END Inner;
+END Outer;
+
+Outer: MODULE
+  Inner: MODULE
+    Deep: MODULE
+      DCL x INT INIT := 1;
+    END Deep;
+  END Inner;
+  ASSERT x = 1;
+END Outer;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("run").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn nested_spec_interface_must_match_its_body() {
     let dir = std::env::temp_dir().join(format!("z200-nested-spec-bad-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

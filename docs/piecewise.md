@@ -1,10 +1,10 @@
 # Piecewise compilation (design)
 
-Status: **Phases 0–3 partially implemented.** Remote syntax, piece designators, manifest
-`[pieces]`, the resolver, expansion of remote modules/spec modules/program units, remote
-contexts, `CONTEXT MODULE REMOTE` desugaring, and nested spec modules inside top-level
-spec modules with virtual grants exist. Spec modules inside contexts, recursive nested
-specs, and regions remain. Regions are a separate prerequisite and are not implemented
+Status: **Phases 0–3 implemented, except spec regions.** Remote syntax, piece
+designators, manifest `[pieces]`, the resolver, expansion of remote modules/spec
+modules/program units, remote contexts, `CONTEXT MODULE REMOTE` desugaring, nested spec
+modules (including inside contexts and recursively), and virtual grants exist. Regions
+and spec regions remain; regions are a separate prerequisite and are not implemented
 yet.
 
 ## Normative model
@@ -264,17 +264,20 @@ Diagnostics should carry both the referencing span and the resolved piece path.
 Implemented:
 
 - `Declaration::SpecModule` parses `SPEC MODULE`/`MODULE SPEC` inside spec module
-  bodies, including a context list.
-- A top-level spec pairs its nested spec modules by name with direct nested body modules
-  in the corresponding body; interfaces are checked with the normal spec/body rules.
+  bodies and context bodies, including a context list.
+- Nested specs are collected from a module’s declarations **and its contexts**, then
+  paired by name with directly nested body modules.
+- Interfaces are checked with the normal spec/body rules, recursively through the nested
+  spec/body tree.
 - `program::apply_virtual_grants` copies nested-spec `GRANT`/`SEIZE` declarations into
-  the matching nested body before analysis, so they export into the parent reach.
+  the matching nested body before analysis, recursively, so they export into the parent
+  reach and can be re-granted upward.
 - Nested bodies with their own visibility statements are rejected when a nested spec
   exists.
-- Tests: nested spec parsing, virtual-grant execution, and nested interface mismatch.
+- Tests: nested spec parsing, context nested specs, recursive spec/body trees,
+  virtual-grant execution, and nested interface mismatch.
 
-Still to do: nested specs inside contexts, recursive nested spec trees, and nested spec
-regions (after regions exist).
+Still to do: spec regions (after regions exist).
 
 ### Phase 4 — Regions and spec regions
 
