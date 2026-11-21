@@ -11,10 +11,13 @@ Z.200 defines only `INT`; extra integer modes are single-identifier names such a
 including conversions (`LONG_INT(b)`). The non-standard two-word spellings and the bare
 `LONG` conversion have been removed from the example and from `AGENTS.md`.
 
-## 10.2 `int_widths` notation (resolved)
+## 10.2 Integer widths (resolved, revised)
 
-Three-number form `"16-32-64"` = `SHORT_INT-INT-LONG_INT`. The legacy two-number form
-`"32-64"` is read as `INT-LONG_INT`, with `SHORT_INT` = `INT`. See §4.3.
+Integer widths are fixed by the compiler (`SHORT_INT` = 16, `INT` = 32,
+`LONG_INT` = 64 on Linux), not configured per package. The old `[build] int_widths`
+manifest field and the width profile recorded in grant files were removed: width is a
+target/ABI property, so every package in a build shares it. See §4.2 of
+[subset.md](subset.md).
 
 ## 10.3 Harness output convention (resolved)
 

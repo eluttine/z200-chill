@@ -146,10 +146,9 @@ fn checks_against_dependency_grant_file() {
     std::fs::write(
         dir.join("lib.grt.toml"),
         r#"
-schema = 2
+schema = 3
 package = "lib"
 edition = "z200-11/99"
-int_widths = "16-32-64"
 
 [[exports]]
 name = "x"
@@ -174,7 +173,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 
 [dependencies]
 lib = "lib.grt.toml"
@@ -218,10 +216,9 @@ fn run_allows_unused_dependency() {
     std::fs::write(
         dir.join("lib.grt.toml"),
         r#"
-schema = 2
+schema = 3
 package = "lib"
 edition = "z200-11/99"
-int_widths = "16-32-64"
 
 [[exports]]
 name = "unused"
@@ -241,7 +238,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 
 [dependencies]
 lib = "lib.grt.toml"
@@ -286,7 +282,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 "#,
     )
     .unwrap();
@@ -346,7 +341,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 
 [dependencies]
 liblocal = "{grant_path}"
@@ -412,7 +406,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 
 [dependencies]
 modules = "{grant_path}"
@@ -462,7 +455,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 "#
             ),
         )
@@ -493,7 +485,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 
 [dependencies]
 one = "../one"
@@ -541,7 +532,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 "#,
     )
     .unwrap();
@@ -565,7 +555,7 @@ END A;
     );
     let grant_path = lib.join("target/z200c/structlib.grt.toml");
     let text = std::fs::read_to_string(&grant_path).unwrap();
-    assert!(text.contains("schema = 2"));
+    assert!(text.contains("schema = 3"));
     assert!(text.contains("[[modes]]"));
     assert!(text.contains("mode = \"structlib!A!S\""));
 
@@ -582,7 +572,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 
 [dependencies]
 structlib = "{}"

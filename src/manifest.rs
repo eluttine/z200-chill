@@ -54,55 +54,6 @@ impl Default for WidthProfile {
     }
 }
 
-impl WidthProfile {
-    /// Parse `INT-LONG` (legacy) or `SHORT-INT-LONG`.
-    pub fn parse(text: &str) -> Result<Self, String> {
-        let parts: Vec<&str> = text.split('-').map(str::trim).collect();
-        let mut widths = Vec::with_capacity(parts.len());
-
-        for part in parts {
-            if part.is_empty() {
-                return Err(format!("invalid int_widths `{text}`: empty width"));
-            }
-            let width: u16 = part.parse().map_err(|_| {
-                format!("invalid int_widths `{text}`: `{part}` is not an unsigned integer")
-            })?;
-            if width == 0 {
-                return Err(format!(
-                    "invalid int_widths `{text}`: widths must be positive"
-                ));
-            }
-            widths.push(width);
-        }
-
-        let profile = match widths.as_slice() {
-            [int, long] => Self {
-                short: *int,
-                int: *int,
-                long: *long,
-            },
-            [short, int, long] => Self {
-                short: *short,
-                int: *int,
-                long: *long,
-            },
-            _ => {
-                return Err(format!(
-                    "invalid int_widths `{text}`: expected `INT-LONG` or `SHORT-INT-LONG`"
-                ));
-            }
-        };
-
-        if !(profile.short <= profile.int && profile.int <= profile.long) {
-            return Err(format!(
-                "invalid int_widths `{text}`: require width(SHORT_INT) <= width(INT) <= width(LONG_INT)"
-            ));
-        }
-
-        Ok(profile)
-    }
-}
-
 impl fmt::Display for WidthProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}-{}-{}", self.short, self.int, self.long)
@@ -129,7 +80,6 @@ pub struct Package {
 pub struct Build {
     pub entry: PathBuf,
     pub sources: Vec<PathBuf>,
-    pub int_widths: WidthProfile,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,8 +104,6 @@ struct RawBuild {
     entry: String,
     #[serde(default)]
     sources: Vec<String>,
-    #[serde(default)]
-    int_widths: Option<String>,
 }
 
 impl Manifest {
@@ -180,10 +128,6 @@ impl Manifest {
         }
 
         let edition = Edition::parse(raw.package.edition.trim())?;
-        let int_widths = match raw.build.int_widths.as_deref() {
-            Some(text) => WidthProfile::parse(text)?,
-            None => WidthProfile::default(),
-        };
 
         let mut sources = Vec::with_capacity(raw.build.sources.len());
         for source in raw.build.sources {
@@ -229,7 +173,6 @@ impl Manifest {
             build: Build {
                 entry: PathBuf::from(raw.build.entry.trim()),
                 sources,
-                int_widths,
             },
             dependencies,
             pieces,
@@ -249,60 +192,7 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 "#;
-
-    #[test]
-    fn parses_three_widths() {
-        let manifest = Manifest::parse(MANIFEST).unwrap();
-        assert_eq!(manifest.package.name, "hello");
-        assert_eq!(manifest.package.edition, Edition::V1999);
-        assert_eq!(
-            manifest.build.int_widths,
-            WidthProfile {
-                short: 16,
-                int: 32,
-                long: 64
-            }
-        );
-        assert_eq!(manifest.build.entry, PathBuf::from("src/main.ch"));
-    }
-
-    #[test]
-    fn legacy_two_widths_reuse_int_for_short() {
-        let text = MANIFEST.replace("16-32-64", "32-64");
-        let manifest = Manifest::parse(&text).unwrap();
-        assert_eq!(
-            manifest.build.int_widths,
-            WidthProfile {
-                short: 32,
-                int: 32,
-                long: 64
-            }
-        );
-    }
-
-    #[test]
-    fn widths_must_be_ordered() {
-        let text = MANIFEST.replace("16-32-64", "64-32-16");
-        let err = Manifest::parse(&text).unwrap_err();
-        assert!(err.contains("width(SHORT_INT) <= width(INT) <= width(LONG_INT)"));
-    }
-
-    #[test]
-    fn missing_widths_uses_default() {
-        let text = r#"
-[package]
-name = "hello"
-version = "0.1.0"
-edition = "z200-11/99"
-
-[build]
-entry = "src/main.ch"
-"#;
-        let manifest = Manifest::parse(text).unwrap();
-        assert_eq!(manifest.build.int_widths, WidthProfile::default());
-    }
 
     #[test]
     fn rejects_unknown_edition() {

@@ -4,7 +4,7 @@ use crate::program::{self, ExportInfo, ExportInfoKind};
 use crate::types::{self, Type};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA: u32 = 2;
+pub const SCHEMA: u32 = 3;
 
 /// A compiled interface artifact for a package. It records the names the
 /// package exports so another compilation unit can later resolve `SEIZE`.
@@ -17,7 +17,6 @@ pub struct GrantFile {
     pub schema: u32,
     pub package: String,
     pub edition: String,
-    pub int_widths: String,
     /// Optional absolute path to the source package. `run` uses it to link
     /// grant-file dependencies when the source is available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -164,7 +163,6 @@ impl GrantFile {
             schema: SCHEMA,
             package: manifest.package.name.clone(),
             edition: manifest.package.edition.as_str().to_owned(),
-            int_widths: manifest.build.int_widths.to_string(),
             package_dir: None,
             modes,
             exports: entries,
@@ -339,7 +337,6 @@ mod tests {
         assert_eq!(grant.schema, SCHEMA);
         assert_eq!(grant.package, "modules");
         assert_eq!(grant.edition, "z200-11/99");
-        assert_eq!(grant.int_widths, "16-32-64");
         assert_eq!(grant.exports.len(), 2);
 
         let bump = grant.exports.iter().find(|e| e.name == "Bump").unwrap();
@@ -365,7 +362,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 "#,
         )
         .unwrap();
@@ -410,7 +406,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 "#,
         )
         .unwrap();
@@ -477,7 +472,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 "#,
         )
         .unwrap();
@@ -513,7 +507,7 @@ END A;
         assert_eq!(export.friends, vec!["B".to_owned()]);
 
         let text = grant.to_toml().unwrap();
-        assert!(text.contains("schema = 2"));
+        assert!(text.contains("schema = 3"));
         assert!(text.contains("[[modes]]"));
 
         let interface = grant.to_interface().unwrap();
@@ -546,7 +540,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
 "#,
         )
         .unwrap();
@@ -584,7 +577,6 @@ END M;
 schema = 999
 package = "x"
 edition = "z200-11/99"
-int_widths = "16-32-64"
 exports = []
 "#;
         let error = GrantFile::from_toml(text).unwrap_err();

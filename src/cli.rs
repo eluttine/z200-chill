@@ -3,7 +3,7 @@ use crate::diagnostics;
 use crate::grant;
 use crate::interp;
 use crate::lexer;
-use crate::manifest::{Manifest, WidthProfile};
+use crate::manifest::Manifest;
 use crate::parser;
 use crate::program;
 use crate::sema;
@@ -91,7 +91,7 @@ fn grant_impl(target: &Path) -> Result<PathBuf, String> {
 
     let diagnostics = sema::check_all_with_externals(
         &package.program,
-        package.manifest.build.int_widths,
+        crate::manifest::WidthProfile::default(),
         &package.external,
     );
     if !diagnostics.is_empty() {
@@ -138,7 +138,7 @@ fn check_impl(target: &Path) -> Result<String, String> {
 
     let diagnostics = sema::check_all_with_externals(
         &package.program,
-        package.manifest.build.int_widths,
+        crate::manifest::WidthProfile::default(),
         &package.external,
     );
     if !diagnostics.is_empty() {
@@ -149,7 +149,7 @@ fn check_impl(target: &Path) -> Result<String, String> {
         "checked {} (edition {}, widths {})\n  {}: {} tokens, {} module(s)",
         package.manifest.package.name,
         package.manifest.package.edition,
-        package.manifest.build.int_widths,
+        crate::manifest::WidthProfile::default(),
         package.entry_path.display(),
         package.token_count,
         package.program.modules.len()
@@ -161,7 +161,7 @@ fn run_impl(target: &Path) -> Result<(), String> {
 
     let check = sema::analyze_with_externals(
         &package.program,
-        package.manifest.build.int_widths,
+        crate::manifest::WidthProfile::default(),
         &package.external,
     );
     if !check.diagnostics.is_empty() {
@@ -170,7 +170,7 @@ fn run_impl(target: &Path) -> Result<(), String> {
 
     interp::run_checked(
         &package.program,
-        package.manifest.build.int_widths,
+        crate::manifest::WidthProfile::default(),
         &check,
         &package.external,
     )
@@ -204,7 +204,6 @@ struct Loader {
     next_package: usize,
     link_grant_sources: bool,
     root_edition: crate::manifest::Edition,
-    root_widths: WidthProfile,
 }
 
 fn load_package(target: &Path, link_grant_sources: bool) -> Result<LoadedPackage, String> {
@@ -231,7 +230,6 @@ fn load_package(target: &Path, link_grant_sources: bool) -> Result<LoadedPackage
         next_package: 0,
         link_grant_sources,
         root_edition: manifest.package.edition,
-        root_widths: manifest.build.int_widths,
     };
     loader.load_package(&manifest_path)?;
 
@@ -282,14 +280,6 @@ impl Loader {
                 manifest_path.display(),
                 manifest.package.edition,
                 self.root_edition
-            ));
-        }
-        if manifest.build.int_widths != self.root_widths {
-            return Err(format!(
-                "error[E0600]: {} uses int_widths {}, expected {}",
-                manifest_path.display(),
-                manifest.build.int_widths,
-                self.root_widths
             ));
         }
 
@@ -683,14 +673,6 @@ impl Loader {
             return Err(format!(
                 "error[E0600]: dependency `{name}` uses edition {}, expected {}",
                 grant_file.edition, self.root_edition
-            ));
-        }
-        let dependency_widths = WidthProfile::parse(&grant_file.int_widths)
-            .map_err(|error| format!("error[E0600]: dependency `{name}`: {error}"))?;
-        if dependency_widths != self.root_widths {
-            return Err(format!(
-                "error[E0600]: dependency `{name}` uses int_widths {}, expected {}",
-                dependency_widths, self.root_widths
             ));
         }
 

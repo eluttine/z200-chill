@@ -17,7 +17,7 @@ Prioritize clarity, deterministic behavior, and small, verifiable changes over c
 ## Core Architectural Principles
 1. **Separate frontend, IR/lowering, and backend:** Keep lexing, parsing, AST construction, and mode/type checking decoupled from target code generation or runtime details.
 2. **Respect CHILL's module & visibility model:** Model `MODULE`, `SPEC`, `GRANT`, and `SEIZE` explicitly in the AST/symbol table; mangle or namespace symbols internally so multi-module and multi-package builds do not collide.
-3. **Configurable integer widths (`SHORT_INT` / `INT` / `LONG_INT`):** Default to `16`, `32`, and `64` bits on Linux, with support for configurable profiles (such as `8-16-32` or `16-32-64`) while enforcing `width(SHORT_INT) <= width(INT) <= width(LONG_INT)` and including the active profile in build cache keys. These mode names follow Z.200's implementation-defined integer mode convention; `INT` is the only integer mode predefined by the standard.
+3. **Fixed integer widths (`SHORT_INT` / `INT` / `LONG_INT`):** Use `16`, `32`, and `64` bits on Linux, enforcing `width(SHORT_INT) <= width(INT) <= width(LONG_INT)`. Widths are a target/toolchain property, not per-package configuration. These mode names follow Z.200's implementation-defined integer mode convention; `INT` is the only integer mode predefined by the standard.
 4. **Incremental, explicit scope:** Support a well-defined CHILL subset first (modes, declarations, expressions, control flow, procedures, modules) before adding full concurrency, timers, or exotic Z.200 features.
 5. **Isolate runtime & target semantics:** Keep CHILL-specific semantics (processes, signals, timers, exceptions, range/overflow checks) in clean runtime helpers and explicit lowering rules rather than ad-hoc hacks.
 

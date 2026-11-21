@@ -10,8 +10,6 @@ edition = "z200-11/99"
 
 [build]
 entry = "src/main.ch"
-int_widths = "16-32-64"
-
 [dependencies]
 lib = "../lib/target/z200c/lib.grt.toml"
 
@@ -32,8 +30,6 @@ counter = "pieces/counter.ch"
 - `sources` — additional CHILL source files, compiled in listed order before the
   entry. Modules from all files are siblings in the program, so `GRANT`/`SEIZE` works
   across them.
-- `int_widths` — integer width profile, `SHORT_INT-INT-LONG_INT` or the legacy
-  `INT-LONG_INT` form. Defaults to `16-32-64`.
 
 ```toml
 [build]
@@ -48,19 +44,14 @@ package-relative paths. Literal designators (`REMOTE "pieces/a.ch";`) do not nee
 entry; empty designators resolve to `pieces/<unit-name>.ch`. See
 [piecewise.md](piecewise.md).
 
-## Integer width profiles
+## Integer widths
 
-The full rules live in [subset.md](subset.md), but the manifest-relevant parts are:
-
-### Profile
-
-The project wants configurable widths with this invariant:
+Integer widths are not manifest configuration. The compiler fixes signed
+two's-complement widths with this invariant:
 
 ```text
 width(SHORT_INT) <= width(INT) <= width(LONG_INT)
 ```
-
-and signed two's-complement ranges:
 
 | Mode        | Width *n* | Range |
 |-------------|-----------|-------|
@@ -68,21 +59,9 @@ and signed two's-complement ranges:
 | `INT`       | *i*       | −2^(i−1) … 2^(i−1)−1 |
 | `LONG_INT`  | *l*       | −2^(l−1) … 2^(l−1)−1 |
 
-Default Linux profile: `SHORT_INT` = 16, `INT` = 32, `LONG_INT` = 64.
-The active profile must be part of the build-cache key (per `AGENTS.md`).
-
-### Notation
-
-Chosen format (A): a three-number form
-
-```toml
-int_widths = "16-32-64"   # SHORT_INT-INT-LONG_INT
-```
-
-The two-number legacy form `"32-64"` is read as `INT-LONG_INT`, with `SHORT_INT`
-defaulting to `INT`; this is documented, never silent. Profiles must satisfy the
-containment invariant, and any violation is a manifest error.
-
+Integer widths are fixed by the compiler: `SHORT_INT` = 16, `INT` = 32,
+`LONG_INT` = 64. They are not per-package configuration; all packages in a build share
+the same target profile.
 
 ## `[dependencies]`
 
@@ -105,8 +84,7 @@ lib = "../lib/target/z200c/lib.grt.toml"         # interface-only dependency
   check/build-only, and `run` rejects a seized external name from them.
 - Directory dependencies are loaded once; cycles and duplicate package loads are
   detected.
-- The dependency's `edition` must match, and its `int_widths` must parse to the same
-  `WidthProfile` (equivalent spellings are accepted).
+- The dependency's `edition` must match.
 - Exported simple names may repeat across modules/packages. An unqualified `SEIZE name`
   is then ambiguous; use `Module!name` or `package!Module!name`. `GRANT ... TO ...`
   restricts visibility to named friend modules.

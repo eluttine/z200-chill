@@ -201,27 +201,16 @@ Z.200 does **not** require `SHORT_INT` to be narrower than `INT`, nor `INT` narr
 
 ### 4.2 z200-chill profile (project rule)
 
-The project wants configurable widths with this invariant:
-
-```text
-width(SHORT_INT) <= width(INT) <= width(LONG_INT)
-```
-
-and signed two's-complement ranges:
+`z200c` fixes the Linux profile:
 
 | Mode        | Width *n* | Range |
 |-------------|-----------|-------|
-| `SHORT_INT` | *s*       | −2^(s−1) … 2^(s−1)−1 |
-| `INT`       | *i*       | −2^(i−1) … 2^(i−1)−1 |
-| `LONG_INT`  | *l*       | −2^(l−1) … 2^(l−1)−1 |
+| `SHORT_INT` | *s* = 16  | −2^(s−1) … 2^(s−1)−1 |
+| `INT`       | *i* = 32  | −2^(i−1) … 2^(i−1)−1 |
+| `LONG_INT`  | *l* = 64  | −2^(l−1) … 2^(l−1)−1 |
 
-Default Linux profile: `SHORT_INT` = 16, `INT` = 32, `LONG_INT` = 64.
-The active profile must be part of the build-cache key (per `AGENTS.md`).
-
-### 4.3 Manifest notation
-
-The `int_widths` syntax and the full manifest schema are documented in
-[manifest.md](manifest.md).
+Integer widths are a target/toolchain property, not a package manifest setting. The
+invariant `width(SHORT_INT) <= width(INT) <= width(LONG_INT)` holds by construction.
 
 ### 4.4 Runtime checks
 

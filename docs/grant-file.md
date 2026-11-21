@@ -89,10 +89,9 @@ construct: the standard defines `GRANT`/`SEIZE` semantics (§12.2.3.4–12.2.3.5
 interchange format. The file must preserve those semantics, but its encoding is ours.
 
 ```toml
-schema = 2
+schema = 3
 package = "spec"
 edition = "z200-11/99"
-int_widths = "16-32-64"
 package_dir = "/absolute/path/to/spec"
 
 [[modes]]
@@ -134,7 +133,7 @@ resolved, even if a nested mode is not granted itself. `forbid` is per grant, ma
 `GRANT ... FORBID ...`.
 
 Schema changes are breaking while the project is early: `z200c` accepts exactly
-`schema = 2` and does not read older layouts.
+`schema = 3` and does not read older layouts.
 
 `package_dir` is optional. `z200c grant` records the source package directory so `run`
 can link the dependency when the source is available; interface-only grant files omit it
@@ -153,7 +152,8 @@ lib = "../lib/target/z200c/lib.grt.toml"
   interface-only.
 - Directory dependencies are loaded recursively, their modules run first, and their
   exports are available to `SEIZE` without grant files.
-- The dependency's `edition` and `int_widths` must match the consuming package.
+- The dependency's `edition` must match the consuming package. Integer widths are
+  fixed by the compiler, so no width compatibility check is needed.
 - Exported simple names may repeat; use `Module!name`, `package!Module!name`, or a
   granted prefix to disambiguate.
 - `z200c check` and `z200c grant` resolve `SEIZE` against both forms.
