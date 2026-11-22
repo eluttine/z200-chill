@@ -364,6 +364,10 @@ impl Loader {
         package: usize,
         package_name: &str,
     ) -> Result<Vec<crate::ast::Module>, String> {
+        let program = crate::program::normalize(&program).map_err(|error| {
+            self.source_map
+                .format_diagnostic(error.code, error.span, &error.message)
+        })?;
         let mut modules = program.modules;
         for module in &mut modules {
             self.expand_module_contexts(module, containing, package)?;
