@@ -270,12 +270,41 @@ pub fn run_checked(
                     priority,
                     deadline,
                 } => {
+                    let entry = runnable.entry;
+                    let waiter = EventWaiter {
+                        id: entry.id,
+                        priority,
+                        deadline,
+                        slot: Rc::new(RefCell::new(Some(entry))),
+                    };
                     scheduler
                         .borrow_mut()
-                        .waiting
+                        .event_waiters
                         .entry(event)
                         .or_default()
-                        .push((priority, deadline, runnable.entry));
+                        .push(waiter);
+                }
+                ProcessYield::DelayCase {
+                    events,
+                    priority,
+                    deadline,
+                } => {
+                    let entry = runnable.entry;
+                    let id = entry.id;
+                    let slot = Rc::new(RefCell::new(Some(entry)));
+                    let mut state = scheduler.borrow_mut();
+                    for event in events {
+                        state
+                            .event_waiters
+                            .entry(event)
+                            .or_default()
+                            .push(EventWaiter {
+                                id,
+                                priority,
+                                deadline,
+                                slot: Rc::clone(&slot),
+                            });
+                    }
                 }
                 ProcessYield::Receive { signals, deadline } => {
                     let entry = runnable.entry;
@@ -308,9 +337,9 @@ pub fn run_checked(
     CURRENT_YIELDER.with(|slot| slot.set(std::ptr::null()));
     if scheduler
         .borrow()
-        .waiting
+        .event_waiters
         .values()
-        .any(|waiting| !waiting.is_empty())
+        .any(|waiting| waiting.iter().any(|waiter| waiter.slot.borrow().is_some()))
         || scheduler
             .borrow()
             .receivers
@@ -438,6 +467,11 @@ enum ProcessYield {
         signals: Vec<ReceiverSignal>,
         deadline: Option<Instant>,
     },
+    DelayCase {
+        events: Vec<usize>,
+        priority: i128,
+        deadline: Option<Instant>,
+    },
     AcquireRegion {
         region: usize,
     },
@@ -452,11 +486,19 @@ struct ReceiverSignal {
 enum ProcessInput {
     None,
     Timeout,
+    Delay { event: usize },
     Signal { name: String, values: Vec<Value> },
 }
 
 type ProcessCoroutine = Coroutine<ProcessInput, ProcessYield, Result<(), Error>, DefaultStack>;
 type ReceiverSlot = Rc<RefCell<Option<ProcessEntry>>>;
+
+struct EventWaiter {
+    id: usize,
+    priority: i128,
+    deadline: Option<Instant>,
+    slot: ReceiverSlot,
+}
 
 struct ProcessEntry {
     id: usize,
@@ -473,7 +515,7 @@ struct Runnable {
 struct ScheduleState {
     next_process_id: usize,
     ready: VecDeque<Runnable>,
-    waiting: HashMap<usize, Vec<(i128, Option<Instant>, ProcessEntry)>>,
+    event_waiters: HashMap<usize, Vec<EventWaiter>>,
     signals: HashMap<String, VecDeque<Vec<Value>>>,
     receivers: HashMap<String, Vec<(usize, ReceiverSlot, Option<Instant>)>>,
     region_owner: HashMap<usize, usize>,
@@ -538,6 +580,30 @@ fn cooperative_acquire_region(region: usize) -> Result<(), Error> {
     })
 }
 
+fn cooperative_delay_case(
+    events: Vec<usize>,
+    priority: i128,
+    deadline: Option<Instant>,
+) -> Result<ProcessInput, Error> {
+    CURRENT_YIELDER.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            return Err(Error::coded(
+                "E0500",
+                Span::new(SourceId(0), 0, 0),
+                "DELAY CASE is only valid inside a process",
+            ));
+        }
+        Ok(unsafe {
+            (*ptr).suspend(ProcessYield::DelayCase {
+                events,
+                priority,
+                deadline,
+            })
+        })
+    })
+}
+
 fn cooperative_receive(
     signals: Vec<String>,
     deadline: Option<Instant>,
@@ -566,9 +632,9 @@ fn cooperative_receive(
 fn next_timed_deadline(scheduler: &Rc<RefCell<ScheduleState>>) -> Option<Instant> {
     let state = scheduler.borrow();
     let waiting_deadline = state
-        .waiting
+        .event_waiters
         .values()
-        .flat_map(|waiting| waiting.iter().filter_map(|(_, deadline, _)| *deadline))
+        .flat_map(|waiting| waiting.iter().filter_map(|waiter| waiter.deadline))
         .min();
     let receiver_deadline = state
         .receivers
@@ -588,20 +654,34 @@ fn expire_timed_waiters(scheduler: &Rc<RefCell<ScheduleState>>) {
     let mut expired_ids = Vec::new();
     let mut state = scheduler.borrow_mut();
 
-    for waiting in state.waiting.values_mut() {
+    for waiting in state.event_waiters.values_mut() {
         let mut index = 0;
         while index < waiting.len() {
-            let expired_entry = waiting[index].1.is_some_and(|deadline| deadline <= now);
+            let expired_entry = waiting[index]
+                .deadline
+                .is_some_and(|deadline| deadline <= now)
+                && waiting[index].slot.borrow().is_some();
             if expired_entry {
-                let (_, _, entry) = waiting.remove(index);
-                expired.push(Runnable {
-                    input: ProcessInput::Timeout,
-                    entry,
-                });
+                let id = waiting[index].id;
+                let entry = waiting[index].slot.borrow_mut().take();
+                waiting.remove(index);
+                if !expired_ids.contains(&id) {
+                    expired_ids.push(id);
+                }
+                if let Some(entry) = entry {
+                    expired.push(Runnable {
+                        input: ProcessInput::Timeout,
+                        entry,
+                    });
+                }
             } else {
                 index += 1;
             }
         }
+    }
+    for waiting in state.event_waiters.values_mut() {
+        waiting
+            .retain(|waiter| !expired_ids.contains(&waiter.id) || waiter.slot.borrow().is_some());
     }
 
     for receivers in state.receivers.values_mut() {
@@ -1303,6 +1383,90 @@ impl<'a> Interpreter<'a> {
                 ir::Stmt::Call { call, .. } => {
                     self.eval_ir(call)?;
                 }
+                ir::Stmt::DelayCase {
+                    alternatives,
+                    priority,
+                    span,
+                } => {
+                    let priority = match priority {
+                        Some(priority) => {
+                            let value = self.eval_ir(priority)?;
+                            let (priority, _) = self.expect_int(value, priority.span())?;
+                            if priority < 0 {
+                                return Err(Error::coded(
+                                    "E0500",
+                                    *span,
+                                    "DELAY CASE priority must be non-negative",
+                                ));
+                            }
+                            priority
+                        }
+                        None => 0,
+                    };
+                    let mut all_events = Vec::new();
+                    let mut alternative_events = Vec::with_capacity(alternatives.len());
+                    for alternative in alternatives {
+                        let mut events = Vec::with_capacity(alternative.events.len());
+                        for event in &alternative.events {
+                            let (key, length) = self.event_location(event, *span)?;
+                            let count = self
+                                .scheduler
+                                .borrow()
+                                .event_waiters
+                                .get(&key)
+                                .map(|waiters| {
+                                    waiters
+                                        .iter()
+                                        .filter(|waiter| waiter.slot.borrow().is_some())
+                                        .count()
+                                })
+                                .unwrap_or(0);
+                            if let Some(length) = length {
+                                if count >= length {
+                                    return Err(Error::exception(
+                                        "DELAYFAIL",
+                                        *span,
+                                        "DELAYFAIL: event length exceeded",
+                                    ));
+                                }
+                            }
+                            events.push(key);
+                            all_events.push(key);
+                        }
+                        alternative_events.push(events);
+                    }
+                    all_events.sort_unstable();
+                    all_events.dedup();
+                    let input = cooperative_delay_case(all_events, priority, self.deadline)?;
+                    match input {
+                        ProcessInput::Timeout => return Ok(Flow::Timeout),
+                        ProcessInput::Delay { event } => {
+                            let alternative = alternatives
+                                .iter()
+                                .zip(&alternative_events)
+                                .find(|(_, events)| events.contains(&event))
+                                .map(|(alternative, _)| alternative)
+                                .ok_or_else(|| {
+                                    Error::coded(
+                                        "E0500",
+                                        *span,
+                                        "internal: DELAY CASE woke on an unknown event",
+                                    )
+                                })?;
+                            let flow = self.exec_stmts(&alternative.actions, frame)?;
+                            if !matches!(flow, Flow::Normal) {
+                                return Ok(flow);
+                            }
+                        }
+                        _ => {
+                            return Err(Error::coded(
+                                "E0500",
+                                *span,
+                                "internal: DELAY CASE resumed unexpectedly",
+                            ))
+                        }
+                    }
+                }
                 ir::Stmt::Timing {
                     duration,
                     body,
@@ -1360,9 +1524,14 @@ impl<'a> Interpreter<'a> {
                     let count = self
                         .scheduler
                         .borrow()
-                        .waiting
+                        .event_waiters
                         .get(&key)
-                        .map(Vec::len)
+                        .map(|waiters| {
+                            waiters
+                                .iter()
+                                .filter(|waiter| waiter.slot.borrow().is_some())
+                                .count()
+                        })
                         .unwrap_or(0);
                     if let Some(length) = length {
                         if count >= length {
@@ -1373,31 +1542,47 @@ impl<'a> Interpreter<'a> {
                             ));
                         }
                     }
-                    if matches!(
-                        cooperative_delay(key, priority, self.deadline)?,
-                        ProcessInput::Timeout
-                    ) {
-                        return Ok(Flow::Timeout);
+                    match cooperative_delay(key, priority, self.deadline)? {
+                        ProcessInput::Timeout => return Ok(Flow::Timeout),
+                        ProcessInput::Delay { .. } | ProcessInput::None => {}
+                        ProcessInput::Signal { .. } => {
+                            return Err(Error::coded(
+                                "E0500",
+                                *span,
+                                "internal: DELAY resumed with a signal",
+                            ))
+                        }
                     }
                 }
                 ir::Stmt::Continue { event, span } => {
                     let (key, _) = self.event_location(event, *span)?;
                     let mut scheduler = self.scheduler.borrow_mut();
-                    let Some(waiting) = scheduler.waiting.get_mut(&key) else {
+                    let Some(waiting) = scheduler.event_waiters.get_mut(&key) else {
                         continue;
                     };
-                    if waiting.is_empty() {
-                        continue;
-                    }
-                    let mut best = 0;
-                    for index in 1..waiting.len() {
-                        if waiting[index].0 > waiting[best].0 {
-                            best = index;
+                    let mut best = None;
+                    for (index, waiter) in waiting.iter().enumerate() {
+                        if waiter.slot.borrow().is_some()
+                            && best
+                                .map(|best: usize| waiter.priority > waiting[best].priority)
+                                .unwrap_or(true)
+                        {
+                            best = Some(index);
                         }
                     }
-                    let (_, _, entry) = waiting.remove(best);
+                    let Some(best) = best else {
+                        continue;
+                    };
+                    let id = waiting[best].id;
+                    let entry = waiting[best].slot.borrow_mut().take();
+                    let Some(entry) = entry else {
+                        continue;
+                    };
+                    for waiters in scheduler.event_waiters.values_mut() {
+                        waiters.retain(|waiter| waiter.id != id);
+                    }
                     scheduler.ready.push_back(Runnable {
-                        input: ProcessInput::None,
+                        input: ProcessInput::Delay { event: key },
                         entry,
                     });
                 }
@@ -1483,7 +1668,7 @@ impl<'a> Interpreter<'a> {
                         match cooperative_receive(names, self.deadline)? {
                             ProcessInput::Signal { name, values } => (name, values),
                             ProcessInput::Timeout => return Ok(Flow::Timeout),
-                            ProcessInput::None => {
+                            ProcessInput::Delay { .. } | ProcessInput::None => {
                                 return Err(Error::coded(
                                     "E0500",
                                     *span,

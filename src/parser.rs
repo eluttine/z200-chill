@@ -1822,6 +1822,67 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Keyword(Keyword::Delay)) => {
                 let start = self.current_span();
                 self.advance();
+                if self.at_keyword(Keyword::Case) {
+                    self.advance();
+                    if self.at_keyword(Keyword::Set) {
+                        return Err(self.error_here_code(
+                            "E0205",
+                            "DELAY CASE SET instance locations are not implemented yet",
+                        ));
+                    }
+                    let priority = if self.at_keyword(Keyword::Priority) {
+                        self.advance();
+                        let value = self.parse_expr()?;
+                        self.expect_semicolon()?;
+                        Some(value)
+                    } else {
+                        None
+                    };
+                    let mut alternatives = Vec::new();
+                    while self.at_lparen() {
+                        let alt_start = self.current_span();
+                        self.advance();
+                        let mut events = Vec::new();
+                        loop {
+                            let (event, _) = self.expect_identifier()?;
+                            events.push(event);
+                            if self.at_comma() {
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                        self.expect_rparen()?;
+                        self.expect_colon()?;
+                        let mut actions = Vec::new();
+                        while !self.at_lparen() && !self.at_keyword(Keyword::Esac) && !self.at_end()
+                        {
+                            actions.push(self.parse_action()?);
+                        }
+                        alternatives.push(DelayAlternative {
+                            events,
+                            actions,
+                            span: Span::new(
+                                self.source,
+                                alt_start.start,
+                                self.current_span().start,
+                            ),
+                        });
+                    }
+                    if alternatives.is_empty() {
+                        return Err(self.error_here_code(
+                            "E0205",
+                            "DELAY CASE requires at least one alternative",
+                        ));
+                    }
+                    self.expect_keyword(Keyword::Esac)?;
+                    let end = self.expect_semicolon()?;
+                    return Ok(Action::DelayCase {
+                        alternatives,
+                        priority,
+                        span: Span::new(self.source, start.start, end.end),
+                    });
+                }
                 let (event, _) = self.expect_identifier()?;
                 let priority = if self.at_keyword(Keyword::Priority) {
                     self.advance();

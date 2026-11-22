@@ -359,6 +359,11 @@ pub enum Stmt {
         else_actions: Option<Vec<Stmt>>,
         span: Span,
     },
+    DelayCase {
+        alternatives: Vec<DelayAlternativeIr>,
+        priority: Option<Node>,
+        span: Span,
+    },
     Timing {
         duration: Node,
         body: Vec<Stmt>,
@@ -438,6 +443,13 @@ pub struct BranchIr {
 pub struct CaseAlternativeIr {
     pub labels: Vec<CaseLabel>,
     pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct DelayAlternativeIr {
+    pub events: Vec<String>,
+    pub actions: Vec<Stmt>,
     pub span: Span,
 }
 
@@ -695,6 +707,27 @@ impl Lowerer<'_> {
                     .iter()
                     .map(|value| self.lower_expr(value))
                     .collect::<Result<Vec<_>, _>>()?,
+                span: *span,
+            }),
+            Action::DelayCase {
+                alternatives,
+                priority,
+                span,
+            } => Ok(Stmt::DelayCase {
+                alternatives: alternatives
+                    .iter()
+                    .map(|alternative| {
+                        Ok(DelayAlternativeIr {
+                            events: alternative.events.clone(),
+                            actions: self.lower_actions(&alternative.actions)?,
+                            span: alternative.span,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?,
+                priority: priority
+                    .as_ref()
+                    .map(|value| self.lower_expr(value))
+                    .transpose()?,
                 span: *span,
             }),
             Action::Timing {

@@ -40,9 +40,10 @@ Current scope includes:
 - procedures and calls (`IN`, `OUT`, `INOUT`, and `LOC` parameters, `RETURNS`,
   `RESULT`/`RETURN`);
 - modules, nested modulions, `GRANT`/`SEIZE`, specs, contexts, regions, remote pieces;
-- `PROCESS` definitions, `START`, `STOP`, `EVENT`, `DELAY`, `CONTINUE`, `SIGNAL`,
-  `SEND`, `RECEIVE CASE`, region-call mutual exclusion, and cooperative round-robin
-  process scheduling at action boundaries;
+- `PROCESS` definitions, `START`, `STOP`, `EVENT`, `DELAY`, `DELAY CASE`,
+  `CONTINUE`, `SIGNAL`, `SEND`, `RECEIVE CASE`, relative timing actions,
+  region-call mutual exclusion, and cooperative round-robin process scheduling at
+  action boundaries;
 - arrays including slices, multidimensional arrays, literals, and arrays of structures;
 - `REF`/`PTR`/`ROW` modes, `NULL`, `ALLOCATE`/`GETSTACK`/`TERMINATE`, and
   dereferencing;
@@ -53,7 +54,7 @@ Current scope includes:
 
 Explicitly **deferred**:
 
-- absolute/cyclic timing actions and `DELAY CASE`;
+- absolute/cyclic timing actions;
 - signal `TO` targeting, receive `SET` instance locations, buffer modes, process
   instances/`THIS`, process handlers, process `LOC`/`OUT`/`INOUT` parameters,
   region object/task modes, and priority scheduling;

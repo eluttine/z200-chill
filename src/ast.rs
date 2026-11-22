@@ -367,6 +367,13 @@ pub struct ProcDef {
 }
 
 #[derive(Debug, Clone)]
+pub struct DelayAlternative {
+    pub events: Vec<String>,
+    pub actions: Vec<Action>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct ReceiveAlternative {
     pub signal: String,
     pub bindings: Vec<String>,
@@ -417,6 +424,11 @@ pub enum Action {
     ReceiveCase {
         alternatives: Vec<ReceiveAlternative>,
         else_actions: Option<Vec<Action>>,
+        span: Span,
+    },
+    DelayCase {
+        alternatives: Vec<DelayAlternative>,
+        priority: Option<Expr>,
         span: Span,
     },
     Timing {
@@ -689,6 +701,7 @@ impl Action {
             | Self::Send { span, .. }
             | Self::ReceiveCase { span, .. }
             | Self::Timing { span, .. }
+            | Self::DelayCase { span, .. }
             | Self::Return { span, .. }
             | Self::Result { span, .. }
             | Self::If { span, .. }

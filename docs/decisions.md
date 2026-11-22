@@ -172,8 +172,8 @@ processes, yielding at action boundaries:
 - events, `DELAY`, `CONTINUE`, signals, and region-call mutual exclusion are
   executed by the cooperative scheduler;
 - relative timing actions and duration values are executed;
-- absolute/cyclic timing actions, delay cases, buffers, and region object/task modes
-  are not yet executed faithfully;
+- absolute/cyclic timing actions, buffers, and region object/task modes are not yet
+  executed faithfully;
 - no resumable continuation or scheduler is required for the first release.
 
 Faithful CHILL concurrency needs an explicit execution-state machine or async runtime

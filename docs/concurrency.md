@@ -20,6 +20,8 @@
   current owner releases the region.
 - Region locks are reentrant for the owning process and queued calls resume FIFO.
 - `DURATION` values and `MILLISECS`, `SECS`, `MINUTES`, `HOURS`, `DAYS` built-ins.
+- `DELAY CASE (event, ...): actions ... ESAC`, including priority and timeout
+  cancellation when nested in a relative timing action.
 - Relative timing actions:
   `AFTER duration [DELAY] IN actions TIMEOUT actions END`.
 - Timers are checked when a process blocks in `DELAY` or `RECEIVE CASE`; expiry
@@ -42,7 +44,7 @@
 ## Not implemented yet
 
 - `AT` absolute timing actions and `CYCLE` periodic timing actions.
-- `DELAY CASE` and timeout supervision for region calls.
+- timeout supervision for region calls.
 - `SEND ... TO` process targeting and process instance values.
 - `RECEIVE CASE SET` instance locations.
 - signal priorities.

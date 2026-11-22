@@ -2047,6 +2047,53 @@ impl Checker {
                 }
                 Ok(())
             }
+            Action::DelayCase {
+                alternatives,
+                priority,
+                span,
+            } => {
+                if let Some(priority) = priority {
+                    let ty = self.check_expr(priority)?;
+                    if !ty.is_int() {
+                        return Err(Error::coded(
+                            "E0400",
+                            priority.span(),
+                            "PRIORITY requires an integer expression",
+                        ));
+                    }
+                }
+                for alternative in alternatives {
+                    if alternative.events.is_empty() {
+                        return Err(Error::coded(
+                            "E0400",
+                            alternative.span,
+                            "DELAY CASE alternative requires at least one event",
+                        ));
+                    }
+                    for event in &alternative.events {
+                        let ty = self.lookup_var(event).ok_or_else(|| {
+                            Error::coded(
+                                "E0403",
+                                alternative.span,
+                                format!("unknown event `{event}`"),
+                            )
+                        })?;
+                        if !matches!(ty, Type::Event { .. }) {
+                            return Err(Error::coded(
+                                "E0400",
+                                alternative.span,
+                                format!(
+                                    "DELAY CASE requires EVENT locations, found {}",
+                                    ty.describe()
+                                ),
+                            ));
+                        }
+                    }
+                    self.check_actions(&alternative.actions)?;
+                }
+                let _ = span;
+                Ok(())
+            }
             Action::Timing {
                 duration,
                 delay,
