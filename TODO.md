@@ -161,4 +161,5 @@ deferred.
       interpreter error-construction sites.
 - [x] Reduce repeated temp-dir setup in CLI tests with a `TempDir` fixture that
       creates sources and cleans up on drop.
-- [ ] Reconcile docs status matrices with the implementation.
+- [x] Reconcile docs status matrices with the implementation (subset scope,
+      grant/contexts/piecewise notes, text I/O and exception decisions).

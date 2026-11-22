@@ -1,9 +1,9 @@
 # Contexts (design)
 
 Status: **partially implemented.** Context lists work on top-level modules and on nested
-body modules; nested `SEIZE` resolves from the parent reach. Context visibility
-statements, mode definitions in contexts, remote pieces, and the full reach/export model
-remain future work.
+body modules; nested `SEIZE` resolves from the parent reach. Remote context lists and
+context modules are implemented. Context visibility statements, mode definitions in
+contexts, and the full context reach/export model remain future work.
 
 ## Normative model
 
@@ -78,7 +78,8 @@ END Client;
   a `BEGIN` block, or a procedure body). `SEIZE ALL` imports the whole visible reach.
 - Contexts on a nested module are checked against the parent reach.
 - Names supplied by external grant files are not covered yet.
-- `REMOTE` pieces are not implemented.
+- `REMOTE` context lists and `CONTEXT MODULE REMOTE` are implemented; other remote
+  piece kinds follow the piecewise subset.
 
 ## Nested-module subset
 

@@ -94,15 +94,17 @@ IR statements to find nested module declarations.
 ## 10.14 Text I/O (implementation-defined, resolved for now)
 
 `WRITE`, `WRITELINE`, and `READLINE` provide practical text I/O as
-implementation-defined built-in routines, which Z.200 permits. A literal-format subset of standard `READTEXT`/`WRITETEXT` over `CHARS` locations is
-implemented; text modes, associations, format conversion/editing codes, and io lists
-remain future work.
+implementation-defined built-in routines, which Z.200 permits. `READTEXT`/`WRITETEXT`
+support literal format text, conversion/editing codes, variable widths, io lists, and
+I/O control clauses. Bounded text modes (`CHARS(n)`, `CHARS(n) VARYING`) and a
+simplified text-file association/access model are also implemented. `WCHARS`, full
+association attributes, and arbitrary file models remain future work.
 
 ## 10.13 Exceptions (partial, resolved for now)
 
-`CAUSE`, module/procedure handlers (`ON ... ELSE ... END`), and catching `ASSERTFAIL`
-and `OVERFLOW` are implemented. Unhandled exceptions fail with `E0509`. Action-level
-handlers and static exception-set flow checking (`EXCEPTIONS` lists) are deferred; the
+`CAUSE`, module/procedure handlers (`ON ... ELSE ... END`), action-level handlers, and
+catching `ASSERTFAIL`/`OVERFLOW` are implemented. Static exception-set flow checking
+enforces `EXCEPTIONS` lists. Unhandled exceptions fail with `E0509`; the
 lists are parsed but not enforced.
 
 ## 10.12 Manifest minimalism (resolved)

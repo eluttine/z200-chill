@@ -24,29 +24,36 @@ earlier editions, but 1999 is the normative target.
 
 ---
 
-## 1. Scope of the initial subset
+## 1. Scope and status
 
-The first milestone (`v0`) should cover:
+The first release targets **language coverage and static semantics**, with a
+single-threaded, non-preemptive interpreter.
 
-- lexical structure, comments, integer/boolean/character/string literals;
-- mode names and the integer modes used by the project's width profiles;
-- `DCL` location declarations and `INIT :=` initialization;
-- expressions: arithmetic, relational, boolean, mode conversion;
-- actions: assignment, `IF`, `DO`, `CASE`, `EXIT`, `BEGIN … END`, `ASSERT`, `CAUSE`;
-- procedure definitions and calls (`PROC`, `IN`/`OUT`/`INOUT`/`LOC`, `RETURNS`);
-- `RESULT` / `RETURN`;
-- modules and the `GRANT` / `SEIZE` visibility mechanism.
+Current scope includes:
 
-Explicitly **out of scope for v0** (keep the frontend/IR boundary clean for them):
+- lexical structure, comments, integer/float/boolean/character/string literals;
+- integer, float, boolean, character, string, array, set, powerset, association,
+  access, and module-mode/object modes implemented in the supported subset;
+- `DCL` declarations and `INIT :=` initialization;
+- expressions, mode conversions, and assignment;
+- `IF`, `DO`, `CASE`, `EXIT`, `BEGIN … END`, `ASSERT`, `CAUSE`, handlers;
+- procedures and calls (`IN` parameters, `RETURNS`, `RESULT`/`RETURN`);
+- modules, nested modulions, `GRANT`/`SEIZE`, specs, contexts, regions, remote pieces;
+- arrays including slices, multidimensional arrays, literals, and arrays of structures;
+- text modes, text I/O, format codes, associations/access modes;
+- generic procedure/module templates over `MODE` and `SYN`;
+- moreta module-body objects in the documented subset.
 
-- processes, `START`/`STOP`/`DELAY`, events, buffers, signals;
-- regions and mutual exclusion;
-- timers (`DURATION`, `TIME`, `TIMEOUT`);
-- powersets, sets, bit strings, references, rows, `ALLOCATE`/`TERMINATE`;
-- text I/O (`READTEXT`/`WRITETEXT`), associations/accesses;
-- generics, moreta (module/region/task) modes, object orientation;
-- `SPEC`/`CONTEXT`/`REMOTE` piecewise compilation beyond the simple two-module case
-  described in §7.
+Explicitly **deferred**:
+
+- faithful processes/signals/timers and region mutual exclusion (single-threaded first
+  release);
+- `OUT`/`INOUT`/`LOC` parameter passing;
+- `WCHARS`, references/rows, `ALLOCATE`/`TERMINATE`, bit strings;
+- constructors/destructors, `SELF`, task/region object modes, and the rest of moreta;
+- generic `PROC` parameters and generic region/process templates;
+- grant encoding for named set modes and moreta module modes;
+- full association/access attribute modification and arbitrary file models.
 
 ### 1.1 Implementation status (v0)
 
@@ -90,6 +97,16 @@ Implemented in `z200c`:
   `EXCEPTIONS` lists enforced and matched between spec and body signatures;
 - source-map diagnostics with stable codes, multi-error checker reporting, a parser
   nesting limit, and fixture-based parser/sema/run tests;
+- floating-point `FLOAT`, literals, arithmetic/comparisons, and `%F` output;
+- arrays of structures, array slices, multidimensional arrays, array literals, and
+  labelled array tuples;
+- bounded text modes, format conversion/editing codes, variable widths, and I/O
+  control clauses;
+- simplified text-file associations/access modes with indexed access;
+- powersets and named set modes;
+- generic procedure/module templates over `MODE` and `SYN`;
+- moreta module-body objects with methods, inheritance, specs, initializers, and
+  invariants (see [moreta.md](moreta.md));
 - a tree-walking interpreter, so `z200c run examples/hello` executes the example and
   verifies its `ASSERT`.
 
@@ -98,11 +115,12 @@ Not implemented yet (rejected or deferred with a diagnostic):
 - interface-only external dependencies for `run`;
 - multiple `CASE` selectors and non-integer `CASE` labels;
 - `OUT` / `INOUT` / `LOC` parameter passing;
-- standard `READTEXT`/`WRITETEXT` and associations (z200c instead provides the
-  implementation-defined `WRITE`, `WRITELINE`, and `READLINE` below);
 - region concurrency/mutual exclusion;
 - faithful processes/signals/timers (first release is single-threaded);
-- references and generics beyond the supported generic procedure/module templates.
+- `WCHARS`, references/rows, `ALLOCATE`/`TERMINATE`, and bit strings;
+- moreta constructors/destructors, `SELF`, and task/region object modes;
+- generic `PROC` parameters and generic region/process templates;
+- grant encoding for named set modes and moreta module modes.
 
 The interpreter is a bootstrap for validating semantics; native code generation is a
 later milestone.
@@ -496,7 +514,10 @@ text**:
 - For in-memory strings, record/page controls are mapped to implementation-defined
   separators: `%/` and `%?` use newline, `%+` uses form feed, and `%-`, `%!`, `%=`
   have no textual effect.
-- Association `MODIFY` and indexed access are not implemented yet.
+- `MODIFY(association)` validates an association; modification parameters are rejected
+  until their semantics are designed.
+- Indexed access is supported with `ACCESS (index-mode) CHARS`, indexed `CONNECT`, and
+  indexed `READRECORD`/`WRITERECORD`.
 - Text locations must have a varying string mode (`CHARS` or `CHARS(n) VARYING`).
 
 ### 5.6 Text modes
@@ -688,8 +709,8 @@ action, but it is non-idiomatic and has been removed from the example.)
   - you may not `SEIZE` a name that is not visible/granted in the enclosing reach;
   - referring to a granted name without seizing it is an error.
 - z200c also supports prefixes (`module!name`), grant windows (`ALL`, `FORBID`),
-  friend clauses (`TO`), spec modules, and top-level contexts. Remote pieces and nested
-  modulions are not implemented.
+  friend clauses (`TO`), spec modules, contexts, remote pieces, and nested modulions
+  for the documented subset.
 
 ### 7.2.1 Implemented model (v0)
 
@@ -753,9 +774,9 @@ something to test without requiring I/O:
 - expected exit status: success (0);
 - an `ASSERTFAIL` (or any other unhandled exception) means failure.
 
-If textual output is desired later, Z.200 provides `WRITETEXT` (§7.5.3). Z.200 does not
-predefine `STDOUT`; the target text location is implementation-defined (GNU CHILL added
-`STDOUT`). That belongs to the runtime/I-O milestone, not v0.
+Text output is available through the supported `WRITETEXT` subset and the
+implementation-defined `WRITE`/`WRITELINE`. Z.200 does not predefine `STDOUT`; the target
+text location is implementation-defined.
 
 ---
 

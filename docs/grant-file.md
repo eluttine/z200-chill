@@ -19,8 +19,8 @@ Visibility is static and independent of textual order:
   - `GRANT ALL PREFIXED;` uses the granting module name as the prefix;
   - `GRANT (old -> new) ! x;` links the source `old!x` to the exported
     name `new!x`. An empty old prefix is the common form; a non-empty old prefix
-    requires a prefixed source name in the granting module's reach, which the
-    current subset does not provide (nested modules are unsupported).
+    requires a prefixed source name in the granting module's reach, which is supported
+    only for the documented nested-grant subset.
   - `SEIZE x PREFIXED P;` imports `P!x` as the local simple name `x`.
   - `SEIZE ALL PREFIXED P;` imports every visible `P!name` as `name`.
   - `SEIZE (old -> new) ! x;` follows the same link rule. A non-empty new prefix
@@ -49,7 +49,8 @@ Visibility is static and independent of textual order:
   caller's module or local names.
 - A module cannot seize a name it grants itself.
 - A `SEIZE` with a non-empty new prefix is rejected because locally prefixed names are
-  not supported. Contexts and remote pieces are not implemented.
+  not supported.
+- Contexts and remote pieces are implemented for their documented subset.
 
 `z200c grant` records each export's simple name, module/package names, and optional
 prefix, so duplicate simple names and prefixed outputs can be represented. Consumers can
