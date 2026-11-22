@@ -32,7 +32,46 @@ pub struct GrantMode {
     pub module: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
+    #[serde(default)]
+    pub kind: GrantModeKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<GrantField>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<GrantComponent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum GrantModeKind {
+    #[default]
+    Struct,
+    Moreta,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantComponent {
+    pub name: String,
+    pub kind: GrantComponentKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub params: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub passing: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub constructor: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub destructor: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GrantComponentKind {
+    Variable,
+    Procedure,
+    Mode,
 }
 
 impl GrantMode {
@@ -101,6 +140,7 @@ impl GrantFile {
                 name: mode.name.clone(),
                 module: mode.module_name.clone(),
                 package: mode.package_name.clone(),
+                kind: GrantModeKind::Struct,
                 fields: mode
                     .fields
                     .iter()
@@ -109,7 +149,86 @@ impl GrantFile {
                         mode: external_type_name(&program::portable_type(field.ty, &info.modes)),
                     })
                     .collect(),
+                components: Vec::new(),
             })
+            .chain(
+                info.modes
+                    .moretas
+                    .iter()
+                    .filter(|mode| mode.module_name.is_some())
+                    .map(|mode| GrantMode {
+                        name: mode.name.clone(),
+                        module: mode.module_name.clone(),
+                        package: mode.package_name.clone(),
+                        kind: GrantModeKind::Moreta,
+                        fields: Vec::new(),
+                        components: mode
+                            .components
+                            .iter()
+                            .map(|component| match component {
+                                crate::modes::MoretaComponent::Var { name, ty } => GrantComponent {
+                                    name: name.clone(),
+                                    kind: GrantComponentKind::Variable,
+                                    mode: Some(external_type_name(&program::portable_type(
+                                        *ty,
+                                        &info.modes,
+                                    ))),
+                                    params: Vec::new(),
+                                    passing: Vec::new(),
+                                    result: None,
+                                    constructor: false,
+                                    destructor: false,
+                                },
+                                crate::modes::MoretaComponent::Proc {
+                                    name,
+                                    signature,
+                                    constructor,
+                                    destructor,
+                                    ..
+                                } => GrantComponent {
+                                    name: name.clone(),
+                                    kind: GrantComponentKind::Procedure,
+                                    mode: None,
+                                    params: signature
+                                        .params
+                                        .iter()
+                                        .map(|ty| {
+                                            external_type_name(&program::portable_type(
+                                                *ty,
+                                                &info.modes,
+                                            ))
+                                        })
+                                        .collect(),
+                                    passing: signature
+                                        .passing
+                                        .iter()
+                                        .map(|passing| passing_name(*passing).to_owned())
+                                        .collect(),
+                                    result: signature.result.map(|ty| {
+                                        external_type_name(&program::portable_type(ty, &info.modes))
+                                    }),
+                                    constructor: *constructor,
+                                    destructor: *destructor,
+                                },
+                                crate::modes::MoretaComponent::Mode { name, ty } => {
+                                    GrantComponent {
+                                        name: name.clone(),
+                                        kind: GrantComponentKind::Mode,
+                                        mode: Some(external_type_name(&program::portable_type(
+                                            *ty,
+                                            &info.modes,
+                                        ))),
+                                        params: Vec::new(),
+                                        passing: Vec::new(),
+                                        result: None,
+                                        constructor: false,
+                                        destructor: false,
+                                    }
+                                }
+                            })
+                            .collect(),
+                    }),
+            )
             .collect();
         modes.sort_by_key(GrantMode::symbol);
 
@@ -227,6 +346,70 @@ impl GrantFile {
                     ))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
+            let components = mode
+                .components
+                .iter()
+                .map(|component| match component.kind {
+                    GrantComponentKind::Variable => {
+                        let ty = component.mode.as_deref().ok_or_else(|| {
+                            format!(
+                                "variable component `{}` has no mode in the grant file",
+                                component.name
+                            )
+                        })?;
+                        Ok(program::ModeComponentInfo::Var {
+                            name: component.name.clone(),
+                            ty: parse_external_type(ty, &definitions)?,
+                        })
+                    }
+                    GrantComponentKind::Procedure => {
+                        let params = component
+                            .params
+                            .iter()
+                            .map(|mode| parse_external_type(mode, &definitions))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let passing = component
+                            .params
+                            .iter()
+                            .enumerate()
+                            .map(|(index, _)| match component.passing.get(index) {
+                                Some(name) => parse_passing(name),
+                                None => Ok(Passing::In),
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        if passing.len() != params.len() {
+                            return Err(format!(
+                                "procedure component `{}` has mismatched passing modes",
+                                component.name
+                            ));
+                        }
+                        let result = match &component.result {
+                            Some(mode) => Some(parse_external_type(mode, &definitions)?),
+                            None => None,
+                        };
+                        Ok(program::ModeComponentInfo::Proc {
+                            name: component.name.clone(),
+                            params,
+                            passing,
+                            result,
+                            constructor: component.constructor,
+                            destructor: component.destructor,
+                        })
+                    }
+                    GrantComponentKind::Mode => {
+                        let ty = component.mode.as_deref().ok_or_else(|| {
+                            format!(
+                                "mode component `{}` has no mode in the grant file",
+                                component.name
+                            )
+                        })?;
+                        Ok(program::ModeComponentInfo::Mode {
+                            name: component.name.clone(),
+                            ty: parse_external_type(ty, &definitions)?,
+                        })
+                    }
+                })
+                .collect::<Result<Vec<_>, String>>()?;
             mode_indices.insert(mode.symbol(), modes.len());
             modes.push(program::ModeInfo {
                 name: mode.name.clone(),
@@ -234,6 +417,11 @@ impl GrantFile {
                 package_name: mode.package.clone(),
                 fields,
                 forbidden: Vec::new(),
+                kind: match mode.kind {
+                    GrantModeKind::Struct => program::ModeInfoKind::Struct,
+                    GrantModeKind::Moreta => program::ModeInfoKind::Moreta,
+                },
+                components,
             });
         }
 
@@ -567,8 +755,11 @@ fn parse_external_type(
         return Ok(program::ExternalType::Builtin(ty));
     }
     if name.contains('!') {
-        if definitions.contains_key(name) {
-            return Ok(program::ExternalType::Mode(name.to_owned()));
+        if let Some(definition) = definitions.get(name) {
+            return Ok(match definition.kind {
+                GrantModeKind::Struct => program::ExternalType::Mode(name.to_owned()),
+                GrantModeKind::Moreta => program::ExternalType::Moreta(name.to_owned()),
+            });
         }
         return Err(format!(
             "grant file references mode `{name}` but does not define it"
@@ -580,7 +771,9 @@ fn parse_external_type(
 fn external_type_name(ty: &program::ExternalType) -> String {
     match ty {
         program::ExternalType::Builtin(ty) => type_name(*ty),
-        program::ExternalType::Mode(symbol) => symbol.clone(),
+        program::ExternalType::Mode(symbol) | program::ExternalType::Moreta(symbol) => {
+            symbol.clone()
+        }
         program::ExternalType::Array { low, high, element } => {
             format!("ARRAY({low}:{high}) {}", external_type_name(element))
         }
@@ -1020,13 +1213,10 @@ END M;
                 r#"
 M: MODULE
   GRANT x;
-  NEWMODE P = MODULE BODY
-    DCL y INT;
-  END P;
-  DCL x P;
+  DCL x REF INT;
 END M;
 "#,
-                "module mode types are not supported",
+                "reference and row modes are not supported",
             ),
         ] {
             let tokens = lexer::tokenize(source).unwrap();
@@ -1106,16 +1296,78 @@ END M;
     }
 
     #[test]
+    fn encodes_module_modes() {
+        let manifest = Manifest::parse(
+            r#"
+[package]
+name = "moreta"
+
+[build]
+entry = "src/main.ch"
+"#,
+        )
+        .unwrap();
+        let tokens = lexer::tokenize(
+            r#"
+M: MODULE
+  GRANT P, Obj;
+  NEWMODE P = MODULE BODY
+    DCL value INT;
+    Get: PROC () RETURNS (INT);
+      RESULT value;
+    END Get;
+  END P;
+  DCL Obj P;
+END M;
+"#,
+        )
+        .unwrap();
+        let mut program = parser::parse(&tokens).unwrap();
+        for module in &mut program.modules {
+            module.package_name = Some("moreta".to_owned());
+        }
+        let grant = GrantFile::from_package(&manifest, &program).unwrap();
+        let mode = grant.modes.iter().find(|mode| mode.name == "P").unwrap();
+        assert_eq!(mode.kind, GrantModeKind::Moreta);
+        assert!(mode.components.iter().any(|component| {
+            component.name == "value" && component.kind == GrantComponentKind::Variable
+        }));
+        assert!(mode.components.iter().any(|component| {
+            component.name == "Get" && component.kind == GrantComponentKind::Procedure
+        }));
+
+        let parsed = GrantFile::from_toml(&grant.to_toml().unwrap()).unwrap();
+        let interface = parsed.to_interface().unwrap();
+        let info = interface
+            .modes
+            .iter()
+            .find(|mode| mode.name == "P")
+            .unwrap();
+        assert_eq!(info.kind, program::ModeInfoKind::Moreta);
+        let obj = interface
+            .exports
+            .iter()
+            .find(|export| export.name == "Obj")
+            .unwrap();
+        assert!(matches!(
+            &obj.kind,
+            ExportInfoKind::Var(program::ExternalType::Moreta(_))
+        ));
+    }
+
+    #[test]
     fn structure_array_types_round_trip() {
         let symbol = "pkg!M!Point".to_owned();
         let mode = GrantMode {
             name: "Point".to_owned(),
             module: Some("M".to_owned()),
             package: Some("pkg".to_owned()),
+            kind: GrantModeKind::Struct,
             fields: vec![GrantField {
                 name: "x".to_owned(),
                 mode: "INT".to_owned(),
             }],
+            components: Vec::new(),
         };
         let mut definitions = std::collections::HashMap::new();
         definitions.insert(symbol.clone(), &mode);

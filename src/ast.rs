@@ -208,6 +208,8 @@ pub struct ProcSignature {
     pub params: Vec<Param>,
     pub result: Option<ModeRef>,
     pub exceptions: Vec<String>,
+    pub constructor: bool,
+    pub destructor: bool,
     pub span: Span,
 }
 
@@ -267,6 +269,7 @@ impl NameRef {
 pub struct VarDecl {
     pub name: String,
     pub mode: ModeRef,
+    pub constructor_args: Option<Vec<Expr>>,
     pub init: Option<Initialization>,
     pub span: Span,
 }
@@ -335,6 +338,8 @@ pub struct ProcDef {
     pub params: Vec<Param>,
     pub result: Option<ModeRef>,
     pub exceptions: Vec<String>,
+    pub constructor: bool,
+    pub destructor: bool,
     pub declarations: Vec<Declaration>,
     pub actions: Vec<Action>,
     pub handler: Option<Handler>,
@@ -508,6 +513,9 @@ pub enum Expr {
     Null {
         span: Span,
     },
+    SelfRef {
+        span: Span,
+    },
     /// `-> location`, creating a reference to a location.
     AddressOf {
         target: Box<Expr>,
@@ -523,6 +531,7 @@ pub enum Expr {
     Allocate {
         mode: Box<ModeRef>,
         value: Option<Box<Expr>>,
+        constructor_args: Option<Vec<Expr>>,
         stack: bool,
         span: Span,
     },
@@ -587,6 +596,7 @@ impl Expr {
             | Self::WideString { span, .. }
             | Self::Bits { span, .. }
             | Self::Null { span }
+            | Self::SelfRef { span }
             | Self::AddressOf { span, .. }
             | Self::Deref { span, .. }
             | Self::Allocate { span, .. }

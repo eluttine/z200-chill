@@ -1,0 +1,7 @@
+M: MODULE
+  NEWMODE C = MODULE BODY
+    Init: PROC () RETURNS (INT) CONSTR;
+      RESULT 1;
+    END Init;
+  END C;
+END M;

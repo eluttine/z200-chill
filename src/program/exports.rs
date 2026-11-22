@@ -1,8 +1,11 @@
 use crate::ast::{NameRef, Program};
-use crate::types::{ModeId, ProcType, Type};
+use crate::types::{ProcType, Type};
 use std::collections::HashMap;
 
-use super::{analyze, normalize, portable_type, Error, ExportInfo, ExportInfoKind, ModeInfo};
+use super::{
+    analyze, normalize, portable_type, Error, ExportInfo, ExportInfoKind, ModeComponentInfo,
+    ModeInfo, ModeInfoKind,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct ModuleInterface {
@@ -15,7 +18,7 @@ pub struct ModuleInterface {
 pub enum ExportKind {
     Var(Type),
     Proc(ProcType),
-    Mode(ModeId),
+    Mode(Type),
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +147,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
     let mut exports: Vec<ExportInfo> = info
         .exports
         .into_iter()
-        .map(|export| {
+        .filter_map(|export| {
             let kind = match export.kind {
                 ExportKind::Var(ty) => ExportInfoKind::Var(portable_type(ty, &modes)),
                 ExportKind::Proc(signature) => ExportInfoKind::Proc {
@@ -156,7 +159,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                     passing: signature.passing,
                     result: signature.result.map(|ty| portable_type(ty, &modes)),
                 },
-                ExportKind::Mode(id) => {
+                ExportKind::Mode(Type::Struct(id)) => {
                     let mode = modes.get(id);
                     let mut forbidden: Vec<String> = mode.forbidden.iter().cloned().collect();
                     forbidden.sort();
@@ -170,17 +173,68 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                             .map(|field| (field.name.clone(), portable_type(field.ty, &modes)))
                             .collect(),
                         forbidden,
+                        kind: ModeInfoKind::Struct,
+                        components: Vec::new(),
                     })
                 }
+                ExportKind::Mode(Type::Moreta(id)) => {
+                    let mode = modes.get_moreta(id);
+                    let components = mode
+                        .components
+                        .iter()
+                        .map(|component| match component {
+                            crate::modes::MoretaComponent::Var { name, ty } => {
+                                ModeComponentInfo::Var {
+                                    name: name.clone(),
+                                    ty: portable_type(*ty, &modes),
+                                }
+                            }
+                            crate::modes::MoretaComponent::Proc {
+                                name,
+                                signature,
+                                constructor,
+                                destructor,
+                                ..
+                            } => ModeComponentInfo::Proc {
+                                name: name.clone(),
+                                params: signature
+                                    .params
+                                    .iter()
+                                    .map(|ty| portable_type(*ty, &modes))
+                                    .collect(),
+                                passing: signature.passing.clone(),
+                                result: signature.result.map(|ty| portable_type(ty, &modes)),
+                                constructor: *constructor,
+                                destructor: *destructor,
+                            },
+                            crate::modes::MoretaComponent::Mode { name, ty } => {
+                                ModeComponentInfo::Mode {
+                                    name: name.clone(),
+                                    ty: portable_type(*ty, &modes),
+                                }
+                            }
+                        })
+                        .collect();
+                    ExportInfoKind::Mode(ModeInfo {
+                        name: mode.name.clone(),
+                        module_name: mode.module_name.clone(),
+                        package_name: mode.package_name.clone(),
+                        fields: Vec::new(),
+                        forbidden: Vec::new(),
+                        kind: ModeInfoKind::Moreta,
+                        components,
+                    })
+                }
+                ExportKind::Mode(_) => return None,
             };
-            ExportInfo {
+            Some(ExportInfo {
                 name: export.name,
                 module_name: export.module_name,
                 package_name: export.package_name,
                 prefix: export.prefix,
                 kind,
                 friends: export.friends,
-            }
+            })
         })
         .collect();
     exports.sort_by(|left, right| {

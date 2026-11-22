@@ -165,8 +165,11 @@ deferred.
       module templates.
 - [x] `OUT`, `INOUT`, and `LOC` parameter passing for procedures and moreta
       methods, including copy-back and grant-interface encoding.
-- [ ] Moreta constructors/destructors, `SELF`, task/region object modes; generic
-      region/process templates.
+- [x] Moreta `SELF`, constructors/destructors, constructor arguments, nested mode
+      components, and moreta grant-mode encoding. Task/region object modes and generic
+      region/process templates remain deferred.
+- [ ] Static-object destructors at reach/lifetime end; complete `Mode!Component` name
+      preservation in grant files.
 - [ ] Faithful processes/signals/timers and region mutual exclusion: deferred pending
       a resumable/concurrent runtime (post-first-release).
 

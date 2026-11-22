@@ -56,201 +56,25 @@ fn process_module_modes(
             continue;
         };
 
-        let ty = match &mode_def.body {
-            crate::ast::ModeDefinitionBody::Struct(fields) => {
-                // Predeclare the structure so fields may refer to it (directly
-                // or through REF), then resolve and install the fields.
-                let id = ModeId(table.modes.len());
-                table.modes.push(StructMode {
-                    name: mode_def.name.clone(),
-                    package: top_package,
-                    module: top,
-                    package_name: top_package_name.clone(),
-                    module_name: module.name.clone(),
-                    fields: Vec::new(),
-                    forbidden: std::collections::HashSet::new(),
-                });
-                let ty = Type::Struct(id);
-                local.insert(mode_def.name.clone(), ty);
-                resolution.insert(mode_def.name.clone(), ty);
-
-                let mut field_infos = Vec::with_capacity(fields.len());
-                let mut names = std::collections::HashSet::new();
-                for field in fields {
-                    if !names.insert(field.name.clone()) {
-                        return Err(Error::new(
-                            field.span,
-                            format!("duplicate field `{}`", field.name),
-                        ));
+        let ty = build_mode_definition(
+            mode_def,
+            top,
+            top_package,
+            top_package_name.clone(),
+            module.name.clone(),
+            resolution,
+            table,
+            moreta_sources,
+        )?;
+        if let Type::Moreta(id) = ty {
+            for component in &table.moretas[id.0].components {
+                if let crate::modes::MoretaComponent::Mode { name, ty } = component {
+                    if name.contains('!') {
+                        local.insert(name.clone(), *ty);
                     }
-                    let ty = resolve_mode_with(&field.mode, resolution)?;
-                    field_infos.push(FieldInfo {
-                        name: field.name.clone(),
-                        ty,
-                    });
                 }
-                table.modes[id.0].fields = field_infos;
-                Type::Struct(id)
             }
-            crate::ast::ModeDefinitionBody::Set(elements) => {
-                let mut names = HashSet::new();
-                let mut values = HashSet::new();
-                let mut infos = Vec::with_capacity(elements.len());
-                for (index, element) in elements.iter().enumerate() {
-                    if !names.insert(element.name.clone()) {
-                        return Err(Error::new(
-                            element.span,
-                            format!("duplicate set element `{}`", element.name),
-                        ));
-                    }
-                    let value = element.value.unwrap_or(index as i128);
-                    if !values.insert(value) {
-                        return Err(Error::new(
-                            element.span,
-                            format!("duplicate set representation value `{value}`"),
-                        ));
-                    }
-                    infos.push((element.name.clone(), value));
-                }
-                let id = crate::types::SetId(table.sets.len());
-                table.sets.push(crate::modes::SetMode {
-                    name: mode_def.name.clone(),
-                    package: top_package,
-                    module: top,
-                    package_name: top_package_name.clone(),
-                    module_name: module.name.clone(),
-                    elements: infos,
-                });
-                Type::Set(id)
-            }
-            crate::ast::ModeDefinitionBody::Moreta {
-                spec,
-                bases,
-                declarations,
-                invariant,
-                ..
-            } => {
-                let mut base_ids = Vec::new();
-                let mut components: Vec<crate::modes::MoretaComponent> = Vec::new();
-                for base in bases {
-                    let base_ref = ModeRef {
-                        name: base.clone(),
-                        arrays: Vec::new(),
-                        string_length: None,
-                        varying: false,
-                        access: false,
-                        powerset: false,
-                        reference: false,
-                        row: false,
-                        access_indexed: false,
-                        access_index: None,
-                        span: mode_def.span,
-                    };
-                    let Type::Moreta(base_id) = resolve_mode_with(&base_ref, resolution)? else {
-                        return Err(Error::new(
-                            mode_def.span,
-                            format!("module mode base `{base}` is not a module mode"),
-                        ));
-                    };
-                    base_ids.push(base_id);
-                    for component in &table.moretas[base_id.0].components {
-                        if !components
-                            .iter()
-                            .any(|existing| existing.name() == component.name())
-                        {
-                            components.push(component.clone());
-                        }
-                    }
-                }
-                let mut seen = HashSet::new();
-                for declaration in declarations {
-                    match declaration {
-                        Declaration::Var(vars) => {
-                            for var in vars {
-                                let ty = resolve_mode_with(&var.mode, resolution)?;
-                                if !seen.insert(var.name.clone()) {
-                                    return Err(Error::new(
-                                        var.span,
-                                        format!("duplicate component `{}`", var.name),
-                                    ));
-                                }
-                                components.retain(|component| component.name() != var.name);
-                                components.push(crate::modes::MoretaComponent::Var {
-                                    name: var.name.clone(),
-                                    ty,
-                                });
-                            }
-                        }
-                        Declaration::Proc(proc_def) => {
-                            let signature = signature_from_params_with(
-                                &proc_def.params,
-                                &proc_def.result,
-                                &proc_def.exceptions,
-                                resolution,
-                            )?;
-                            if !seen.insert(proc_def.name.clone()) {
-                                return Err(Error::new(
-                                    proc_def.span,
-                                    format!("duplicate component `{}`", proc_def.name),
-                                ));
-                            }
-                            components.retain(|component| component.name() != proc_def.name);
-                            components.push(crate::modes::MoretaComponent::Proc {
-                                name: proc_def.name.clone(),
-                                signature,
-                                span: proc_def.span,
-                            });
-                        }
-                        Declaration::ProcSignature(signature) => {
-                            let ty = signature_from_params_with(
-                                &signature.params,
-                                &signature.result,
-                                &signature.exceptions,
-                                resolution,
-                            )?;
-                            if !seen.insert(signature.name.clone()) {
-                                return Err(Error::new(
-                                    signature.span,
-                                    format!("duplicate component `{}`", signature.name),
-                                ));
-                            }
-                            components.retain(|component| component.name() != signature.name);
-                            components.push(crate::modes::MoretaComponent::Proc {
-                                name: signature.name.clone(),
-                                signature: ty,
-                                span: signature.span,
-                            });
-                        }
-                        _ => {
-                            return Err(Error::new(
-                                mode_def.span,
-                                "unsupported module mode component",
-                            ));
-                        }
-                    }
-                }
-                let id = crate::types::MoretaId(table.moretas.len());
-                moreta_sources.insert(
-                    id,
-                    MoretaSource {
-                        declarations: declarations.clone(),
-                        invariant: invariant.clone(),
-                    },
-                );
-                table.moretas.push(crate::modes::MoretaMode {
-                    name: mode_def.name.clone(),
-                    package: top_package,
-                    module: top,
-                    package_name: top_package_name.clone(),
-                    module_name: module.name.clone(),
-                    bases: base_ids,
-                    abstract_mode: *spec,
-                    components,
-                });
-                Type::Moreta(id)
-            }
-            crate::ast::ModeDefinitionBody::Alias(mode) => resolve_mode_with(mode, resolution)?,
-        };
+        }
 
         if let Some(existing) = local.get(&mode_def.name) {
             if *existing != ty {
@@ -282,6 +106,296 @@ fn process_module_modes(
             moreta_sources,
         )
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_mode_definition(
+    mode_def: &crate::ast::ModeDefinition,
+    top: usize,
+    top_package: usize,
+    top_package_name: Option<String>,
+    module_name: Option<String>,
+    resolution: &mut HashMap<String, Type>,
+    table: &mut ModeTable,
+    moreta_sources: &mut HashMap<crate::types::MoretaId, MoretaSource>,
+) -> Result<Type, Error> {
+    let ty = match &mode_def.body {
+        crate::ast::ModeDefinitionBody::Struct(fields) => {
+            // Predeclare the structure so fields may refer to it (directly
+            // or through REF), then resolve and install the fields.
+            let id = ModeId(table.modes.len());
+            table.modes.push(StructMode {
+                name: mode_def.name.clone(),
+                package: top_package,
+                module: top,
+                package_name: top_package_name.clone(),
+                module_name: module_name.clone(),
+                fields: Vec::new(),
+                forbidden: std::collections::HashSet::new(),
+            });
+            let ty = Type::Struct(id);
+            resolution.insert(mode_def.name.clone(), ty);
+
+            let mut field_infos = Vec::with_capacity(fields.len());
+            let mut names = std::collections::HashSet::new();
+            for field in fields {
+                if !names.insert(field.name.clone()) {
+                    return Err(Error::new(
+                        field.span,
+                        format!("duplicate field `{}`", field.name),
+                    ));
+                }
+                let ty = resolve_mode_with(&field.mode, resolution)?;
+                field_infos.push(FieldInfo {
+                    name: field.name.clone(),
+                    ty,
+                });
+            }
+            table.modes[id.0].fields = field_infos;
+            Type::Struct(id)
+        }
+        crate::ast::ModeDefinitionBody::Set(elements) => {
+            let mut names = HashSet::new();
+            let mut values = HashSet::new();
+            let mut infos = Vec::with_capacity(elements.len());
+            for (index, element) in elements.iter().enumerate() {
+                if !names.insert(element.name.clone()) {
+                    return Err(Error::new(
+                        element.span,
+                        format!("duplicate set element `{}`", element.name),
+                    ));
+                }
+                let value = element.value.unwrap_or(index as i128);
+                if !values.insert(value) {
+                    return Err(Error::new(
+                        element.span,
+                        format!("duplicate set representation value `{value}`"),
+                    ));
+                }
+                infos.push((element.name.clone(), value));
+            }
+            let id = crate::types::SetId(table.sets.len());
+            table.sets.push(crate::modes::SetMode {
+                name: mode_def.name.clone(),
+                package: top_package,
+                module: top,
+                package_name: top_package_name.clone(),
+                module_name: module_name.clone(),
+                elements: infos,
+            });
+            Type::Set(id)
+        }
+        crate::ast::ModeDefinitionBody::Moreta {
+            spec,
+            bases,
+            declarations,
+            invariant,
+            ..
+        } => {
+            let mut base_ids = Vec::new();
+            let mut components: Vec<crate::modes::MoretaComponent> = Vec::new();
+            for base in bases {
+                let base_ref = ModeRef {
+                    name: base.clone(),
+                    arrays: Vec::new(),
+                    string_length: None,
+                    varying: false,
+                    access: false,
+                    powerset: false,
+                    reference: false,
+                    row: false,
+                    access_indexed: false,
+                    access_index: None,
+                    span: mode_def.span,
+                };
+                let Type::Moreta(base_id) = resolve_mode_with(&base_ref, resolution)? else {
+                    return Err(Error::new(
+                        mode_def.span,
+                        format!("module mode base `{base}` is not a module mode"),
+                    ));
+                };
+                base_ids.push(base_id);
+                for component in &table.moretas[base_id.0].components {
+                    if !components
+                        .iter()
+                        .any(|existing| existing.name() == component.name())
+                    {
+                        components.push(component.clone());
+                    }
+                }
+            }
+            let mut seen = HashSet::new();
+            for declaration in declarations {
+                match declaration {
+                    Declaration::Var(vars) => {
+                        for var in vars {
+                            let ty = resolve_mode_with(&var.mode, resolution)?;
+                            if !seen.insert(var.name.clone()) {
+                                return Err(Error::new(
+                                    var.span,
+                                    format!("duplicate component `{}`", var.name),
+                                ));
+                            }
+                            components.retain(|component| component.name() != var.name);
+                            components.push(crate::modes::MoretaComponent::Var {
+                                name: var.name.clone(),
+                                ty,
+                            });
+                        }
+                    }
+                    Declaration::Proc(proc_def) => {
+                        let signature = signature_from_params_with(
+                            &proc_def.params,
+                            &proc_def.result,
+                            &proc_def.exceptions,
+                            resolution,
+                        )?;
+                        if !seen.insert(proc_def.name.clone()) {
+                            return Err(Error::new(
+                                proc_def.span,
+                                format!("duplicate component `{}`", proc_def.name),
+                            ));
+                        }
+                        components.retain(|component| component.name() != proc_def.name);
+                        components.push(crate::modes::MoretaComponent::Proc {
+                            name: proc_def.name.clone(),
+                            signature,
+                            span: proc_def.span,
+                            constructor: proc_def.constructor,
+                            destructor: proc_def.destructor,
+                        });
+                    }
+                    Declaration::ProcSignature(signature) => {
+                        let ty = signature_from_params_with(
+                            &signature.params,
+                            &signature.result,
+                            &signature.exceptions,
+                            resolution,
+                        )?;
+                        if !seen.insert(signature.name.clone()) {
+                            return Err(Error::new(
+                                signature.span,
+                                format!("duplicate component `{}`", signature.name),
+                            ));
+                        }
+                        components.retain(|component| component.name() != signature.name);
+                        components.push(crate::modes::MoretaComponent::Proc {
+                            name: signature.name.clone(),
+                            signature: ty,
+                            span: signature.span,
+                            constructor: signature.constructor,
+                            destructor: signature.destructor,
+                        });
+                    }
+                    Declaration::Mode(nested) => {
+                        let ty = build_mode_definition(
+                            nested,
+                            top,
+                            top_package,
+                            top_package_name.clone(),
+                            module_name.clone(),
+                            resolution,
+                            table,
+                            moreta_sources,
+                        )?;
+                        for (prefix, ty) in [
+                            (nested.name.clone(), ty),
+                            (format!("{}!{}", mode_def.name, nested.name), ty),
+                        ] {
+                            components.retain(|component| component.name() != prefix);
+                            components.push(crate::modes::MoretaComponent::Mode {
+                                name: prefix.clone(),
+                                ty,
+                            });
+                            resolution.insert(prefix, ty);
+                        }
+                    }
+                    _ => {
+                        return Err(Error::new(
+                            mode_def.span,
+                            "unsupported module mode component",
+                        ));
+                    }
+                }
+            }
+            let constructors: Vec<_> = components
+                .iter()
+                .filter(|component| {
+                    matches!(
+                        component,
+                        crate::modes::MoretaComponent::Proc {
+                            constructor: true,
+                            ..
+                        }
+                    )
+                })
+                .collect();
+            let destructors: Vec<_> = components
+                .iter()
+                .filter(|component| {
+                    matches!(
+                        component,
+                        crate::modes::MoretaComponent::Proc {
+                            destructor: true,
+                            ..
+                        }
+                    )
+                })
+                .collect();
+            if constructors.len() > 1 {
+                return Err(Error::new(
+                    mode_def.span,
+                    "a module mode may have at most one constructor",
+                ));
+            }
+            if destructors.len() > 1 {
+                return Err(Error::new(
+                    mode_def.span,
+                    "a module mode may have at most one destructor",
+                ));
+            }
+            if let Some(crate::modes::MoretaComponent::Proc {
+                signature, span, ..
+            }) = constructors.first()
+            {
+                if signature.result.is_some() {
+                    return Err(Error::new(*span, "a constructor cannot return a value"));
+                }
+            }
+            if let Some(crate::modes::MoretaComponent::Proc {
+                signature, span, ..
+            }) = destructors.first()
+            {
+                if signature.result.is_some() || !signature.params.is_empty() {
+                    return Err(Error::new(
+                        *span,
+                        "a destructor cannot take parameters or return a value",
+                    ));
+                }
+            }
+            let id = crate::types::MoretaId(table.moretas.len());
+            moreta_sources.insert(
+                id,
+                MoretaSource {
+                    declarations: declarations.clone(),
+                    invariant: invariant.clone(),
+                },
+            );
+            table.moretas.push(crate::modes::MoretaMode {
+                name: mode_def.name.clone(),
+                package: top_package,
+                module: top,
+                package_name: top_package_name.clone(),
+                module_name: module_name.clone(),
+                bases: base_ids,
+                abstract_mode: *spec,
+                components,
+            });
+            Type::Moreta(id)
+        }
+        crate::ast::ModeDefinitionBody::Alias(mode) => resolve_mode_with(mode, resolution)?,
+    };
+    Ok(ty)
 }
 
 pub(crate) fn resolve_mode_with(

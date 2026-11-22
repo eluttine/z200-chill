@@ -154,8 +154,8 @@ pub fn run_checked(
                     .filter(|export| export.module != index)
                     .filter(|export| export.is_accessible_to(package_name, module_name))
                 {
-                    if let ExportKind::Mode(id) = export.kind {
-                        module_modes[index].insert(export.name.clone(), Type::Struct(id));
+                    if let ExportKind::Mode(ty) = export.kind {
+                        module_modes[index].insert(export.name.clone(), ty);
                     }
                 }
             } else {
@@ -165,8 +165,8 @@ pub fn run_checked(
                     else {
                         continue;
                     };
-                    if let ExportKind::Mode(id) = export.kind {
-                        module_modes[index].insert(name.name.clone(), Type::Struct(id));
+                    if let ExportKind::Mode(ty) = export.kind {
+                        module_modes[index].insert(name.name.clone(), ty);
                     }
                 }
             }
@@ -210,6 +210,8 @@ pub fn run_checked(
         bodies: lowered.bodies,
         refs: Vec::new(),
         ref_allocated: Vec::new(),
+        self_cells: Vec::new(),
+        self_modes: Vec::new(),
     };
 
     interpreter.declare_modules(&program)?;
@@ -372,6 +374,8 @@ struct Interpreter<'a> {
     bodies: ir::BodyTable,
     refs: Vec<Option<VarCell>>,
     ref_allocated: Vec<bool>,
+    self_cells: Vec<VarCell>,
+    self_modes: Vec<types::MoretaId>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -724,7 +728,12 @@ impl<'a> Interpreter<'a> {
         declarations
     }
 
-    fn create_moreta_object(&mut self, id: types::MoretaId, span: Span) -> Result<Value, Error> {
+    fn create_moreta_object_with_args(
+        &mut self,
+        id: types::MoretaId,
+        constructor_args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, Error> {
         if !self.moreta_decls.contains_key(&id) {
             return Err(Error::coded(
                 "E0500",
@@ -748,9 +757,32 @@ impl<'a> Interpreter<'a> {
                 }
             }
         }
-        let result = self
-            .initialize_declarations(&initializer_declarations)
-            .and_then(|()| self.check_moreta_invariants(id, span));
+        let result = (|| {
+            self.initialize_declarations(&initializer_declarations)?;
+            if let Some((signature, constructor_span)) = self.modes.moreta_constructor(id) {
+                if signature.params.len() != constructor_args.len() {
+                    return Err(Error::coded(
+                        "E0500",
+                        span,
+                        format!(
+                            "constructor expects {} argument(s), found {}",
+                            signature.params.len(),
+                            constructor_args.len()
+                        ),
+                    ));
+                }
+                let value = self.object_value_from_scope(id, span)?;
+                let updated = self.invoke_component_on_value(
+                    id,
+                    constructor_span,
+                    value,
+                    constructor_args,
+                    span,
+                )?;
+                self.apply_object_value_to_scope(id, updated, span)?;
+            }
+            self.check_moreta_invariants(id, span)
+        })();
         if let Err(error) = result {
             self.locals.pop();
             return Err(error);
@@ -780,7 +812,13 @@ impl<'a> Interpreter<'a> {
                     let value = self.eval_expr(&init.value)?;
                     self.assign_var(&var.name, value, var.span)?;
                 } else if let Ok(Type::Moreta(id)) = self.resolve_mode(&var.mode) {
-                    let value = self.create_moreta_object(id, var.span)?;
+                    let mut args = Vec::new();
+                    if let Some(actuals) = &var.constructor_args {
+                        for actual in actuals {
+                            args.push(self.eval_expr(actual)?);
+                        }
+                    }
+                    let value = self.create_moreta_object_with_args(id, args, var.span)?;
                     self.assign_var(&var.name, value, var.span)?;
                 }
             }
@@ -1972,6 +2010,25 @@ impl<'a> Interpreter<'a> {
             ir::Expr::String { value, .. } => Ok(Value::String(value.clone())),
             ir::Expr::Bits { value, .. } => Ok(Value::Bits(value.clone())),
             ir::Expr::Null { .. } => Ok(Value::Ref(None)),
+            ir::Expr::SelfValue { span, .. } => {
+                let Some(id) = self.self_modes.last().copied() else {
+                    return Err(Error::coded(
+                        "E0500",
+                        *span,
+                        "SELF is only valid inside a module-mode component",
+                    ));
+                };
+                self.current_self_value(id, *span)
+            }
+            ir::Expr::SelfField {
+                component,
+                path,
+                span,
+                ..
+            } => {
+                let value = self.read_var(component, *span)?;
+                read_path(value, path, *span)
+            }
             ir::Expr::AddressOf { name, span, .. } => {
                 let cell = self.find_var_cell(name).ok_or_else(|| {
                     Error::coded("E0505", *span, format!("unknown variable `{name}`"))
@@ -1997,14 +2054,33 @@ impl<'a> Interpreter<'a> {
                 self.convert(value, *ty, *span)
             }
             ir::Expr::Allocate {
-                mode, value, span, ..
+                mode,
+                value,
+                constructor_args,
+                span,
+                ..
             } => {
-                let value = match value {
-                    Some(value) => {
-                        let value = self.eval_ir(value)?;
-                        self.convert(value, *mode, *span)?
+                let value = if let Some(args) = constructor_args {
+                    let mut values = Vec::with_capacity(args.len());
+                    for arg in args {
+                        values.push(self.eval_ir(arg)?);
                     }
-                    None => default_value(&self.modes, *mode),
+                    let Type::Moreta(id) = mode else {
+                        return Err(Error::coded(
+                            "E0500",
+                            *span,
+                            "constructor arguments require a module mode",
+                        ));
+                    };
+                    self.create_moreta_object_with_args(*id, values, *span)?
+                } else {
+                    match value {
+                        Some(value) => {
+                            let value = self.eval_ir(value)?;
+                            self.convert(value, *mode, *span)?
+                        }
+                        None => default_value(&self.modes, *mode),
+                    }
                 };
                 let cell = Rc::new(RefCell::new(Var { ty: *mode, value }));
                 Ok(Value::Ref(Some(self.intern_ref(cell, true))))
@@ -2072,6 +2148,22 @@ impl<'a> Interpreter<'a> {
                             ));
                         }
                         if let Some(cell) = self.refs.get(*handle).and_then(Clone::clone) {
+                            let (value, ty) = {
+                                let var = cell.borrow();
+                                (var.value.clone(), var.ty)
+                            };
+                            if let Type::Moreta(id) = ty {
+                                if let Some((_, destructor_span)) = self.modes.moreta_destructor(id)
+                                {
+                                    self.invoke_component_on_value(
+                                        id,
+                                        destructor_span,
+                                        value,
+                                        Vec::new(),
+                                        *span,
+                                    )?;
+                                }
+                            }
                             cell.borrow_mut().value = Value::Undefined;
                         }
                         if let Some(slot) = self.refs.get_mut(*handle) {
@@ -2243,6 +2335,7 @@ impl<'a> Interpreter<'a> {
             }
             ir::Expr::MethodCall {
                 object,
+                deref,
                 proc_span,
                 args,
                 passing,
@@ -2251,7 +2344,81 @@ impl<'a> Interpreter<'a> {
                 ..
             } => {
                 let call_args = self.prepare_call_args(args, passing, targets, *span)?;
-                self.call_method(object, *proc_span, call_args, *span)
+                if object == "<deref>" {
+                    let Some(reference) = deref else {
+                        return Err(Error::coded(
+                            "E0500",
+                            *span,
+                            "internal: dereferenced method call has no reference",
+                        ));
+                    };
+                    let cell = self.eval_reference(reference, *span)?;
+                    let (ty, value) = {
+                        let var = cell.borrow();
+                        (var.ty, var.value.clone())
+                    };
+                    let temp = "\u{0}deref".to_owned();
+                    self.locals.push(Scope::default());
+                    self.locals
+                        .last_mut()
+                        .expect("deref method scope")
+                        .vars
+                        .insert(temp.clone(), Rc::new(RefCell::new(Var { ty, value })));
+                    let result = self.call_method(&temp, *proc_span, call_args, *span);
+                    let updated = self
+                        .locals
+                        .last_mut()
+                        .expect("deref method scope")
+                        .vars
+                        .remove(&temp)
+                        .map(|cell| cell.borrow().value.clone());
+                    self.locals.pop();
+                    if let Some(updated) = updated {
+                        cell.borrow_mut().value = updated;
+                    }
+                    result
+                } else if object == "<self>" {
+                    let Some(cell) = self.self_cells.last().cloned() else {
+                        return Err(Error::coded(
+                            "E0500",
+                            *span,
+                            "SELF method call outside a module-mode component",
+                        ));
+                    };
+                    let Some(id) = self.self_modes.last().copied() else {
+                        return Err(Error::coded(
+                            "E0500",
+                            *span,
+                            "SELF method call outside a module-mode component",
+                        ));
+                    };
+                    let value = self.current_self_value(id, *span)?;
+                    let temp = "\u{0}self".to_owned();
+                    let temp_cell = Rc::new(RefCell::new(Var {
+                        ty: Type::Moreta(id),
+                        value,
+                    }));
+                    self.locals
+                        .last_mut()
+                        .expect("local scope")
+                        .vars
+                        .insert(temp.clone(), Rc::clone(&temp_cell));
+                    let result = self.call_method(&temp, *proc_span, call_args, *span);
+                    let updated = self
+                        .locals
+                        .last_mut()
+                        .expect("local scope")
+                        .vars
+                        .remove(&temp)
+                        .map(|cell| cell.borrow().value.clone());
+                    if let Some(updated) = updated {
+                        cell.borrow_mut().value = updated;
+                    }
+                    self.refresh_self_locals(id, *span)?;
+                    result
+                } else {
+                    self.call_method(object, *proc_span, call_args, *span)
+                }
             }
             ir::Expr::Association {
                 op,
@@ -2590,6 +2757,11 @@ impl<'a> Interpreter<'a> {
         let proc_def = self.proc_defs.get(&proc_span).copied().ok_or_else(|| {
             Error::coded("E0500", proc_span, "internal: missing method definition")
         })?;
+        let object_cell = self.find_var_cell(object_name).ok_or_else(|| {
+            Error::coded("E0505", span, format!("unknown object `{object_name}`"))
+        })?;
+        self.self_cells.push(object_cell);
+        self.self_modes.push(id);
 
         self.locals.push(Scope::default());
         self.call_bases.push(self.locals.len() - 1);
@@ -2630,6 +2802,8 @@ impl<'a> Interpreter<'a> {
             None
         };
         self.locals.pop();
+        self.self_cells.pop();
+        self.self_modes.pop();
         if let Some(updated) = updated {
             self.assign_var(object_name, updated, span)?;
         }
@@ -3497,6 +3671,154 @@ impl<'a> Interpreter<'a> {
             return self.nested_scopes.get(&key);
         }
         self.modules.get(self.active_module)
+    }
+
+    fn object_value_from_scope(&mut self, id: types::MoretaId, span: Span) -> Result<Value, Error> {
+        let names: Vec<String> = self
+            .modes
+            .get_moreta(id)
+            .components
+            .iter()
+            .filter_map(|component| match component {
+                crate::modes::MoretaComponent::Var { name, .. } => Some(name.clone()),
+                crate::modes::MoretaComponent::Proc { .. }
+                | crate::modes::MoretaComponent::Mode { .. } => None,
+            })
+            .collect();
+        let mut values = Vec::with_capacity(names.len());
+        for name in names {
+            let value = self
+                .find_var_cell(&name)
+                .map(|cell| cell.borrow().value.clone())
+                .unwrap_or(Value::Undefined);
+            values.push((name, value));
+        }
+        let _ = span;
+        Ok(Value::Moreta(values))
+    }
+
+    fn apply_object_value_to_scope(
+        &mut self,
+        id: types::MoretaId,
+        value: Value,
+        span: Span,
+    ) -> Result<(), Error> {
+        let Value::Moreta(values) = value else {
+            return Err(Error::coded("E0500", span, "expected a module-mode object"));
+        };
+        let names: Vec<String> = self
+            .modes
+            .get_moreta(id)
+            .components
+            .iter()
+            .filter_map(|component| match component {
+                crate::modes::MoretaComponent::Var { name, .. } => Some(name.clone()),
+                crate::modes::MoretaComponent::Proc { .. }
+                | crate::modes::MoretaComponent::Mode { .. } => None,
+            })
+            .collect();
+        for (name, value) in values {
+            if names.contains(&name) {
+                for scope in self.locals.iter_mut().rev() {
+                    if let Some(cell) = scope.vars.get(&name) {
+                        cell.borrow_mut().value = value.clone();
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn invoke_component_on_value(
+        &mut self,
+        id: types::MoretaId,
+        proc_span: Span,
+        value: Value,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, Error> {
+        let temp = "\u{0}component".to_owned();
+        let cell = Rc::new(RefCell::new(Var {
+            ty: Type::Moreta(id),
+            value,
+        }));
+        self.locals.push(Scope::default());
+        self.locals
+            .last_mut()
+            .expect("component scope")
+            .vars
+            .insert(temp.clone(), Rc::clone(&cell));
+        let call_args = args.into_iter().map(CallArgument::Value).collect();
+        let result = self.call_method(&temp, proc_span, call_args, span);
+        let updated = self
+            .locals
+            .last_mut()
+            .expect("component scope")
+            .vars
+            .remove(&temp)
+            .map(|cell| cell.borrow().value.clone())
+            .unwrap_or(Value::Undefined);
+        self.locals.pop();
+        result?;
+        Ok(updated)
+    }
+
+    fn current_self_value(&mut self, id: types::MoretaId, span: Span) -> Result<Value, Error> {
+        let names: Vec<String> = self
+            .modes
+            .get_moreta(id)
+            .components
+            .iter()
+            .filter_map(|component| match component {
+                crate::modes::MoretaComponent::Var { name, .. } => Some(name.clone()),
+                crate::modes::MoretaComponent::Proc { .. }
+                | crate::modes::MoretaComponent::Mode { .. } => None,
+            })
+            .collect();
+        let mut values = Vec::with_capacity(names.len());
+        for name in names {
+            let value = self
+                .find_var_cell(&name)
+                .map(|cell| cell.borrow().value.clone())
+                .unwrap_or(Value::Undefined);
+            values.push((name, value));
+        }
+        let _ = span;
+        Ok(Value::Moreta(values))
+    }
+
+    fn refresh_self_locals(&mut self, id: types::MoretaId, span: Span) -> Result<(), Error> {
+        let Some(cell) = self.self_cells.last().cloned() else {
+            return Ok(());
+        };
+        let Value::Moreta(values) = cell.borrow().value.clone() else {
+            return Ok(());
+        };
+        let names: Vec<String> = self
+            .modes
+            .get_moreta(id)
+            .components
+            .iter()
+            .filter_map(|component| match component {
+                crate::modes::MoretaComponent::Var { name, .. } => Some(name.clone()),
+                crate::modes::MoretaComponent::Proc { .. }
+                | crate::modes::MoretaComponent::Mode { .. } => None,
+            })
+            .collect();
+        for (name, value) in values {
+            if !names.contains(&name) {
+                continue;
+            }
+            for scope in self.locals.iter_mut().rev() {
+                if let Some(cell) = scope.vars.get(&name) {
+                    cell.borrow_mut().value = value.clone();
+                    break;
+                }
+            }
+        }
+        let _ = span;
+        Ok(())
     }
 
     fn intern_ref(&mut self, cell: VarCell, allocated: bool) -> usize {
@@ -4838,7 +5160,8 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
                     crate::modes::MoretaComponent::Var { name, ty } => {
                         Some((name.clone(), default_value(modes, *ty)))
                     }
-                    crate::modes::MoretaComponent::Proc { .. } => None,
+                    crate::modes::MoretaComponent::Proc { .. }
+                    | crate::modes::MoretaComponent::Mode { .. } => None,
                 })
                 .collect(),
         ),

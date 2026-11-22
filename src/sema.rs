@@ -174,6 +174,7 @@ pub fn analyze_with_externals(
         module_floor: 0,
         current_module: 0,
         current_package: 0,
+        current_moreta: None,
         current_package_name: None,
         current_module_name: None,
         labels: Vec::new(),
@@ -257,6 +258,7 @@ struct Checker {
     module_floor: usize,
     current_module: usize,
     current_package: usize,
+    current_moreta: Option<types::MoretaId>,
     current_package_name: Option<String>,
     current_module_name: Option<String>,
     labels: Vec<String>,
@@ -951,9 +953,9 @@ impl Checker {
         match &export.kind {
             ExportKind::Var(ty) => self.declare_var(local_name, *ty, span),
             ExportKind::Proc(signature) => self.declare_proc(local_name, signature.clone(), span),
-            ExportKind::Mode(id) => {
+            ExportKind::Mode(ty) => {
                 let scope = self.scopes.last_mut().expect("scope stack is never empty");
-                scope.modes.insert(local_name.to_owned(), Type::Struct(*id));
+                scope.modes.insert(local_name.to_owned(), *ty);
                 Ok(())
             }
         }
@@ -1026,9 +1028,14 @@ impl Checker {
                                         .procs
                                         .insert(name.clone(), signature.clone());
                                 }
+                                crate::modes::MoretaComponent::Mode { name, ty } => {
+                                    component_scope.modes.insert(name.clone(), *ty);
+                                }
                             }
                         }
                         self.scopes.push(component_scope);
+                        let previous_moreta = self.current_moreta;
+                        self.current_moreta = Some(id);
                         let result = (|| {
                             self.check_initializers(declarations)?;
                             if let Some(invariant) = invariant {
@@ -1048,6 +1055,7 @@ impl Checker {
                             }
                             Ok(())
                         })();
+                        self.current_moreta = previous_moreta;
                         self.scopes.pop();
                         result?;
                         continue;
@@ -1122,6 +1130,35 @@ impl Checker {
             for var in vars {
                 let result = (|| -> Result<(), Error> {
                     let ty = self.resolve_mode(&var.mode)?;
+                    if var.constructor_args.is_some() && var.init.is_some() {
+                        return Err(Error::coded(
+                            "E0400",
+                            var.span,
+                            "a declaration cannot have both constructor arguments and INIT",
+                        ));
+                    }
+                    if let Some(args) = &var.constructor_args {
+                        let Type::Moreta(id) = ty else {
+                            return Err(Error::coded(
+                                "E0400",
+                                var.span,
+                                "constructor arguments require a module mode",
+                            ));
+                        };
+                        self.check_constructor_actuals(id, args, var.span)?;
+                    } else if let Type::Moreta(id) = ty {
+                        if var.init.is_none() {
+                            if let Some((signature, _)) = self.modes.moreta_constructor(id) {
+                                if !signature.params.is_empty() {
+                                    return Err(Error::coded(
+                                        "E0400",
+                                        var.span,
+                                        "this module mode requires constructor arguments",
+                                    ));
+                                }
+                            }
+                        }
+                    }
                     let Some(init) = &var.init else {
                         return Ok(());
                     };
@@ -1160,6 +1197,13 @@ impl Checker {
     }
 
     fn check_proc(&mut self, proc_def: &ProcDef) -> Result<(), Error> {
+        if (proc_def.constructor || proc_def.destructor) && self.current_moreta.is_none() {
+            return Err(Error::coded(
+                "E0400",
+                proc_def.span,
+                "CONSTR/DESTR are only valid for module-mode component procedures",
+            ));
+        }
         self.scopes.push(Scope::default());
         let result = self.check_proc_body(proc_def);
         self.scopes.pop();
@@ -1284,6 +1328,47 @@ impl Checker {
                 ));
             }
             scope.modes.insert(name, ty);
+        }
+        Ok(())
+    }
+
+    fn check_constructor_actuals(
+        &mut self,
+        id: types::MoretaId,
+        args: &[Expr],
+        span: Span,
+    ) -> Result<(), Error> {
+        let Some((signature, _)) = self.modes.moreta_constructor(id) else {
+            return Err(Error::coded(
+                "E0400",
+                span,
+                "this module mode has no constructor",
+            ));
+        };
+        if signature.params.len() != args.len() {
+            return Err(Error::coded(
+                "E0400",
+                span,
+                format!(
+                    "constructor expects {} argument(s), found {}",
+                    signature.params.len(),
+                    args.len()
+                ),
+            ));
+        }
+        for (arg, (param_ty, passing)) in args
+            .iter()
+            .zip(signature.params.iter().zip(&signature.passing))
+        {
+            if *passing != Passing::In {
+                return Err(Error::coded(
+                    "E0409",
+                    arg.span(),
+                    "constructor parameters currently require IN passing",
+                ));
+            }
+            let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
+            self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
         }
         Ok(())
     }
@@ -1563,9 +1648,7 @@ impl Checker {
                 } = callee
                 {
                     let result = self.check_method_call(base, method, args, *call_span, false)?;
-                    if result.is_none() {
-                        self.types.insert(*call_span, Type::Bool);
-                    }
+                    self.types.insert(*call_span, result.unwrap_or(Type::Bool));
                     Ok(())
                 } else {
                     let Expr::Apply { name, args, .. } = callee else {
@@ -1977,21 +2060,12 @@ impl Checker {
         span: Span,
         require_result: bool,
     ) -> Result<Option<Type>, Error> {
-        let Expr::Name {
-            span: name_span, ..
-        } = base
-        else {
-            return Err(Error::coded(
-                "E0400",
-                base.span(),
-                "module-mode method calls currently require a named object",
-            ));
-        };
+        let name_span = base.span();
         let base_ty = self.check_expr(base)?;
         let Type::Moreta(id) = base_ty else {
             return Err(Error::coded(
                 "E0400",
-                *name_span,
+                name_span,
                 "method call requires a module-mode object",
             ));
         };
@@ -2139,7 +2213,7 @@ impl Checker {
         match expr {
             Expr::Name { .. } => true,
             Expr::Field { base, .. } => self.is_field_location(base),
-            Expr::Deref { .. } => true,
+            Expr::Deref { .. } | Expr::SelfRef { .. } => true,
             Expr::Apply { name, args, .. } => {
                 args.len() == 1 && matches!(self.lookup_var(name), Some(Type::Array(_)))
             }
@@ -2226,6 +2300,16 @@ impl Checker {
             }
             Expr::Bits { .. } => Ok(Type::Bits),
             Expr::Null { .. } => Ok(Type::Null),
+            Expr::SelfRef { span } => {
+                let Some(id) = self.current_moreta else {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        "SELF is only valid inside a module-mode component",
+                    ));
+                };
+                Ok(Type::Moreta(id))
+            }
             Expr::AddressOf { target, span } => {
                 let Expr::Name { name, .. } = target.as_ref() else {
                     return Err(Error::coded(
@@ -2295,7 +2379,11 @@ impl Checker {
                 }
             }
             Expr::Allocate {
-                mode, value, span, ..
+                mode,
+                value,
+                constructor_args,
+                span,
+                ..
             } => {
                 let ty = self.resolve_mode(mode)?;
                 let Some(target) = crate::types::RefTarget::from_type(ty) else {
@@ -2305,9 +2393,26 @@ impl Checker {
                         "ALLOCATE cannot create a reference to this mode",
                     ));
                 };
+                if value.is_some() && constructor_args.is_some() {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        "ALLOCATE accepts either a value or constructor arguments",
+                    ));
+                }
                 if let Some(value) = value {
                     let value_ty = self.check_expr_for_mode(value, ty)?;
                     self.ensure_assignable(ty, value_ty, value.span())?;
+                }
+                if let Some(args) = constructor_args {
+                    let Type::Moreta(id) = ty else {
+                        return Err(Error::coded(
+                            "E0400",
+                            *span,
+                            "constructor arguments require a module mode",
+                        ));
+                    };
+                    self.check_constructor_actuals(id, args, *span)?;
                 }
                 Ok(Type::Ref(target))
             }

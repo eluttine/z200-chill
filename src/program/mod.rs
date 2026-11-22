@@ -1,7 +1,6 @@
 use crate::ast::{Declaration, Expr, Module, ModuleKind, Program};
 use crate::lexer::Span;
 use crate::modes::ModeTable;
-use crate::types::Type;
 use std::collections::HashMap;
 
 mod contexts;
@@ -20,7 +19,7 @@ pub(crate) use grants::{apply_forbid, grant_prefixes};
 pub use grants::{seize_name, seize_old_prefix};
 pub use interface::{
     add_external_exports, add_external_modes, portable_type, ExportInfo, ExportInfoKind,
-    ExternalInterface, ExternalModeIds, ExternalType, ModeInfo,
+    ExternalInterface, ExternalModeIds, ExternalType, ModeComponentInfo, ModeInfo, ModeInfoKind,
 };
 use modes::build_modes;
 pub(crate) use modes::resolve_mode_with;
@@ -236,8 +235,7 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
                                 ReachExportKind::Proc(signature) => {
                                     ExportKind::Proc(signature.clone())
                                 }
-                                ReachExportKind::Mode(Type::Struct(id)) => ExportKind::Mode(*id),
-                                ReachExportKind::Mode(_) => continue,
+                                ReachExportKind::Mode(ty) => ExportKind::Mode(*ty),
                             };
                             vars.entry(name.clone()).or_insert(kind);
                         }

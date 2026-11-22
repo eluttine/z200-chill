@@ -179,16 +179,24 @@ pub(super) fn add_grants(
             }
 
             let kind = if let Some(mode) = interface.modes.get(&name) {
-                let Type::Struct(id) = mode else {
+                if !matches!(mode, Type::Struct(_) | Type::Moreta(_)) {
                     return Err(Error::new(
                         span,
-                        format!("cannot GRANT `{name}`: only structure modes are supported as mode grants"),
+                        format!(
+                            "cannot GRANT `{name}`: only structure and module modes are supported as mode grants"
+                        ),
                     ));
-                };
+                }
                 if let Some(forbid) = &visibility.forbid {
+                    let Type::Struct(id) = mode else {
+                        return Err(Error::new(
+                            span,
+                            format!("FORBID requires a structure mode, not `{name}`"),
+                        ));
+                    };
                     apply_forbid(modes.get_mut(*id), &name, forbid, span)?;
                 }
-                ExportKind::Mode(*id)
+                ExportKind::Mode(*mode)
             } else if let Some(ty) = interface.vars.get(&name) {
                 if visibility.forbid.is_some() {
                     return Err(Error::new(
@@ -207,11 +215,17 @@ pub(super) fn add_grants(
                 ExportKind::Proc(signature.clone())
             } else if let Some(kind) = reach_exports.get(&name) {
                 match kind {
-                    ExportKind::Mode(id) => {
+                    ExportKind::Mode(ty) => {
                         if let Some(forbid) = &visibility.forbid {
+                            let Type::Struct(id) = ty else {
+                                return Err(Error::new(
+                                    span,
+                                    format!("FORBID requires a structure mode, not `{name}`"),
+                                ));
+                            };
                             apply_forbid(modes.get_mut(*id), &name, forbid, span)?;
                         }
-                        ExportKind::Mode(*id)
+                        ExportKind::Mode(*ty)
                     }
                     ExportKind::Proc(signature) => {
                         if visibility.forbid.is_some() {

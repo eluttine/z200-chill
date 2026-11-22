@@ -8,6 +8,7 @@ use super::{ExportEntry, ExportKind};
 pub enum ExternalType {
     Builtin(Type),
     Mode(String),
+    Moreta(String),
     Array {
         low: i128,
         high: i128,
@@ -26,6 +27,34 @@ pub struct ModeInfo {
     pub package_name: Option<String>,
     pub fields: Vec<(String, ExternalType)>,
     pub forbidden: Vec<String>,
+    pub kind: ModeInfoKind,
+    pub components: Vec<ModeComponentInfo>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeInfoKind {
+    Struct,
+    Moreta,
+}
+
+#[derive(Debug, Clone)]
+pub enum ModeComponentInfo {
+    Var {
+        name: String,
+        ty: ExternalType,
+    },
+    Proc {
+        name: String,
+        params: Vec<ExternalType>,
+        passing: Vec<crate::ast::Passing>,
+        result: Option<ExternalType>,
+        constructor: bool,
+        destructor: bool,
+    },
+    Mode {
+        name: String,
+        ty: ExternalType,
+    },
 }
 
 impl ModeInfo {
@@ -62,6 +91,7 @@ pub enum ExportInfoKind {
 pub fn portable_type(ty: Type, modes: &ModeTable) -> ExternalType {
     match ty {
         Type::Struct(id) => ExternalType::Mode(modes.get(id).symbol()),
+        Type::Moreta(id) => ExternalType::Moreta(modes.get_moreta(id).symbol()),
         Type::Array(array) => ExternalType::Array {
             low: array.low,
             high: array.high,
@@ -88,41 +118,66 @@ pub struct ExternalInterface {
 #[derive(Debug, Default)]
 pub struct ExternalModeIds {
     ids: HashMap<String, ModeId>,
+    moreta_ids: HashMap<String, crate::types::MoretaId>,
 }
 
 impl ExternalModeIds {
     pub fn get(&self, symbol: &str) -> Option<ModeId> {
         self.ids.get(symbol).copied()
     }
+
+    pub fn get_moreta(&self, symbol: &str) -> Option<crate::types::MoretaId> {
+        self.moreta_ids.get(symbol).copied()
+    }
 }
 
-/// Instantiate structure modes from external grant files into `modes`.
+/// Instantiate structure and module modes from external grant files into `modes`.
 pub fn add_external_modes(
     modes: &mut ModeTable,
     external: &[ExternalInterface],
 ) -> Result<ExternalModeIds, String> {
     let mut ids = ExternalModeIds::default();
     let mut definitions: Vec<&ModeInfo> = Vec::new();
+    let mut moreta_definitions: Vec<&ModeInfo> = Vec::new();
 
     for interface in external {
         for mode in &interface.modes {
             let symbol = mode.symbol();
-            if ids.ids.contains_key(&symbol) {
+            if ids.ids.contains_key(&symbol) || ids.moreta_ids.contains_key(&symbol) {
                 continue;
             }
-            let id = ModeId(modes.modes.len());
-            ids.ids.insert(symbol.clone(), id);
-            modes.modes.push(StructMode {
-                name: mode.name.clone(),
-                // External modes are never the local defining module.
-                package: usize::MAX,
-                module: usize::MAX,
-                package_name: mode.package_name.clone(),
-                module_name: mode.module_name.clone(),
-                fields: Vec::new(),
-                forbidden: HashSet::new(),
-            });
-            definitions.push(mode);
+            match mode.kind {
+                ModeInfoKind::Struct => {
+                    let id = ModeId(modes.modes.len());
+                    ids.ids.insert(symbol.clone(), id);
+                    modes.modes.push(StructMode {
+                        name: mode.name.clone(),
+                        // External modes are never the local defining module.
+                        package: usize::MAX,
+                        module: usize::MAX,
+                        package_name: mode.package_name.clone(),
+                        module_name: mode.module_name.clone(),
+                        fields: Vec::new(),
+                        forbidden: HashSet::new(),
+                    });
+                    definitions.push(mode);
+                }
+                ModeInfoKind::Moreta => {
+                    let id = crate::types::MoretaId(modes.moretas.len());
+                    ids.moreta_ids.insert(symbol.clone(), id);
+                    modes.moretas.push(crate::modes::MoretaMode {
+                        name: mode.name.clone(),
+                        package: usize::MAX,
+                        module: usize::MAX,
+                        package_name: mode.package_name.clone(),
+                        module_name: mode.module_name.clone(),
+                        bases: Vec::new(),
+                        abstract_mode: false,
+                        components: Vec::new(),
+                    });
+                    moreta_definitions.push(mode);
+                }
+            }
         }
     }
 
@@ -158,6 +213,57 @@ pub fn add_external_modes(
         let entry = modes.get_mut(id);
         entry.fields = fields;
         entry.forbidden = forbidden;
+    }
+
+    for mode in moreta_definitions {
+        let id = ids.moreta_ids[&mode.symbol()];
+        let mut components = Vec::with_capacity(mode.components.len());
+        for component in &mode.components {
+            match component {
+                ModeComponentInfo::Var { name, ty } => {
+                    components.push(crate::modes::MoretaComponent::Var {
+                        name: name.clone(),
+                        ty: resolve_external_type(ty, &ids)?,
+                    });
+                }
+                ModeComponentInfo::Proc {
+                    name,
+                    params,
+                    passing,
+                    result,
+                    constructor,
+                    destructor,
+                } => {
+                    let params = params
+                        .iter()
+                        .map(|ty| resolve_external_type(ty, &ids))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let result = match result {
+                        Some(ty) => Some(resolve_external_type(ty, &ids)?),
+                        None => None,
+                    };
+                    components.push(crate::modes::MoretaComponent::Proc {
+                        name: name.clone(),
+                        signature: ProcType {
+                            params,
+                            passing: passing.clone(),
+                            result,
+                            exceptions: None,
+                        },
+                        span: crate::lexer::Span::new(crate::lexer::SourceId(0), 0, 0),
+                        constructor: *constructor,
+                        destructor: *destructor,
+                    });
+                }
+                ModeComponentInfo::Mode { name, ty } => {
+                    components.push(crate::modes::MoretaComponent::Mode {
+                        name: name.clone(),
+                        ty: resolve_external_type(ty, &ids)?,
+                    });
+                }
+            }
+        }
+        modes.moretas[id.0].components = components;
     }
 
     Ok(ids)
@@ -246,10 +352,13 @@ pub fn add_external_exports(
                     exceptions: None,
                 }),
                 ExportInfoKind::Mode(mode) => {
-                    let id = ids.get(&mode.symbol()).ok_or_else(|| {
-                        format!("external mode `{}` was not materialized", mode.symbol())
-                    })?;
-                    ExportKind::Mode(id)
+                    let symbol = mode.symbol();
+                    let ty = match mode.kind {
+                        ModeInfoKind::Struct => ids.get(&symbol).map(Type::Struct),
+                        ModeInfoKind::Moreta => ids.get_moreta(&symbol).map(Type::Moreta),
+                    }
+                    .ok_or_else(|| format!("external mode `{symbol}` was not materialized"))?;
+                    ExportKind::Mode(ty)
                 }
             };
             exports.push(ExportEntry {
@@ -269,13 +378,17 @@ pub fn add_external_exports(
 
 fn resolve_external_type(ty: &ExternalType, ids: &ExternalModeIds) -> Result<Type, String> {
     match ty {
-        ExternalType::Builtin(Type::Struct(_)) => {
-            Err("internal: structure modes must use symbolic references".to_owned())
+        ExternalType::Builtin(Type::Struct(_) | Type::Moreta(_)) => {
+            Err("internal: modes must use symbolic references".to_owned())
         }
         ExternalType::Builtin(ty) => Ok(*ty),
         ExternalType::Mode(symbol) => ids
             .get(symbol)
             .map(Type::Struct)
+            .ok_or_else(|| format!("external interface references unknown mode `{symbol}`")),
+        ExternalType::Moreta(symbol) => ids
+            .get_moreta(symbol)
+            .map(Type::Moreta)
             .ok_or_else(|| format!("external interface references unknown mode `{symbol}`")),
         ExternalType::Array { low, high, element } => {
             let element = resolve_external_type(element, ids)?;

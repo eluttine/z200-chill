@@ -12,6 +12,11 @@ Z.200 requirements.
 - procedure components and static method calls `object.Method(...)`,
 - value-returning methods in expressions and non-value methods as call actions,
 - component `DCL ... INIT := ...` evaluation,
+- `SELF` field access (`SELF.field`) and sibling method calls (`SELF.Method(...)`),
+- constructors (`CONSTR`) and destructors (`DESTR`),
+- constructor arguments in declarations (`DCL x M (args);`) and `ALLOCATE(M, (args))`,
+- nested mode components (`NEWMODE`/`SYNMODE` inside a module body) accessed by
+  simple name inside the body and as `Mode!Component` outside it,
 - `BASED_ON` single or multiple module-mode inheritance,
 - `INVARIANT boolean-expression` at the end of a mode body.
 
@@ -28,6 +33,9 @@ Z.200 requirements.
 - Method calls copy component values into a temporary method scope, execute, and write
   mutated component values back to the object on success.
 - Method calls are statically dispatched by the object's declared module mode.
+- `SELF` refers to the current object inside a component procedure. Nested
+  `SELF.Method(...)` calls operate on a temporary copy and copy component changes
+  back before the outer method continues.
 
 ## Specs and inheritance
 
@@ -40,24 +48,45 @@ Z.200 requirements.
 - Spec and body invariants are combined with `AND`; inherited invariants are checked
   with derived invariants.
 
+## Constructors and destructors
+
+- A module mode may define at most one `CONSTR` and one `DESTR` component.
+- Constructors may take `IN` parameters and must not return a value.
+- Destructors take no parameters and must not return a value.
+- Component initializers run in textual order, then the constructor, then invariants.
+- Constructors run for declared objects and for `ALLOCATE` / `GETSTACK` calls with
+  constructor arguments.
+- Destructors run when `TERMINATE` ends an allocated module-mode location.
+- Destructors for statically declared objects at the end of their reach or lifetime are
+  not implemented yet.
+
 ## Invariants
 
-- Invariants are checked after object initialization and before/after every method
-  call.
+- Invariants are checked after object initialization (including constructors) and
+  before/after every method call.
 - Failure raises the catchable `INVFAIL` exception.
-- Invariants cannot yet be checked around process or constructor/destructor calls
-  because those are not implemented.
+- Invariants are also checked around constructor/destructor calls through the normal
+  method-call path.
+
+## Grant interfaces
+
+- Moreta modes are encoded in grant files with their variable, procedure, and mode
+  components.
+- Exported variables and procedure signatures may reference moreta modes
+  symbolically.
+- Nested mode components have a limited grant encoding: the underlying modes are
+  serialized as module modes, but preserving `Mode!Component` names across packages
+  is not complete yet.
 
 ## Not implemented
 
-- constructors/destructors (`CONSTR`, `DESTR`),
-- task modes, region modes, interface modes, and object references,
-- `SELF` and unqualified sibling method calls,
-- mode components and `Mode!Component` access,
+- task modes, region modes, and interface modes,
+- static-object destructors at reach/lifetime end,
 - `IMPLEMENTS`, assignability attributes, abstract/final attributes,
 - public/private component visibility and `GRANT` inside module-mode specs,
 - generic moreta templates,
-- grant-file encoding for set or module-mode types.
+- complete `Mode!Component` name preservation in grant files,
+- grant-file encoding for named set modes.
 
 These exclusions are deliberate. Adding them should be a separate design step rather
 than an incidental extension.

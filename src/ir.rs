@@ -57,6 +57,16 @@ pub enum Expr {
         ty: Type,
         span: Span,
     },
+    SelfValue {
+        ty: Type,
+        span: Span,
+    },
+    SelfField {
+        component: String,
+        path: Vec<String>,
+        ty: Type,
+        span: Span,
+    },
     AddressOf {
         name: String,
         ty: Type,
@@ -70,6 +80,7 @@ pub enum Expr {
     Allocate {
         mode: Type,
         value: Option<Node>,
+        constructor_args: Option<Vec<Node>>,
         ty: Type,
         span: Span,
     },
@@ -170,6 +181,7 @@ pub enum Expr {
     },
     MethodCall {
         object: String,
+        deref: Option<Node>,
         proc_span: Span,
         args: Vec<Node>,
         passing: Vec<Passing>,
@@ -199,6 +211,8 @@ impl Expr {
             | Self::String { span, .. }
             | Self::Bits { span, .. }
             | Self::Null { span, .. }
+            | Self::SelfValue { span, .. }
+            | Self::SelfField { span, .. }
             | Self::AddressOf { span, .. }
             | Self::Deref { span, .. }
             | Self::Allocate { span, .. }
@@ -232,6 +246,8 @@ impl Expr {
             | Self::String { ty, .. }
             | Self::Bits { ty, .. }
             | Self::Null { ty, .. }
+            | Self::SelfValue { ty, .. }
+            | Self::SelfField { ty, .. }
             | Self::AddressOf { ty, .. }
             | Self::Deref { ty, .. }
             | Self::Allocate { ty, .. }
@@ -521,6 +537,11 @@ impl Lowerer<'_> {
                         if let Some(init) = &var.init {
                             self.lower_expr(&init.value)?;
                         }
+                        if let Some(args) = &var.constructor_args {
+                            for arg in args {
+                                self.lower_expr(arg)?;
+                            }
+                        }
                     }
                 }
                 Declaration::Proc(proc_def) => {
@@ -795,6 +816,18 @@ impl Lowerer<'_> {
                     .ok_or_else(|| {
                         Error::new(target.span(), "internal: field has no checked mode")
                     })?;
+                if let Some((component, path, _)) = self_field_parts(target) {
+                    return Ok(if path.is_empty() {
+                        AssignTarget::Var(component)
+                    } else {
+                        AssignTarget::Field {
+                            root: component,
+                            index: None,
+                            path,
+                            ty,
+                        }
+                    });
+                }
                 if let Some((reference, path)) = flatten_deref_field(target) {
                     return Ok(AssignTarget::DerefField {
                         reference: self.lower_expr(reference)?,
@@ -1143,6 +1176,7 @@ impl Lowerer<'_> {
                 span,
             }),
             AstExpr::Null { .. } => Rc::new(Expr::Null { ty, span }),
+            AstExpr::SelfRef { .. } => Rc::new(Expr::SelfValue { ty, span }),
             AstExpr::AddressOf { target, span } => {
                 let AstExpr::Name { name, .. } = target.as_ref() else {
                     return Err(Error::new(
@@ -1161,7 +1195,12 @@ impl Lowerer<'_> {
                 ty,
                 span: *span,
             }),
-            AstExpr::Allocate { value, span, .. } => {
+            AstExpr::Allocate {
+                value,
+                constructor_args,
+                span,
+                ..
+            } => {
                 let Type::Ref(target) = ty else {
                     return Err(Error::new(
                         *span,
@@ -1173,6 +1212,14 @@ impl Lowerer<'_> {
                     value: value
                         .as_ref()
                         .map(|value| self.lower_expr(value))
+                        .transpose()?,
+                    constructor_args: constructor_args
+                        .as_ref()
+                        .map(|args| {
+                            args.iter()
+                                .map(|arg| self.lower_expr(arg))
+                                .collect::<Result<Vec<_>, _>>()
+                        })
                         .transpose()?,
                     ty,
                     span: *span,
@@ -1275,11 +1322,18 @@ impl Lowerer<'_> {
                 span: call_span,
                 ..
             } => {
-                let AstExpr::Name { name: object, .. } = base.as_ref() else {
-                    return Err(Error::new(
-                        base.span(),
-                        "internal: method call object is not a name",
-                    ));
+                let (object, deref) = match base.as_ref() {
+                    AstExpr::Name { name, .. } => (name.clone(), None),
+                    AstExpr::SelfRef { .. } => ("<self>".to_owned(), None),
+                    AstExpr::Deref { base, .. } => {
+                        ("<deref>".to_owned(), Some(self.lower_expr(base)?))
+                    }
+                    _ => {
+                        return Err(Error::new(
+                            base.span(),
+                            "internal: method call object is not a name, SELF, or dereference",
+                        ));
+                    }
                 };
                 let Some(ApplyResolution::Method {
                     proc_span,
@@ -1308,7 +1362,8 @@ impl Lowerer<'_> {
                     .map(|arg| self.lower_expr(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 Rc::new(Expr::MethodCall {
-                    object: object.clone(),
+                    object,
+                    deref,
                     proc_span: *proc_span,
                     args,
                     passing: passing.clone(),
@@ -1317,12 +1372,34 @@ impl Lowerer<'_> {
                     span: *call_span,
                 })
             }
-            AstExpr::Field { base, field, .. } => Rc::new(Expr::Field {
-                base: self.lower_expr(base)?,
-                field: field.clone(),
-                ty,
-                span,
-            }),
+            AstExpr::Field { base, field, .. } => {
+                if let Some((component, path, component_span)) = self_field_parts(expr) {
+                    let component_ty = self.check.types.get(&component_span).copied().unwrap_or(ty);
+                    let mut node = Rc::new(Expr::SelfField {
+                        component,
+                        path: Vec::new(),
+                        ty: component_ty,
+                        span: component_span,
+                    });
+                    for field in path {
+                        let field_span = span;
+                        node = Rc::new(Expr::Field {
+                            base: node,
+                            field,
+                            ty,
+                            span: field_span,
+                        });
+                    }
+                    node
+                } else {
+                    Rc::new(Expr::Field {
+                        base: self.lower_expr(base)?,
+                        field: field.clone(),
+                        ty,
+                        span,
+                    })
+                }
+            }
             AstExpr::ArrayTuple { elements, .. } => {
                 let checked = self
                     .check
@@ -1389,6 +1466,21 @@ impl Lowerer<'_> {
 
 /// Flatten `a.b.c` or `a(i).b.c` into the root name, optional array index, and
 /// field path.
+fn self_field_parts(expr: &AstExpr) -> Option<(String, Vec<String>, Span)> {
+    match expr {
+        AstExpr::Field { base, field, span } => match base.as_ref() {
+            AstExpr::SelfRef { .. } => Some((field.clone(), Vec::new(), *span)),
+            AstExpr::Field { .. } => {
+                let (component, mut path, component_span) = self_field_parts(base)?;
+                path.push(field.clone());
+                Some((component, path, component_span))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn flatten_deref_field(expr: &AstExpr) -> Option<(&AstExpr, Vec<String>)> {
     match expr {
         AstExpr::Field { base, field, .. } => match base.as_ref() {

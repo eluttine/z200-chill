@@ -940,6 +940,24 @@ impl<'a> Parser<'a> {
             if self.at_keyword(Keyword::Static) {
                 self.advance();
             }
+            let constructor_args = if self.at_lparen() {
+                self.advance();
+                let mut args = Vec::new();
+                if !self.at_rparen() {
+                    loop {
+                        args.push(self.parse_expr()?);
+                        if self.at_comma() {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.expect_rparen()?;
+                Some(args)
+            } else {
+                None
+            };
 
             let init = if self.at_keyword(Keyword::Init) {
                 self.advance();
@@ -967,6 +985,7 @@ impl<'a> Parser<'a> {
                 declarations.push(VarDecl {
                     name,
                     mode: mode.clone(),
+                    constructor_args: constructor_args.clone(),
                     init: init.clone(),
                     span: Span::new(self.source, name_span.start, end),
                 });
@@ -1039,6 +1058,8 @@ impl<'a> Parser<'a> {
                 params,
                 result,
                 exceptions,
+                constructor: false,
+                destructor: false,
                 declarations,
                 actions,
                 handler,
@@ -1076,6 +1097,25 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_component_attributes(&mut self) -> (bool, bool) {
+        let mut constructor = false;
+        let mut destructor = false;
+        loop {
+            if self.at_keyword(Keyword::Constr) {
+                self.advance();
+                constructor = true;
+            } else if self.at_keyword(Keyword::Destr) {
+                self.advance();
+                destructor = true;
+            } else if self.at_keyword(Keyword::Inline) || self.at_keyword(Keyword::Simple) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        (constructor, destructor)
+    }
+
     fn parse_proc(&mut self) -> Result<ProcDef, Error> {
         let start = self.current_span();
         let (name, _) = self.expect_identifier()?;
@@ -1083,6 +1123,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Keyword::Proc)?;
         let params = self.parse_formal_params()?;
         let (result, exceptions) = self.parse_result_and_exceptions()?;
+        let (constructor, destructor) = self.parse_component_attributes();
 
         self.expect_semicolon()?;
         let declarations = self.parse_declarations(false, false)?;
@@ -1110,6 +1151,8 @@ impl<'a> Parser<'a> {
             params,
             result,
             exceptions,
+            constructor,
+            destructor,
             declarations,
             actions,
             handler,
@@ -1124,6 +1167,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Keyword::Proc)?;
         let params = self.parse_formal_params()?;
         let (result, exceptions) = self.parse_result_and_exceptions()?;
+        let (constructor, destructor) = self.parse_component_attributes();
 
         self.expect_keyword(Keyword::End)?;
         if let Some(TokenKind::Identifier(trailing)) = self.kind() {
@@ -1142,6 +1186,8 @@ impl<'a> Parser<'a> {
             params,
             result,
             exceptions,
+            constructor,
+            destructor,
             span: Span::new(self.source, start.start, end.end),
         })
     }
@@ -1496,7 +1542,15 @@ impl<'a> Parser<'a> {
             inner.span = Span::new(self.source, start.start, inner.span.end);
             return Ok(inner);
         }
-        let (name, span) = self.expect_identifier()?;
+        let (mut name, first_span) = self.expect_identifier()?;
+        let mut span = first_span;
+        while matches!(self.kind(), Some(TokenKind::Bang)) {
+            self.advance();
+            let (part, part_span) = self.expect_identifier()?;
+            name.push('!');
+            name.push_str(&part);
+            span = Span::new(self.source, span.start, part_span.end);
+        }
         Ok(ModeRef {
             name,
             arrays: Vec::new(),
@@ -2248,6 +2302,10 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(expr)
             }
+            TokenKind::Keyword(Keyword::SelfKw) => {
+                self.advance();
+                Ok(Expr::SelfRef { span })
+            }
             TokenKind::Identifier(_) => {
                 let (name, name_span) = self.expect_identifier()?;
                 if name == "NULL" && !self.at_lparen() {
@@ -2256,16 +2314,34 @@ impl<'a> Parser<'a> {
                 if (name == "ALLOCATE" || name == "GETSTACK") && self.at_lparen() {
                     self.advance();
                     let mode = self.parse_mode_ref()?;
-                    let value = if self.at_comma() {
+                    let mut value = None;
+                    let mut constructor_args = None;
+                    if self.at_comma() {
                         self.advance();
-                        Some(Box::new(self.parse_expr()?))
-                    } else {
-                        None
-                    };
+                        if self.at_lparen() {
+                            self.advance();
+                            let mut args = Vec::new();
+                            if !self.at_rparen() {
+                                loop {
+                                    args.push(self.parse_expr()?);
+                                    if self.at_comma() {
+                                        self.advance();
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                            self.expect_rparen()?;
+                            constructor_args = Some(args);
+                        } else {
+                            value = Some(Box::new(self.parse_expr()?));
+                        }
+                    }
                     let end = self.expect_rparen()?;
                     return Ok(Expr::Allocate {
                         mode: Box::new(mode),
                         value,
+                        constructor_args,
                         stack: name == "GETSTACK",
                         span: Span::new(self.source, name_span.start, end.end),
                     });

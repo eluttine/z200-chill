@@ -49,13 +49,19 @@ pub enum MoretaComponent {
         name: String,
         signature: ProcType,
         span: crate::lexer::Span,
+        constructor: bool,
+        destructor: bool,
+    },
+    Mode {
+        name: String,
+        ty: Type,
     },
 }
 
 impl MoretaComponent {
     pub fn name(&self) -> &str {
         match self {
-            Self::Var { name, .. } | Self::Proc { name, .. } => name,
+            Self::Var { name, .. } | Self::Proc { name, .. } | Self::Mode { name, .. } => name,
         }
     }
 }
@@ -70,6 +76,17 @@ pub struct MoretaMode {
     pub bases: Vec<MoretaId>,
     pub abstract_mode: bool,
     pub components: Vec<MoretaComponent>,
+}
+
+impl MoretaMode {
+    /// Stable symbolic identity used by grant files.
+    pub fn symbol(&self) -> String {
+        mode_symbol(
+            self.package_name.as_deref(),
+            self.module_name.as_deref(),
+            &self.name,
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -112,7 +129,7 @@ impl ModeTable {
     pub fn moreta_var(&self, id: MoretaId, name: &str) -> Option<Type> {
         match self.moreta_component(id, name)? {
             MoretaComponent::Var { ty, .. } => Some(*ty),
-            MoretaComponent::Proc { .. } => None,
+            MoretaComponent::Proc { .. } | MoretaComponent::Mode { .. } => None,
         }
     }
 
@@ -121,8 +138,38 @@ impl ModeTable {
             MoretaComponent::Proc {
                 signature, span, ..
             } => Some((signature.clone(), *span)),
-            MoretaComponent::Var { .. } => None,
+            MoretaComponent::Var { .. } | MoretaComponent::Mode { .. } => None,
         }
+    }
+
+    pub fn moreta_constructor(&self, id: MoretaId) -> Option<(ProcType, crate::lexer::Span)> {
+        self.get_moreta(id)
+            .components
+            .iter()
+            .find_map(|component| match component {
+                MoretaComponent::Proc {
+                    signature,
+                    span,
+                    constructor: true,
+                    ..
+                } => Some((signature.clone(), *span)),
+                _ => None,
+            })
+    }
+
+    pub fn moreta_destructor(&self, id: MoretaId) -> Option<(ProcType, crate::lexer::Span)> {
+        self.get_moreta(id)
+            .components
+            .iter()
+            .find_map(|component| match component {
+                MoretaComponent::Proc {
+                    signature,
+                    span,
+                    destructor: true,
+                    ..
+                } => Some((signature.clone(), *span)),
+                _ => None,
+            })
     }
 
     pub fn get_set(&self, id: SetId) -> &SetMode {

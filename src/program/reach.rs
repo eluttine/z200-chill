@@ -127,7 +127,7 @@ fn collect_reach_exports(
                 }
             }
             Declaration::Mode(mode_def) => {
-                if let Some(Type::Struct(_)) = mode_names.get(&mode_def.name) {
+                if let Some(Type::Struct(_) | Type::Moreta(_)) = mode_names.get(&mode_def.name) {
                     grantable.insert(
                         mode_def.name.clone(),
                         ReachExportKind::Mode(mode_names[&mode_def.name]),
