@@ -16,11 +16,10 @@ pub struct Error {
 
 impl Error {
     pub fn new(span: Span, message: impl Into<String>) -> Self {
-        let message = message.into();
         Self {
-            code: classify(&message),
+            code: "E0400",
             span,
-            message,
+            message: message.into(),
         }
     }
 
@@ -30,43 +29,6 @@ impl Error {
             span,
             message: message.into(),
         }
-    }
-}
-
-fn classify(message: &str) -> &'static str {
-    if message.contains("not implemented yet") || message.contains("not supported yet") {
-        "E0409"
-    } else if message.contains("unknown mode") {
-        "E0401"
-    } else if message.contains("duplicate") {
-        "E0402"
-    } else if message.contains("unknown variable") || message.contains("unknown name") {
-        "E0403"
-    } else if message.contains("cannot assign")
-        || message.contains("mixing")
-        || message.contains("mismatch")
-        || message.contains("cannot compare")
-        || message.contains("cannot order")
-        || message.contains("arithmetic requires")
-        || message.contains("requires BOOL")
-        || message.contains("requires an integer")
-    {
-        "E0404"
-    } else if message.contains("outside the range") || message.contains("CASE label") {
-        "E0405"
-    } else if message.contains("GRANT") || message.contains("SEIZE") || message.contains("spec") {
-        "E0406"
-    } else if message.contains("CASE")
-        || message.contains("DO FOR")
-        || message.contains("DO WHILE")
-        || message.contains("EXIT")
-        || message.contains("loop counter")
-    {
-        "E0407"
-    } else if message.contains("RETURN") || message.contains("RESULT") {
-        "E0408"
-    } else {
-        "E0400"
     }
 }
 
@@ -362,7 +324,8 @@ impl Checker {
                 };
                 for var in vars {
                     if var.init.is_some() {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0406",
                             var.span,
                             "initialization is not allowed in a spec module",
                         ));
@@ -479,7 +442,8 @@ impl Checker {
         for alternative in &handler.alternatives {
             for exception in &alternative.exceptions {
                 if !names.insert(exception.clone()) {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0402",
                         alternative.span,
                         format!("duplicate exception name `{exception}` in handler"),
                     ));
@@ -513,7 +477,8 @@ impl Checker {
     fn check_nested_module(&mut self, module: &Module) -> Result<(), Error> {
         for declaration in &module.declarations {
             if let Declaration::ProcSignature(signature) = declaration {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0409",
                     signature.span,
                     "procedure signatures in nested modules are not supported yet",
                 ));
@@ -587,7 +552,8 @@ impl Checker {
                     Declaration::Var(list) => {
                         for var in list {
                             if !declared_names.insert(var.name.clone()) {
-                                return Err(Error::new(
+                                return Err(Error::coded(
+                                    "E0402",
                                     var.span,
                                     format!("duplicate context declaration `{}`", var.name),
                                 ));
@@ -609,7 +575,7 @@ impl Checker {
                             match parent_ty {
                                 Some(actual) if actual == declared => {}
                                 Some(actual) => {
-                                    return Err(Error::new(
+                                    return Err(Error::coded("E0400", 
                                         var.span,
                                         format!(
                                             "context declaration `{}` has mode {} but the enclosing reach has mode {}",
@@ -620,7 +586,7 @@ impl Checker {
                                     ));
                                 }
                                 None => {
-                                    return Err(Error::new(
+                                    return Err(Error::coded("E0400", 
                                         var.span,
                                         format!(
                                             "context declaration `{}` has no matching name in the enclosing reach",
@@ -633,7 +599,8 @@ impl Checker {
                     }
                     Declaration::ProcSignature(signature) => {
                         if !declared_names.insert(signature.name.clone()) {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0402",
                                 signature.span,
                                 format!("duplicate context declaration `{}`", signature.name),
                             ));
@@ -660,7 +627,8 @@ impl Checker {
                         match parent_sig {
                             Some(actual) if actual == declared => {}
                             Some(_) => {
-                                return Err(Error::new(
+                                return Err(Error::coded(
+                                    "E0400",
                                     signature.span,
                                     format!(
                                         "context procedure `{}` does not match the enclosing reach",
@@ -669,7 +637,7 @@ impl Checker {
                                 ));
                             }
                             None => {
-                                return Err(Error::new(
+                                return Err(Error::coded("E0400", 
                                     signature.span,
                                     format!(
                                         "context procedure `{}` has no matching name in the enclosing reach",
@@ -680,7 +648,8 @@ impl Checker {
                         }
                     }
                     Declaration::Mode(_) | Declaration::Proc(_) => {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0400",
                             context.span,
                             "unsupported declaration in a nested context",
                         ));
@@ -697,7 +666,8 @@ impl Checker {
                     continue;
                 };
                 if context_index == 0 {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         visibility.span,
                         "a context with no enclosing context cannot contain visibility statements",
                     ));
@@ -706,7 +676,8 @@ impl Checker {
                     || !visibility.friends.is_empty()
                     || visibility.forbid.is_some()
                 {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0409",
                         visibility.span,
                         "advanced clauses in context visibility are not implemented yet",
                     ));
@@ -727,13 +698,15 @@ impl Checker {
                 for name in targets {
                     if visibility.kind == VisibilityKind::Grant {
                         if !current_names.contains(&name) {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0406",
                                 visibility.span,
                                 format!("cannot GRANT `{name}` in a context: not declared here"),
                             ));
                         }
                     } else if !declared_names.contains(&name) {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0406",
                             visibility.span,
                             format!("cannot SEIZE `{name}` in a context: no earlier declaration"),
                         ));
@@ -761,7 +734,7 @@ impl Checker {
                 continue;
             }
             let old_prefix = program::seize_old_prefix(&visibility.prefix)
-                .map_err(|message| Error::new(visibility.span, message))?;
+                .map_err(|message| Error::coded("E0400", visibility.span, message))?;
 
             if visibility.all {
                 if old_prefix.is_empty() {
@@ -790,7 +763,7 @@ impl Checker {
                         [] => {}
                         [binding] => self.import_reach_export(name, binding, visibility.span)?,
                         _ => {
-                            return Err(Error::new(
+                            return Err(Error::coded("E0406", 
                                 visibility.span,
                                 format!(
                                     "SEIZE ALL is ambiguous for `{name}`; several sibling modules grant it"
@@ -822,7 +795,8 @@ impl Checker {
                 }
 
                 let Some(exports) = parent.exports.get(&name.name) else {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0406",
                         name.span,
                         format!(
                             "cannot SEIZE `{}`: no such name in the enclosing reach",
@@ -845,7 +819,8 @@ impl Checker {
                         self.import_reach_export(&name.name, &binding, name.span)?;
                     }
                     Err(crate::reach::SelectError::NotFound) => {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0406",
                             name.span,
                             format!(
                                 "cannot SEIZE `{}`: no such name in the enclosing reach",
@@ -854,7 +829,8 @@ impl Checker {
                         ));
                     }
                     Err(crate::reach::SelectError::Ambiguous) => {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0406",
                             name.span,
                             format!(
                                 "SEIZE `{}` is ambiguous; several sibling modules grant it",
@@ -874,7 +850,8 @@ impl Checker {
             || scope.procs.contains_key(name)
             || scope.modes.contains_key(name)
         {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0402",
                 span,
                 format!("duplicate declaration of `{name}`"),
             ));
@@ -899,18 +876,19 @@ impl Checker {
 
             for name in &visibility.names {
                 let (source, local) = program::seize_name(name, &visibility.prefix)
-                    .map_err(|message| Error::new(name.span, message))?;
+                    .map_err(|message| Error::coded("E0400", name.span, message))?;
                 let export = program::resolve_export(
                     &self.exports,
                     &source,
                     self.current_package_name.as_deref(),
                     self.current_module_name.as_deref(),
                 )
-                .map_err(|message| Error::new(name.span, message))?
+                .map_err(|message| Error::coded("E0400", name.span, message))?
                 .clone();
 
                 if export.module == self.current_module {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0406",
                         name.span,
                         format!("cannot SEIZE `{}` from the same module", name.qualified()),
                     ));
@@ -925,7 +903,7 @@ impl Checker {
     fn seize_all(&mut self, visibility: &Visibility) -> Result<(), Error> {
         let span = visibility.span;
         let old_prefix = program::seize_old_prefix(&visibility.prefix)
-            .map_err(|message| Error::new(span, message))?;
+            .map_err(|message| Error::coded("E0400", span, message))?;
         let mut accessible: Vec<program::ExportEntry> = self
             .exports
             .iter()
@@ -949,7 +927,8 @@ impl Checker {
         let mut names = HashSet::new();
         for export in &accessible {
             if !names.insert(export.name.clone()) {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0406",
                     span,
                     format!(
                         "SEIZE ALL is ambiguous for `{}`; use a qualified SEIZE",
@@ -1025,7 +1004,8 @@ impl Checker {
                             span: mode_def.span,
                         };
                         let Type::Moreta(id) = self.resolve_mode(&mode_ref)? else {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0400",
                                 mode_def.span,
                                 "internal: module mode has wrong type",
                             ));
@@ -1051,7 +1031,8 @@ impl Checker {
                             if let Some(invariant) = invariant {
                                 let ty = self.check_expr(invariant)?;
                                 if ty != Type::Bool {
-                                    return Err(Error::new(
+                                    return Err(Error::coded(
+                                        "E0400",
                                         invariant.span(),
                                         "INVARIANT expression must be BOOL",
                                     ));
@@ -1084,7 +1065,8 @@ impl Checker {
                     };
                     let ty = self.resolve_mode(&mode_ref)?;
                     let Type::Set(id) = ty else {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0400",
                             mode_def.span,
                             "internal: set mode has wrong type",
                         ));
@@ -1098,7 +1080,7 @@ impl Checker {
                             .find(|(name, _)| name == &element.name)
                             .map(|(_, value)| *value)
                             .ok_or_else(|| {
-                                Error::new(element.span, "internal: missing set element")
+                                Error::coded("E0400", element.span, "internal: missing set element")
                             })?;
                         let scope = self.scopes.last_mut().expect("scope stack is never empty");
                         if scope.vars.contains_key(&element.name)
@@ -1108,7 +1090,8 @@ impl Checker {
                                 .insert(element.name.clone(), (ty, value))
                                 .is_some()
                         {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0402",
                                 element.span,
                                 format!("duplicate declaration of `{}`", element.name),
                             ));
@@ -1183,7 +1166,8 @@ impl Checker {
         let setup = (|| {
             for param in &proc_def.params {
                 if !seen.insert(param.name.as_str()) {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0402",
                         param.span,
                         format!("duplicate parameter `{}`", param.name),
                     ));
@@ -1241,7 +1225,8 @@ impl Checker {
     fn declare_var(&mut self, name: &str, ty: Type, span: Span) -> Result<(), Error> {
         if let Type::Moreta(id) = ty {
             if self.modes.get_moreta(id).abstract_mode {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0400",
                     span,
                     "abstract module mode cannot be instantiated",
                 ));
@@ -1252,7 +1237,8 @@ impl Checker {
             || scope.procs.contains_key(name)
             || scope.set_values.contains_key(name)
         {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0402",
                 span,
                 format!("duplicate declaration of `{name}`"),
             ));
@@ -1267,7 +1253,8 @@ impl Checker {
             || scope.procs.contains_key(name)
             || scope.set_values.contains_key(name)
         {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0402",
                 span,
                 format!("duplicate declaration of `{name}`"),
             ));
@@ -1285,7 +1272,8 @@ impl Checker {
         let scope = self.scopes.last_mut().expect("scope stack is never empty");
         for (name, ty) in modes {
             if scope.modes.contains_key(&name) {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0400",
                     module.span,
                     format!("mode `{name}` is already visible in this module"),
                 ));
@@ -1306,7 +1294,8 @@ impl Checker {
         let mut seen = HashSet::new();
         for param in params {
             if !seen.insert(param.name.clone()) {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0402",
                     param.span,
                     format!("duplicate parameter `{}`", param.name),
                 ));
@@ -1320,7 +1309,8 @@ impl Checker {
         let mut exception_names = HashSet::new();
         for exception in exceptions {
             if !exception_names.insert(exception.as_str()) {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0402",
                     span,
                     format!("duplicate exception name `{exception}` in EXCEPTIONS list"),
                 ));
@@ -1340,7 +1330,8 @@ impl Checker {
                 Some(Type::Bool) => crate::types::PowerSetMember::Bool,
                 Some(Type::Char) => crate::types::PowerSetMember::Char,
                 _ => {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         mode.span,
                         "POWERSET member mode must be INT/SHORT_INT/LONG_INT, BOOL, or CHAR",
                     ));
@@ -1373,7 +1364,8 @@ impl Checker {
             };
             let base = self.resolve_mode(&element_mode)?;
             let Some(element) = crate::types::ArrayElement::from_type(base) else {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0400",
                     mode.span,
                     format!(
                         "array elements must be scalar or structure modes, found {}",
@@ -1382,7 +1374,7 @@ impl Checker {
                 ));
             };
             return crate::types::array_type_from_bounds(&mode.arrays, element)
-                .ok_or_else(|| Error::new(mode.span, "unsupported array dimensions"));
+                .ok_or_else(|| Error::coded("E0400", mode.span, "unsupported array dimensions"));
         }
         if let Some(length) = mode.string_length {
             return Ok(Type::BoundedString {
@@ -1510,7 +1502,8 @@ impl Checker {
                 self.record_exception("ASSERTFAIL");
                 let ty = self.check_expr(condition)?;
                 if ty != Type::Bool {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0404",
                         condition.span(),
                         format!("ASSERT requires BOOL, found {}", ty.describe()),
                     ));
@@ -1532,7 +1525,7 @@ impl Checker {
                     Ok(())
                 } else {
                     let Expr::Apply { name, args, .. } = callee else {
-                        return Err(Error::new(*span, "expected a procedure call"));
+                        return Err(Error::coded("E0400", *span, "expected a procedure call"));
                     };
                     self.check_apply(name, args, *span, false)?;
                     Ok(())
@@ -1549,7 +1542,8 @@ impl Checker {
                 for branch in branches {
                     let ty = self.check_expr(&branch.condition)?;
                     if ty != Type::Bool {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0400",
                             branch.condition.span(),
                             format!("IF condition must be BOOL, found {}", ty.describe()),
                         ));
@@ -1571,7 +1565,8 @@ impl Checker {
                     DoControl::While(condition) => {
                         let ty = self.check_expr(condition)?;
                         if ty != Type::Bool {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0407",
                                 condition.span(),
                                 format!("DO WHILE condition must be BOOL, found {}", ty.describe()),
                             ));
@@ -1587,14 +1582,19 @@ impl Checker {
                         let start_ty = self.check_expr(start)?;
                         let end_ty = self.check_expr(end)?;
                         if !start_ty.is_int() || !end_ty.is_int() {
-                            return Err(Error::new(*span, "DO FOR bounds must be integers"));
+                            return Err(Error::coded(
+                                "E0407",
+                                *span,
+                                "DO FOR bounds must be integers",
+                            ));
                         }
                         let mut counter_ty = self.combine_int(start_ty, end_ty, *span)?;
 
                         if let Some(step_expr) = step {
                             let step_ty = self.check_expr(step_expr)?;
                             if !step_ty.is_int() {
-                                return Err(Error::new(
+                                return Err(Error::coded(
+                                    "E0407",
                                     step_expr.span(),
                                     "DO FOR step must be an integer",
                                 ));
@@ -1602,7 +1602,8 @@ impl Checker {
                             counter_ty = self.combine_int(counter_ty, step_ty, step_expr.span())?;
                             if let Some(value) = constant_int(step_expr) {
                                 if value <= 0 {
-                                    return Err(Error::new(
+                                    return Err(Error::coded(
+                                        "E0407",
                                         step_expr.span(),
                                         "DO FOR step must be positive",
                                     ));
@@ -1632,7 +1633,11 @@ impl Checker {
                 span,
             } => {
                 if !self.labels.iter().any(|label| label == name) {
-                    return Err(Error::new(*span, format!("unknown EXIT label `{name}`")));
+                    return Err(Error::coded(
+                        "E0407",
+                        *span,
+                        format!("unknown EXIT label `{name}`"),
+                    ));
                 }
                 Ok(())
             }
@@ -1646,7 +1651,8 @@ impl Checker {
             } => {
                 let selector_ty = self.check_expr(selector)?;
                 if !selector_ty.is_int() {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0407",
                         selector.span(),
                         "CASE selector must be an integer in v0",
                     ));
@@ -1675,7 +1681,8 @@ impl Checker {
             }
             Action::Labelled { label, action, .. } => {
                 if self.labels.iter().any(|existing| existing == label) {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0402",
                         action.span(),
                         format!("duplicate label `{label}`"),
                     ));
@@ -1721,10 +1728,11 @@ impl Checker {
 
     fn check_return(&mut self, value: Option<&Expr>, span: Span) -> Result<(), Error> {
         match self.results.last().copied() {
-            None => Err(Error::new(span, "RETURN outside a procedure")),
+            None => Err(Error::coded("E0408", span, "RETURN outside a procedure")),
             Some(None) => {
                 if value.is_some() {
-                    Err(Error::new(
+                    Err(Error::coded(
+                        "E0408",
                         span,
                         "RETURN with a value in a procedure that has no result",
                     ))
@@ -1748,7 +1756,11 @@ impl Checker {
                 let value_ty = self.check_expr_for_mode(value, result_ty)?;
                 self.ensure_assignable(result_ty, value_ty, span)
             }
-            _ => Err(Error::new(span, "RESULT outside a value procedure")),
+            _ => Err(Error::coded(
+                "E0408",
+                span,
+                "RESULT outside a value procedure",
+            )),
         }
     }
 
@@ -1757,14 +1769,16 @@ impl Checker {
             Expr::Field { base, field, span } => {
                 if let Some(root) = field_root(target) {
                     if self.is_readonly(root) {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0407",
                             *span,
                             format!("`{root}` is a loop counter and is not a location"),
                         ));
                     }
                 }
                 if !self.is_field_location(target) {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         *span,
                         "assignment target must be a variable, array element, or field of one",
                     ));
@@ -1780,7 +1794,8 @@ impl Checker {
                 span,
             } => {
                 if self.is_readonly(name) {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0407",
                         *span,
                         format!("`{name}` is a loop counter and is not a location"),
                     ));
@@ -1789,13 +1804,15 @@ impl Checker {
             }
             Expr::Apply { name, args, span } => {
                 let Some(array) = self.lookup_var(name) else {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         *span,
                         "assignment target must be a name, field, or array element",
                     ));
                 };
                 if !matches!(array, Type::Array(_) | Type::MultiArray(_)) {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         *span,
                         "assignment target must be a name, field, or array element",
                     ));
@@ -1804,15 +1821,18 @@ impl Checker {
             }
             Expr::Name { name, span } => {
                 if self.is_readonly(name) {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0407",
                         *span,
                         format!("`{name}` is a loop counter and is not a location"),
                     ));
                 }
-                self.lookup_var(name)
-                    .ok_or_else(|| Error::new(*span, format!("unknown variable `{name}`")))
+                self.lookup_var(name).ok_or_else(|| {
+                    Error::coded("E0403", *span, format!("unknown variable `{name}`"))
+                })
             }
-            _ => Err(Error::new(
+            _ => Err(Error::coded(
+                "E0400",
                 target.span(),
                 "assignment target must be a name or field",
             )),
@@ -1830,13 +1850,15 @@ impl Checker {
         let array = match self.lookup_var(name) {
             Some(Type::Array(array)) => array,
             Some(Type::MultiArray(_)) => {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0409",
                     span,
                     "array slices of multidimensional arrays are not implemented yet",
                 ));
             }
             _ => {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0400",
                     span,
                     format!("array slice requires an array, but `{name}` is not one"),
                 ));
@@ -1845,13 +1867,21 @@ impl Checker {
         let first_ty = self.check_expr(first)?;
         let last_ty = self.check_expr(last)?;
         if !first_ty.is_int() || !last_ty.is_int() {
-            return Err(Error::new(span, "array slice bounds must be integers"));
+            return Err(Error::coded(
+                "E0400",
+                span,
+                "array slice bounds must be integers",
+            ));
         }
         let first_value = constant_int(first);
         let last_value = constant_int(last);
         let (Some(first_value), Some(last_value)) = (first_value, last_value) else {
             if up && matches!(last_value, Some(size) if size < 1) {
-                return Err(Error::new(last.span(), "array slice size must be positive"));
+                return Err(Error::coded(
+                    "E0400",
+                    last.span(),
+                    "array slice size must be positive",
+                ));
             }
             return Ok(Type::DynamicArray {
                 low: array.low,
@@ -1860,17 +1890,22 @@ impl Checker {
         };
         let (lower, upper) = if up {
             if last_value < 1 {
-                return Err(Error::new(last.span(), "array slice size must be positive"));
+                return Err(Error::coded(
+                    "E0400",
+                    last.span(),
+                    "array slice size must be positive",
+                ));
             }
             let Some(upper) = first_value.checked_add(last_value - 1) else {
-                return Err(Error::new(span, "array slice bounds overflow"));
+                return Err(Error::coded("E0400", span, "array slice bounds overflow"));
             };
             (first_value, upper)
         } else {
             (first_value, last_value)
         };
         if lower > upper || lower < array.low || upper > array.high {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 span,
                 format!(
                     "array slice `{lower}:{upper}` is outside the array bounds `{}:{}`",
@@ -1880,7 +1915,7 @@ impl Checker {
         }
         let count = upper - lower + 1;
         let Some(high) = array.low.checked_add(count - 1) else {
-            return Err(Error::new(span, "array slice bounds overflow"));
+            return Err(Error::coded("E0400", span, "array slice bounds overflow"));
         };
         Ok(Type::Array(crate::types::ArrayType {
             low: array.low,
@@ -1901,26 +1936,30 @@ impl Checker {
             span: name_span, ..
         } = base
         else {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 base.span(),
                 "module-mode method calls currently require a named object",
             ));
         };
         let base_ty = self.check_expr(base)?;
         let Type::Moreta(id) = base_ty else {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 *name_span,
                 "method call requires a module-mode object",
             ));
         };
         let Some((signature, proc_span)) = self.modes.moreta_proc(id, method) else {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 span,
                 format!("unknown procedure component `{method}`"),
             ));
         };
         if signature.params.len() != args.len() {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 span,
                 format!(
                     "procedure component `{method}` expects {} argument(s), found {}",
@@ -1941,7 +1980,8 @@ impl Checker {
             },
         );
         if require_result && signature.result.is_none() {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 span,
                 format!("procedure component `{method}` does not return a value"),
             ));
@@ -1953,7 +1993,8 @@ impl Checker {
         let base_ty = self.check_expr(base)?;
         if let Type::Moreta(id) = base_ty {
             let Some(ty) = self.modes.moreta_var(id, field) else {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0403",
                     span,
                     format!(
                         "unknown variable component `{field}` in module mode `{}`",
@@ -1965,7 +2006,8 @@ impl Checker {
         }
 
         let Type::Struct(id) = base_ty else {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 span,
                 format!(
                     "field selection requires a structure or module mode, found {}",
@@ -1981,7 +2023,8 @@ impl Checker {
             .enumerate()
             .find(|(_, info)| info.name == field)
         else {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 span,
                 format!("unknown field `{field}` in structure mode `{}`", mode.name),
             ));
@@ -1992,7 +2035,8 @@ impl Checker {
             None => mode.module == self.current_module,
         };
         if !in_defining_module && mode.forbidden.contains(field) {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 span,
                 format!("field `{field}` is FORBIDden outside its defining module"),
             ));
@@ -2033,13 +2077,15 @@ impl Checker {
             Expr::Integer { value, span, .. } => {
                 let long = IntKind::Long;
                 let Some((low, high)) = types::int_bounds(long, self.profile) else {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         *span,
                         "integer widths above 127 are not supported",
                     ));
                 };
                 if !(*value >= low && *value <= high) {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0405",
                         *span,
                         format!("integer literal `{value}` is outside the range of &INT"),
                     ));
@@ -2066,17 +2112,23 @@ impl Checker {
                 } else if let Some(ty) = self.lookup_var(name) {
                     Ok(ty)
                 } else if self.lookup_proc(name).is_some() {
-                    Err(Error::new(
+                    Err(Error::coded(
+                        "E0400",
                         *span,
                         format!("procedure `{name}` must be called with `()`"),
                     ))
                 } else {
-                    Err(Error::new(*span, format!("unknown name `{name}`")))
+                    Err(Error::coded(
+                        "E0403",
+                        *span,
+                        format!("unknown name `{name}`"),
+                    ))
                 }
             }
             Expr::Apply { name, args, span } => match self.check_apply(name, args, *span, true)? {
                 Some(ty) => Ok(ty),
-                None => Err(Error::new(
+                None => Err(Error::coded(
+                    "E0400",
                     *span,
                     format!("procedure `{name}` does not return a value"),
                 )),
@@ -2088,7 +2140,8 @@ impl Checker {
                         if ty.is_int() || ty == Type::Float {
                             Ok(ty)
                         } else {
-                            Err(Error::new(
+                            Err(Error::coded(
+                                "E0404",
                                 *span,
                                 format!("unary `-` requires an integer, found {}", ty.describe()),
                             ))
@@ -2098,7 +2151,8 @@ impl Checker {
                         if ty == Type::Bool {
                             Ok(Type::Bool)
                         } else {
-                            Err(Error::new(
+                            Err(Error::coded(
+                                "E0404",
                                 *span,
                                 format!("NOT requires BOOL, found {}", ty.describe()),
                             ))
@@ -2181,7 +2235,8 @@ impl Checker {
                 {
                     Ok(Type::Bool)
                 } else {
-                    Err(Error::new(
+                    Err(Error::coded(
+                        "E0404",
                         span,
                         format!(
                             "cannot compare {} with {}",
@@ -2202,7 +2257,8 @@ impl Checker {
                 {
                     Ok(Type::Bool)
                 } else {
-                    Err(Error::new(
+                    Err(Error::coded(
+                        "E0404",
                         span,
                         format!(
                             "cannot order {} against {}",
@@ -2234,7 +2290,7 @@ impl Checker {
                 {
                     Ok(Type::Float)
                 } else {
-                    Err(Error::new(
+                    Err(Error::coded("E0404", 
                         span,
                         format!(
                             "arithmetic requires integers or matching FLOAT operands, found {} and {}",
@@ -2246,13 +2302,15 @@ impl Checker {
             }
             BinaryOp::In => {
                 let Type::PowerSet(set) = right else {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         span,
                         "the right operand of IN must be a powerset",
                     ));
                 };
                 if !member_compatible(set.member, left) {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         span,
                         format!("{} is not a member of this powerset", left.describe()),
                     ));
@@ -2263,7 +2321,8 @@ impl Checker {
                 if is_string_type(left) && is_string_type(right) {
                     Ok(Type::String)
                 } else {
-                    Err(Error::new(
+                    Err(Error::coded(
+                        "E0400",
                         span,
                         format!(
                             "`//` requires character strings, found {} and {}",
@@ -2280,7 +2339,8 @@ impl Checker {
         if left == Type::Bool && right == Type::Bool {
             Ok(())
         } else {
-            Err(Error::new(
+            Err(Error::coded(
+                "E0404",
                 span,
                 format!(
                     "boolean operator requires BOOL, found {} and {}",
@@ -2300,7 +2360,8 @@ impl Checker {
             (Type::Int(left_kind), Type::Int(right_kind)) if left_kind == right_kind => {
                 Ok(Type::Int(left_kind))
             }
-            (Type::Int(left_kind), Type::Int(right_kind)) => Err(Error::new(
+            (Type::Int(left_kind), Type::Int(right_kind)) => Err(Error::coded(
+                "E0404",
                 span,
                 format!(
                     "integer mode mismatch: {} and {}; use an explicit conversion",
@@ -2308,7 +2369,8 @@ impl Checker {
                     right_kind.name()
                 ),
             )),
-            _ => Err(Error::new(
+            _ => Err(Error::coded(
+                "E0404",
                 span,
                 format!(
                     "mixing {} with {} is not allowed",
@@ -2330,28 +2392,34 @@ impl Checker {
             use crate::builtins::AssociationOp;
             let association_arg = |checker: &mut Checker, arg: &Expr| -> Result<(), Error> {
                 let Expr::Name { span, .. } = arg else {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         arg.span(),
                         "association/access argument must be a location",
                     ));
                 };
                 let ty = checker.check_expr(arg)?;
                 if ty != Type::Association {
-                    return Err(Error::new(*span, "expected an ASSOCIATION location"));
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        "expected an ASSOCIATION location",
+                    ));
                 }
                 Ok(())
             };
             let access_type =
                 |checker: &mut Checker, arg: &Expr| -> Result<crate::types::AccessType, Error> {
                     let Expr::Name { span, .. } = arg else {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0400",
                             arg.span(),
                             "association/access argument must be a location",
                         ));
                     };
                     let ty = checker.check_expr(arg)?;
                     let Type::Access(access) = ty else {
-                        return Err(Error::new(*span, "expected an ACCESS location"));
+                        return Err(Error::coded("E0400", *span, "expected an ACCESS location"));
                     };
                     Ok(access)
                 };
@@ -2360,7 +2428,8 @@ impl Checker {
             let result = match op {
                 AssociationOp::Associate => {
                     let [association, path] = args else {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0400",
                             span,
                             "ASSOCIATE takes an association and a path",
                         ));
@@ -2368,7 +2437,11 @@ impl Checker {
                     association_arg(self, association)?;
                     let path_ty = self.check_expr(path)?;
                     if !is_string_type(path_ty) {
-                        return Err(Error::new(path.span(), "ASSOCIATE path must be CHARS"));
+                        return Err(Error::coded(
+                            "E0400",
+                            path.span(),
+                            "ASSOCIATE path must be CHARS",
+                        ));
                     }
                     None
                 }
@@ -2380,7 +2453,8 @@ impl Checker {
                 | AssociationOp::Sequencible
                 | AssociationOp::Variable => {
                     let [association] = args else {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0400",
                             span,
                             format!("{name} takes an association location"),
                         ));
@@ -2390,11 +2464,16 @@ impl Checker {
                 }
                 AssociationOp::Modify => {
                     let Some(association) = args.first() else {
-                        return Err(Error::new(span, "MODIFY takes an association location"));
+                        return Err(Error::coded(
+                            "E0400",
+                            span,
+                            "MODIFY takes an association location",
+                        ));
                     };
                     association_arg(self, association)?;
                     if args.len() > 1 {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0409",
                             span,
                             "MODIFY parameters are not implemented yet",
                         ));
@@ -2403,7 +2482,8 @@ impl Checker {
                 }
                 AssociationOp::Dissociate | AssociationOp::Create | AssociationOp::Delete => {
                     let [association] = args else {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0400",
                             span,
                             format!("{name} takes an association location"),
                         ));
@@ -2413,7 +2493,8 @@ impl Checker {
                 }
                 AssociationOp::Connect => {
                     if args.len() != 2 && args.len() != 3 {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0400",
                             span,
                             "CONNECT takes an access, an association, and an optional index",
                         ));
@@ -2422,14 +2503,16 @@ impl Checker {
                     association_arg(self, &args[1])?;
                     if args.len() == 3 {
                         if !access.indexed {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0400",
                                 span,
                                 "CONNECT index requires an indexed ACCESS mode",
                             ));
                         }
                         let index_ty = self.check_expr(&args[2])?;
                         if !index_ty.is_int() {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0400",
                                 args[2].span(),
                                 "CONNECT index must be an integer",
                             ));
@@ -2440,14 +2523,22 @@ impl Checker {
                 }
                 AssociationOp::Disconnect => {
                     let [access] = args else {
-                        return Err(Error::new(span, "DISCONNECT takes an access location"));
+                        return Err(Error::coded(
+                            "E0400",
+                            span,
+                            "DISCONNECT takes an access location",
+                        ));
                     };
                     access_type(self, access)?;
                     None
                 }
                 AssociationOp::ReadRecord => {
                     let Some(access) = args.first() else {
-                        return Err(Error::new(span, "READRECORD takes an access location"));
+                        return Err(Error::coded(
+                            "E0400",
+                            span,
+                            "READRECORD takes an access location",
+                        ));
                     };
                     let access = access_type(self, access)?;
                     if access.indexed {
@@ -2463,7 +2554,8 @@ impl Checker {
                                     has_target = true;
                                     None
                                 } else {
-                                    return Err(Error::new(
+                                    return Err(Error::coded(
+                                        "E0400",
                                         args[1].span(),
                                         "READRECORD argument must be an index or CHARS location",
                                     ));
@@ -2472,20 +2564,23 @@ impl Checker {
                             [_, _, _] => {
                                 let index_ty = self.check_expr(&args[1])?;
                                 if !index_ty.is_int() {
-                                    return Err(Error::new(
+                                    return Err(Error::coded(
+                                        "E0400",
                                         args[1].span(),
                                         "READRECORD index must be an integer",
                                     ));
                                 }
                                 let Expr::Name { .. } = &args[2] else {
-                                    return Err(Error::new(
+                                    return Err(Error::coded(
+                                        "E0400",
                                         args[2].span(),
                                         "READRECORD target must be a CHARS location",
                                     ));
                                 };
                                 let target_ty = self.check_expr(&args[2])?;
                                 if !is_string_type(target_ty) {
-                                    return Err(Error::new(
+                                    return Err(Error::coded(
+                                        "E0400",
                                         args[2].span(),
                                         "READRECORD target must be a CHARS location",
                                     ));
@@ -2495,7 +2590,7 @@ impl Checker {
                                 None
                             }
                             _ => {
-                                return Err(Error::new(
+                                return Err(Error::coded("E0400", 
                                     span,
                                     "READRECORD takes an access, optional index, and optional target",
                                 ));
@@ -2506,14 +2601,16 @@ impl Checker {
                             [_] => Some(Type::String),
                             [_, target] => {
                                 let Expr::Name { .. } = target else {
-                                    return Err(Error::new(
+                                    return Err(Error::coded(
+                                        "E0400",
                                         target.span(),
                                         "READRECORD target must be a CHARS location",
                                     ));
                                 };
                                 let target_ty = self.check_expr(target)?;
                                 if !is_string_type(target_ty) {
-                                    return Err(Error::new(
+                                    return Err(Error::coded(
+                                        "E0400",
                                         target.span(),
                                         "READRECORD target must be a CHARS location",
                                     ));
@@ -2522,7 +2619,8 @@ impl Checker {
                                 None
                             }
                             _ => {
-                                return Err(Error::new(
+                                return Err(Error::coded(
+                                    "E0400",
                                     span,
                                     "READRECORD takes an access location and optional target",
                                 ));
@@ -2532,7 +2630,8 @@ impl Checker {
                 }
                 AssociationOp::WriteRecord => {
                     if args.len() != 2 && args.len() != 3 {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0400",
                             span,
                             "WRITERECORD takes an access, an optional index, and a value",
                         ));
@@ -2540,14 +2639,16 @@ impl Checker {
                     let access = access_type(self, &args[0])?;
                     let value = if args.len() == 3 {
                         if !access.indexed {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0400",
                                 span,
                                 "WRITERECORD index requires an indexed ACCESS mode",
                             ));
                         }
                         let index_ty = self.check_expr(&args[1])?;
                         if !index_ty.is_int() {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0400",
                                 args[1].span(),
                                 "WRITERECORD index must be an integer",
                             ));
@@ -2559,7 +2660,11 @@ impl Checker {
                     };
                     let value_ty = self.check_expr(value)?;
                     if !is_string_type(value_ty) {
-                        return Err(Error::new(value.span(), "WRITERECORD value must be CHARS"));
+                        return Err(Error::coded(
+                            "E0400",
+                            value.span(),
+                            "WRITERECORD value must be CHARS",
+                        ));
                     }
                     None
                 }
@@ -2579,23 +2684,24 @@ impl Checker {
             "READTEXT" => Some(crate::builtins::TextIo::Read),
             _ => None,
         } {
-            let (target, rest) = args
-                .split_first()
-                .ok_or_else(|| Error::new(span, format!("`{name}` requires a text argument")))?;
+            let (target, rest) = args.split_first().ok_or_else(|| {
+                Error::coded("E0400", span, format!("`{name}` requires a text argument"))
+            })?;
             let Expr::Name {
                 name: target_name,
                 span: target_span,
                 ..
             } = target
             else {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0400",
                     target.span(),
                     "the text argument must be a CHARS location",
                 ));
             };
             let target_ty = self.check_expr(target)?;
             if !is_varying_string(target_ty) {
-                return Err(Error::new(
+                return Err(Error::coded("E0400", 
                     *target_span,
                     format!(
                         "text location `{target_name}` must have a varying CHARS mode (CHARS or CHARS(n) VARYING)"
@@ -2610,7 +2716,8 @@ impl Checker {
             };
             let (index, format, io_args) = if indexed {
                 if rest.len() < 2 {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         span,
                         format!("`{name}` requires a format after the text index"),
                     ));
@@ -2618,7 +2725,8 @@ impl Checker {
                 (Some(&rest[0]), &rest[1], &rest[2..])
             } else {
                 let Some(format) = rest.first() else {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         span,
                         format!("`{name}` requires a format argument"),
                     ));
@@ -2628,7 +2736,8 @@ impl Checker {
             if let Some(index) = index {
                 let index_ty = self.check_expr(index)?;
                 if !index_ty.is_int() {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         index.span(),
                         format!(
                             "text index must be an integer, found {}",
@@ -2639,22 +2748,25 @@ impl Checker {
             }
             let format_ty = self.check_expr(format)?;
             if format_ty != Type::String {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0400",
                     format.span(),
                     format!("format text must be CHARS, found {}", format_ty.describe()),
                 ));
             }
             let Expr::String { value, .. } = format else {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0400",
                     format.span(),
                     "format text must be a literal in the current subset",
                 ));
             };
             let ops = crate::builtins::parse_format(value)
-                .map_err(|message| Error::new(format.span(), message))?;
+                .map_err(|message| Error::coded("E0400", format.span(), message))?;
             let items = crate::builtins::format_items(&ops);
             if items.len() != io_args.len() {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0400",
                     span,
                     format!(
                         "`{name}` requires {} io list argument(s), found {}",
@@ -2668,7 +2780,8 @@ impl Checker {
                     crate::builtins::FormatItem::Width => {
                         let ty = self.check_expr(argument)?;
                         if !ty.is_int() {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0400",
                                 argument.span(),
                                 "variable format width must be an integer",
                             ));
@@ -2678,7 +2791,8 @@ impl Checker {
                         if matches!(kind, crate::builtins::TextIo::Read)
                             && !matches!(argument, Expr::Name { .. })
                         {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0400",
                                 argument.span(),
                                 "READTEXT conversion arguments must be locations",
                             ));
@@ -2697,7 +2811,8 @@ impl Checker {
                             crate::builtins::ConversionCode::Scientific => ty == Type::Float,
                         };
                         if !valid {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0400",
                                 argument.span(),
                                 format!(
                                     "format conversion is not compatible with {}",
@@ -2723,7 +2838,8 @@ impl Checker {
             let result = match builtin {
                 crate::builtins::Builtin::Write | crate::builtins::Builtin::WriteLine => {
                     if args.len() > 1 {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0400",
                             span,
                             format!("`{name}` takes at most one argument"),
                         ));
@@ -2731,7 +2847,8 @@ impl Checker {
                     if let Some(arg) = args.first() {
                         let ty = self.check_expr(arg)?;
                         if !is_string_type(ty) {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0400",
                                 arg.span(),
                                 format!(
                                     "`{name}` requires a character string, found {}",
@@ -2744,7 +2861,7 @@ impl Checker {
                 }
                 crate::builtins::Builtin::ReadLine => {
                     if !args.is_empty() {
-                        return Err(Error::new(span, "READLINE takes no arguments"));
+                        return Err(Error::coded("E0400", span, "READLINE takes no arguments"));
                     }
                     Some(Type::String)
                 }
@@ -2761,14 +2878,16 @@ impl Checker {
         if let Some(mode) = types::resolve_mode(name) {
             if mode == Type::Float {
                 if args.len() != 1 {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         span,
                         "conversion to FLOAT takes exactly one argument",
                     ));
                 }
                 let arg_ty = self.check_expr(&args[0])?;
                 if !arg_ty.is_int() && arg_ty != Type::Float {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0404",
                         args[0].span(),
                         format!(
                             "conversion to FLOAT requires an integer or FLOAT, found {}",
@@ -2781,20 +2900,23 @@ impl Checker {
                 return Ok(Some(Type::Float));
             }
             let Type::Int(kind) = mode else {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0409",
                     span,
                     format!("conversion to {} is not supported yet", mode.describe()),
                 ));
             };
             if args.len() != 1 {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0400",
                     span,
                     format!("conversion to {} takes exactly one argument", kind.name()),
                 ));
             }
             let arg_ty = self.check_expr(&args[0])?;
             if !arg_ty.is_int() {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0404",
                     args[0].span(),
                     format!(
                         "conversion to {} requires an integer, found {}",
@@ -2809,7 +2931,11 @@ impl Checker {
         }
 
         let Some(signature) = self.lookup_proc(name) else {
-            return Err(Error::new(span, format!("unknown name `{name}`")));
+            return Err(Error::coded(
+                "E0403",
+                span,
+                format!("unknown name `{name}`"),
+            ));
         };
         self.resolutions.insert(span, ApplyResolution::Procedure);
         if let Some(exceptions) = &signature.exceptions {
@@ -2817,7 +2943,8 @@ impl Checker {
         }
 
         if signature.params.len() != args.len() {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 span,
                 format!(
                     "procedure `{name}` expects {} argument(s), found {}",
@@ -2833,7 +2960,8 @@ impl Checker {
         }
 
         if require_result && signature.result.is_none() {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 span,
                 format!("procedure `{name}` does not return a value"),
             ));
@@ -2853,7 +2981,8 @@ impl Checker {
         entry_indices: &mut [Vec<i128>],
     ) -> Result<(), Error> {
         if value < array.low || value > array.high {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 span,
                 format!(
                     "array tuple label `{value}` is outside the array bounds `{}:{}`",
@@ -2863,7 +2992,8 @@ impl Checker {
         }
         let offset = (value - array.low) as usize;
         if explicit[offset] {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 span,
                 format!("array tuple label `{value}` is covered more than once"),
             ));
@@ -2884,7 +3014,11 @@ impl Checker {
             Type::Array(array) => (1, array.element),
             Type::MultiArray(array) => (array.rank(), array.element),
             _ => {
-                return Err(Error::new(span, format!("`{name}` is not an array")));
+                return Err(Error::coded(
+                    "E0400",
+                    span,
+                    format!("`{name}` is not an array"),
+                ));
             }
         };
         if args.len() != rank {
@@ -2893,12 +3027,13 @@ impl Checker {
             } else {
                 format!("array `{name}` requires {rank} indices")
             };
-            return Err(Error::new(span, message));
+            return Err(Error::coded("E0400", span, message));
         }
         for arg in args {
             let index_ty = self.check_expr(arg)?;
             if !index_ty.is_int() {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0400",
                     arg.span(),
                     format!(
                         "array index must be an integer, found {}",
@@ -2922,7 +3057,11 @@ impl Checker {
             let member = powerset_member_type(set.member);
             for item in elements {
                 if item.labels.is_some() {
-                    return Err(Error::new(*span, "powerset tuples do not accept labels"));
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        "powerset tuples do not accept labels",
+                    ));
                 }
                 let ty = self.check_expr(&item.value)?;
                 self.ensure_assignable(member, ty, item.value.span())?;
@@ -2935,13 +3074,15 @@ impl Checker {
             return Ok(target);
         }
         if elements.iter().any(|item| item.range_end.is_some()) {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 *span,
                 "ranges are only allowed in powerset tuples",
             ));
         }
         let Type::Array(array) = target else {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0400",
                 *span,
                 format!(
                     "array literal requires a one-dimensional array target mode, found {}",
@@ -2954,7 +3095,8 @@ impl Checker {
         let labelled = elements.iter().any(|element| element.labels.is_some());
         if !labelled {
             if elements.len() != expected {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0400",
                     *span,
                     format!(
                         "array literal has {} element(s), but the target array has {expected}",
@@ -2969,7 +3111,8 @@ impl Checker {
             }
         } else {
             if elements.iter().any(|element| element.labels.is_none()) {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0400",
                     *span,
                     "array tuple entries must be all labelled or all unlabelled",
                 ));
@@ -3012,7 +3155,8 @@ impl Checker {
                         }
                         CaseLabel::Else => {
                             if else_entry.replace(entry_index).is_some() {
-                                return Err(Error::new(
+                                return Err(Error::coded(
+                                    "E0402",
                                     *span,
                                     "duplicate ELSE label in array tuple",
                                 ));
@@ -3020,7 +3164,11 @@ impl Checker {
                         }
                         CaseLabel::Any => {
                             if any_entry.replace(entry_index).is_some() {
-                                return Err(Error::new(*span, "duplicate * label in array tuple"));
+                                return Err(Error::coded(
+                                    "E0402",
+                                    *span,
+                                    "duplicate * label in array tuple",
+                                ));
                             }
                         }
                     }
@@ -3028,7 +3176,8 @@ impl Checker {
             }
             if let Some(any_entry) = any_entry {
                 if explicit_count > 0 || else_entry.is_some() || elements.len() != 1 {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0400",
                         *span,
                         "the * array-tuple label must be the only label",
                     ));
@@ -3041,13 +3190,14 @@ impl Checker {
                 entry_indices[else_entry] = missing;
             }
             if explicit_count == 0 && any_entry.is_none() && else_entry.is_none() {
-                return Err(Error::new(*span, "array tuple has no labels"));
+                return Err(Error::coded("E0400", *span, "array tuple has no labels"));
             }
             let missing: Vec<i128> = (array.low..=array.high)
                 .filter(|index| !explicit[(index - array.low) as usize])
                 .collect();
             if any_entry.is_none() && else_entry.is_none() && !missing.is_empty() {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0400",
                     *span,
                     format!("array tuple does not cover index `{}`", missing[0]),
                 ));
@@ -3066,7 +3216,11 @@ impl Checker {
 
     fn ensure_assignable(&self, target: Type, value: Type, span: Span) -> Result<(), Error> {
         if matches!(target, Type::Moreta(_)) {
-            return Err(Error::new(span, "module mode objects are not assignable"));
+            return Err(Error::coded(
+                "E0400",
+                span,
+                "module mode objects are not assignable",
+            ));
         }
         let ok = match target {
             Type::Int(target_kind) => match value {
@@ -3105,7 +3259,8 @@ impl Checker {
         if ok {
             Ok(())
         } else {
-            Err(Error::new(
+            Err(Error::coded(
+                "E0404",
                 span,
                 format!(
                     "cannot assign {} to {}",
@@ -3131,7 +3286,8 @@ impl Checker {
         if fits {
             Ok(())
         } else {
-            Err(Error::new(
+            Err(Error::coded(
+                "E0405",
                 span,
                 format!("CASE label `{value}` is outside the range of the selector"),
             ))
@@ -3146,7 +3302,8 @@ impl Checker {
             return Ok(());
         };
         if !types::contains(kind, value, self.profile) {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0405",
                 expr.span(),
                 format!("value `{value}` is outside the range of {}", kind.name()),
             ));
@@ -3166,7 +3323,8 @@ fn field_root(expr: &Expr) -> Option<&str> {
 fn reject_nested_procs(declarations: &[Declaration]) -> Result<(), Error> {
     for declaration in declarations {
         if let Declaration::Proc(proc_def) = declaration {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0409",
                 proc_def.span,
                 "procedure definitions inside procedures are not implemented yet",
             ));

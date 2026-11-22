@@ -29,7 +29,7 @@ impl Error {
             None
         };
         Self {
-            code: classify(&message),
+            code: "E0500",
             span,
             message,
             exception,
@@ -42,6 +42,20 @@ impl Error {
             span,
             message: message.into(),
             exception: None,
+        }
+    }
+
+    pub fn coded_exception(
+        code: &'static str,
+        name: &str,
+        span: Span,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code,
+            span,
+            message: message.into(),
+            exception: Some(name.to_owned()),
         }
     }
 
@@ -61,49 +75,6 @@ impl Error {
             message: format!("unhandled exception `{name}`"),
             exception: Some(name.to_owned()),
         }
-    }
-}
-
-fn classify(message: &str) -> &'static str {
-    if message.contains("ASSERTFAIL") {
-        "E0501"
-    } else if message.contains("OVERFLOW") {
-        "E0502"
-    } else if message.contains("division by zero")
-        || message.contains("remainder by zero")
-        || message.contains("positive divisor")
-        || message.contains("negative exponent")
-        || message.contains("exponent is too large")
-    {
-        "E0503"
-    } else if message.contains("unhandled exception") {
-        "E0509"
-    } else if message.contains("undefined value") {
-        "E0504"
-    } else if message.contains("unknown variable") || message.contains("unknown name") {
-        "E0505"
-    } else if message.contains("call depth")
-        || message.contains("expects")
-        || message.contains("returned no result")
-    {
-        "E0506"
-    } else if message.contains("EXIT")
-        || message.contains("RETURN")
-        || message.contains("cannot SEIZE")
-        || message.contains("duplicate declaration")
-    {
-        "E0508"
-    } else if message.contains("expected ")
-        || message.contains("requires")
-        || message.contains("cannot compare")
-        || message.contains("cannot order")
-        || message.contains("does not fit")
-        || message.contains("conversion")
-        || message.contains("integer widths")
-    {
-        "E0507"
-    } else {
-        "E0500"
     }
 }
 
@@ -565,7 +536,7 @@ impl<'a> Interpreter<'a> {
 
                 if visibility.all {
                     let old_prefix = program::seize_old_prefix(&visibility.prefix)
-                        .map_err(|message| Error::new(visibility.span, message))?;
+                        .map_err(|message| Error::coded("E0500", visibility.span, message))?;
                     let mut accessible: Vec<&program::ExportEntry> = self
                         .exports
                         .iter()
@@ -583,7 +554,8 @@ impl<'a> Interpreter<'a> {
                     let mut names = HashSet::new();
                     for export in accessible {
                         if !names.insert(export.name.clone()) {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0500",
                                 visibility.span,
                                 format!(
                                     "SEIZE ALL is ambiguous for `{}`; use a qualified SEIZE",
@@ -592,7 +564,8 @@ impl<'a> Interpreter<'a> {
                             ));
                         }
                         if export.module == usize::MAX {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0508",
                                 visibility.span,
                                 format!(
                                     "cannot SEIZE `{}`: external dependency is not linked",
@@ -613,19 +586,21 @@ impl<'a> Interpreter<'a> {
 
                 for name in &visibility.names {
                     let (source, local) = program::seize_name(name, &visibility.prefix)
-                        .map_err(|message| Error::new(name.span, message))?;
+                        .map_err(|message| Error::coded("E0500", name.span, message))?;
                     let export =
                         program::resolve_export(&self.exports, &source, package_name, module_name)
-                            .map_err(|message| Error::new(name.span, message))?;
+                            .map_err(|message| Error::coded("E0500", name.span, message))?;
 
                     if export.module == current {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0508",
                             name.span,
                             format!("cannot SEIZE `{}` from the same module", name.qualified()),
                         ));
                     }
                     if export.module == usize::MAX {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0508",
                             name.span,
                             format!(
                                 "cannot SEIZE `{}`: external dependency is not linked",
@@ -662,7 +637,11 @@ impl<'a> Interpreter<'a> {
                             None => None,
                         })
                         .ok_or_else(|| {
-                            Error::new(span, format!("cannot SEIZE `{name}`: not a procedure"))
+                            Error::coded(
+                                "E0508",
+                                span,
+                                format!("cannot SEIZE `{name}`: not a procedure"),
+                            )
                         })?;
                     self.modules[current]
                         .procs
@@ -685,7 +664,11 @@ impl<'a> Interpreter<'a> {
                             None => None,
                         })
                         .ok_or_else(|| {
-                            Error::new(span, format!("cannot SEIZE `{name}`: not a location"))
+                            Error::coded(
+                                "E0508",
+                                span,
+                                format!("cannot SEIZE `{name}`: not a location"),
+                            )
                         })?;
                     self.modules[current]
                         .vars
@@ -696,7 +679,8 @@ impl<'a> Interpreter<'a> {
                 ImportKind::Mode => false,
             };
             if duplicate {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0508",
                     span,
                     format!("duplicate declaration of `{name}`"),
                 ));
@@ -723,7 +707,8 @@ impl<'a> Interpreter<'a> {
 
     fn create_moreta_object(&mut self, id: types::MoretaId, span: Span) -> Result<Value, Error> {
         if !self.moreta_decls.contains_key(&id) {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0500",
                 span,
                 "internal: missing module mode declarations",
             ));
@@ -809,7 +794,8 @@ impl<'a> Interpreter<'a> {
                         let ty = resolve_mode_with(&var.mode, &mode_names)?;
                         if scope.vars.contains_key(&var.name) || scope.procs.contains_key(&var.name)
                         {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0508",
                                 var.span,
                                 format!("duplicate declaration of `{}`", var.name),
                             ));
@@ -824,7 +810,8 @@ impl<'a> Interpreter<'a> {
                     }
                 }
                 Declaration::Proc(proc_def) => {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0500",
                         proc_def.span,
                         "procedure definitions inside BEGIN are not implemented",
                     ));
@@ -841,10 +828,9 @@ impl<'a> Interpreter<'a> {
     }
 
     fn run_module(&mut self, module: &'a Module) -> Result<(), Error> {
-        let body = self
-            .bodies
-            .get(module.span)
-            .ok_or_else(|| Error::new(module.span, "internal: missing module IR body"))?;
+        let body = self.bodies.get(module.span).ok_or_else(|| {
+            Error::coded("E0500", module.span, "internal: missing module IR body")
+        })?;
         let mut frame = Frame {
             result_type: None,
             result: None,
@@ -855,7 +841,8 @@ impl<'a> Interpreter<'a> {
                 if module.name.as_deref() == Some(name.as_str()) {
                     Ok(())
                 } else {
-                    Err(Error::new(
+                    Err(Error::coded(
+                        "E0508",
                         module.span,
                         format!("unknown EXIT label `{name}`"),
                     ))
@@ -921,7 +908,12 @@ impl<'a> Interpreter<'a> {
                 ir::Stmt::Assert { condition, span } => {
                     let value = self.eval_ir(condition)?;
                     if !self.as_bool(value, *span)? {
-                        return Err(Error::new(*span, "ASSERTFAIL"));
+                        return Err(Error::coded_exception(
+                            "E0501",
+                            "ASSERTFAIL",
+                            *span,
+                            "ASSERTFAIL",
+                        ));
                     }
                 }
                 ir::Stmt::Call { call, .. } => {
@@ -930,7 +922,8 @@ impl<'a> Interpreter<'a> {
                 ir::Stmt::Return { value, span } => {
                     if let Some(value) = value {
                         let result_type = frame.result_type.ok_or_else(|| {
-                            Error::new(
+                            Error::coded(
+                                "E0508",
                                 *span,
                                 "RETURN with a value in a procedure that has no result",
                             )
@@ -941,9 +934,9 @@ impl<'a> Interpreter<'a> {
                     return Ok(Flow::Return);
                 }
                 ir::Stmt::Result { value, span } => {
-                    let result_type = frame
-                        .result_type
-                        .ok_or_else(|| Error::new(*span, "RESULT outside a value procedure"))?;
+                    let result_type = frame.result_type.ok_or_else(|| {
+                        Error::coded("E0500", *span, "RESULT outside a value procedure")
+                    })?;
                     let value = self.eval_ir(value)?;
                     frame.result = Some(self.convert(value, result_type, *span)?);
                 }
@@ -1092,15 +1085,15 @@ impl<'a> Interpreter<'a> {
         match op {
             AssociationOp::Associate => {
                 let Some(value) = value else {
-                    return Err(Error::new(span, "ASSOCIATE requires a path"));
+                    return Err(Error::coded("E0507", span, "ASSOCIATE requires a path"));
                 };
                 let path = self.eval_ir(value)?;
                 let Value::String(path) = path else {
-                    return Err(Error::new(span, "ASSOCIATE path must be CHARS"));
+                    return Err(Error::coded("E0500", span, "ASSOCIATE path must be CHARS"));
                 };
-                let cell = self
-                    .find_var_cell(first)
-                    .ok_or_else(|| Error::new(span, format!("unknown variable `{first}`")))?;
+                let cell = self.find_var_cell(first).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{first}`"))
+                })?;
                 let mut var = cell.borrow_mut();
                 match &var.value {
                     Value::Association(None) => {}
@@ -1111,7 +1104,13 @@ impl<'a> Interpreter<'a> {
                             "ASSOCIATEFAIL: association already exists",
                         ));
                     }
-                    _ => return Err(Error::new(span, "expected an ASSOCIATION location")),
+                    _ => {
+                        return Err(Error::coded(
+                            "E0507",
+                            span,
+                            "expected an ASSOCIATION location",
+                        ))
+                    }
                 }
                 let existing = std::path::Path::new(&path).exists();
                 var.value = Value::Association(Some(Rc::new(RefCell::new(AssociationState {
@@ -1122,12 +1121,16 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Undefined)
             }
             AssociationOp::IsAssociated => {
-                let cell = self
-                    .find_var_cell(first)
-                    .ok_or_else(|| Error::new(span, format!("unknown variable `{first}`")))?;
+                let cell = self.find_var_cell(first).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{first}`"))
+                })?;
                 let var = cell.borrow();
                 let Value::Association(state) = &var.value else {
-                    return Err(Error::new(span, "expected an ASSOCIATION location"));
+                    return Err(Error::coded(
+                        "E0507",
+                        span,
+                        "expected an ASSOCIATION location",
+                    ));
                 };
                 Ok(Value::Bool(state.is_some()))
             }
@@ -1155,12 +1158,16 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Undefined)
             }
             AssociationOp::Dissociate => {
-                let cell = self
-                    .find_var_cell(first)
-                    .ok_or_else(|| Error::new(span, format!("unknown variable `{first}`")))?;
+                let cell = self.find_var_cell(first).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{first}`"))
+                })?;
                 let mut var = cell.borrow_mut();
                 let Value::Association(state) = &mut var.value else {
-                    return Err(Error::new(span, "expected an ASSOCIATION location"));
+                    return Err(Error::coded(
+                        "E0507",
+                        span,
+                        "expected an ASSOCIATION location",
+                    ));
                 };
                 if state.take().is_none() {
                     return Err(Error::exception(
@@ -1205,7 +1212,11 @@ impl<'a> Interpreter<'a> {
             }
             AssociationOp::Connect => {
                 let Some(second) = second else {
-                    return Err(Error::new(span, "CONNECT requires an association"));
+                    return Err(Error::coded(
+                        "E0507",
+                        span,
+                        "CONNECT requires an association",
+                    ));
                 };
                 let association = self.association_state(second, span)?;
                 let position = match index {
@@ -1216,12 +1227,12 @@ impl<'a> Interpreter<'a> {
                     }
                     None => 0,
                 };
-                let cell = self
-                    .find_var_cell(first)
-                    .ok_or_else(|| Error::new(span, format!("unknown variable `{first}`")))?;
+                let cell = self.find_var_cell(first).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{first}`"))
+                })?;
                 let mut var = cell.borrow_mut();
                 let Type::Access(access) = var.ty else {
-                    return Err(Error::new(span, "expected an ACCESS location"));
+                    return Err(Error::coded("E0507", span, "expected an ACCESS location"));
                 };
                 match &var.value {
                     Value::Access(None) => {}
@@ -1232,7 +1243,7 @@ impl<'a> Interpreter<'a> {
                             "CONNECTFAIL: access location is already connected",
                         ));
                     }
-                    _ => return Err(Error::new(span, "expected an ACCESS location")),
+                    _ => return Err(Error::coded("E0507", span, "expected an ACCESS location")),
                 }
                 check_index_range(access.index, position, span)?;
                 association.borrow_mut().indexable = access.indexed;
@@ -1245,12 +1256,12 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Undefined)
             }
             AssociationOp::Disconnect => {
-                let cell = self
-                    .find_var_cell(first)
-                    .ok_or_else(|| Error::new(span, format!("unknown variable `{first}`")))?;
+                let cell = self.find_var_cell(first).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{first}`"))
+                })?;
                 let mut var = cell.borrow_mut();
                 let Value::Access(state) = &mut var.value else {
-                    return Err(Error::new(span, "expected an ACCESS location"));
+                    return Err(Error::coded("E0507", span, "expected an ACCESS location"));
                 };
                 if state.take().is_none() {
                     return Err(Error::exception(
@@ -1318,11 +1329,15 @@ impl<'a> Interpreter<'a> {
             }
             AssociationOp::WriteRecord => {
                 let Some(value) = value else {
-                    return Err(Error::new(span, "WRITERECORD requires a value"));
+                    return Err(Error::coded("E0507", span, "WRITERECORD requires a value"));
                 };
                 let value = self.eval_ir(value)?;
                 let Value::String(record) = value else {
-                    return Err(Error::new(span, "WRITERECORD value must be CHARS"));
+                    return Err(Error::coded(
+                        "E0500",
+                        span,
+                        "WRITERECORD value must be CHARS",
+                    ));
                 };
                 let access = self.access_state(first, span)?;
                 let (association, indexed, range, current) = {
@@ -1388,7 +1403,7 @@ impl<'a> Interpreter<'a> {
     ) -> Result<Rc<RefCell<AssociationState>>, Error> {
         let cell = self
             .find_var_cell(name)
-            .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+            .ok_or_else(|| Error::coded("E0505", span, format!("unknown variable `{name}`")))?;
         let var = cell.borrow();
         let Value::Association(Some(state)) = &var.value else {
             return Err(Error::exception(
@@ -1403,7 +1418,7 @@ impl<'a> Interpreter<'a> {
     fn access_state(&self, name: &str, span: Span) -> Result<Rc<RefCell<AccessState>>, Error> {
         let cell = self
             .find_var_cell(name)
-            .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+            .ok_or_else(|| Error::coded("E0505", span, format!("unknown variable `{name}`")))?;
         let var = cell.borrow();
         let Value::Access(Some(state)) = &var.value else {
             return Err(Error::exception(
@@ -1562,7 +1577,7 @@ impl<'a> Interpreter<'a> {
                 continue;
             }
             let old_prefix = program::seize_old_prefix(&visibility.prefix)
-                .map_err(|message| Error::new(visibility.span, message))?;
+                .map_err(|message| Error::coded("E0500", visibility.span, message))?;
 
             if visibility.all {
                 if old_prefix.is_empty() {
@@ -1593,7 +1608,7 @@ impl<'a> Interpreter<'a> {
                             self.insert_reach_binding(name, (*export).clone(), visibility.span)?
                         }
                         _ => {
-                            return Err(Error::new(
+                            return Err(Error::coded("E0500", 
                                 visibility.span,
                                 format!(
                                     "SEIZE ALL is ambiguous for `{name}`; several sibling modules grant it"
@@ -1625,7 +1640,8 @@ impl<'a> Interpreter<'a> {
                 }
 
                 let Some(exports) = parent.exports.get(&name.name) else {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0508",
                         name.span,
                         format!(
                             "cannot SEIZE `{}`: no such name in the enclosing reach",
@@ -1648,7 +1664,8 @@ impl<'a> Interpreter<'a> {
                         self.insert_reach_binding(&name.name, binding, name.span)?;
                     }
                     Err(crate::reach::SelectError::NotFound) => {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0508",
                             name.span,
                             format!(
                                 "cannot SEIZE `{}`: no such name in the enclosing reach",
@@ -1657,7 +1674,8 @@ impl<'a> Interpreter<'a> {
                         ));
                     }
                     Err(crate::reach::SelectError::Ambiguous) => {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0500",
                             name.span,
                             format!(
                                 "SEIZE `{}` is ambiguous; several sibling modules grant it",
@@ -1677,7 +1695,8 @@ impl<'a> Interpreter<'a> {
             || scope.procs.contains_key(name)
             || scope.modes.contains_key(name)
         {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0508",
                 span,
                 format!("duplicate declaration of `{name}`"),
             ));
@@ -1697,7 +1716,8 @@ impl<'a> Interpreter<'a> {
             || scope.procs.contains_key(name)
             || scope.modes.contains_key(name)
         {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0508",
                 span,
                 format!("duplicate declaration of `{name}`"),
             ));
@@ -1712,7 +1732,8 @@ impl<'a> Interpreter<'a> {
             || scope.procs.contains_key(name)
             || scope.modes.contains_key(name)
         {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0508",
                 span,
                 format!("duplicate declaration of `{name}`"),
             ));
@@ -1733,7 +1754,8 @@ impl<'a> Interpreter<'a> {
             || scope.modes.contains_key(name)
             || scope.exports.contains_key(name)
         {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0508",
                 span,
                 format!("duplicate declaration of `{name}`"),
             ));
@@ -1814,7 +1836,11 @@ impl<'a> Interpreter<'a> {
                 let kind = combine_kinds(kind, step_kind, span)?;
 
                 if step_value <= 0 {
-                    return Err(Error::new(step_span, "DO FOR step must be positive"));
+                    return Err(Error::coded(
+                        "E0500",
+                        step_span,
+                        "DO FOR step must be positive",
+                    ));
                 }
 
                 self.make_int(start_value, kind, start.span())?;
@@ -1897,10 +1923,9 @@ impl<'a> Interpreter<'a> {
     }
 
     fn eval_expr(&mut self, expr: &Expr) -> Result<Value, Error> {
-        let expression = self
-            .exprs
-            .get(expr.span())
-            .ok_or_else(|| Error::new(expr.span(), "internal: missing typed expression"))?;
+        let expression = self.exprs.get(expr.span()).ok_or_else(|| {
+            Error::coded("E0500", expr.span(), "internal: missing typed expression")
+        })?;
         self.eval_ir(&expression)
     }
 
@@ -1916,7 +1941,8 @@ impl<'a> Interpreter<'a> {
                 match value {
                     Value::Float(value) => Ok(Value::Float(value)),
                     Value::Int { value, .. } => Ok(Value::Float(value as f64)),
-                    _ => Err(Error::new(
+                    _ => Err(Error::coded(
+                        "E0507",
                         *span,
                         "conversion to FLOAT requires a numeric value",
                     )),
@@ -1940,20 +1966,24 @@ impl<'a> Interpreter<'a> {
                     crate::builtins::Builtin::Write => {
                         if let Some(value) = values.first() {
                             let Value::String(text) = value else {
-                                return Err(Error::new(*span, "WRITE requires CHARS"));
+                                return Err(Error::coded("E0507", *span, "WRITE requires CHARS"));
                             };
                             print!("{text}");
                             use std::io::Write as _;
                             std::io::stdout()
                                 .flush()
-                                .map_err(|error| Error::new(*span, error.to_string()))?;
+                                .map_err(|error| Error::coded("E0500", *span, error.to_string()))?;
                         }
                         Ok(Value::Undefined)
                     }
                     crate::builtins::Builtin::WriteLine => {
                         if let Some(value) = values.first() {
                             let Value::String(text) = value else {
-                                return Err(Error::new(*span, "WRITELINE requires CHARS"));
+                                return Err(Error::coded(
+                                    "E0507",
+                                    *span,
+                                    "WRITELINE requires CHARS",
+                                ));
                             };
                             println!("{text}");
                         } else {
@@ -1965,7 +1995,7 @@ impl<'a> Interpreter<'a> {
                         let mut line = String::new();
                         std::io::stdin()
                             .read_line(&mut line)
-                            .map_err(|error| Error::new(*span, error.to_string()))?;
+                            .map_err(|error| Error::coded("E0500", *span, error.to_string()))?;
                         let line = line.trim_end_matches(['\n', '\r']).to_owned();
                         Ok(Value::String(line))
                     }
@@ -1990,12 +2020,12 @@ impl<'a> Interpreter<'a> {
                 if cursor < 0 {
                     return Err(textfail(*span, "negative text index"));
                 }
-                let cell = self
-                    .find_var_cell(target)
-                    .ok_or_else(|| Error::new(*span, format!("unknown variable `{target}`")))?;
+                let cell = self.find_var_cell(target).ok_or_else(|| {
+                    Error::coded("E0505", *span, format!("unknown variable `{target}`"))
+                })?;
                 let source = match &cell.borrow().value {
                     Value::String(text) => text.clone(),
-                    _ => return Err(Error::new(*span, "text location must be CHARS")),
+                    _ => return Err(Error::coded("E0500", *span, "text location must be CHARS")),
                 };
                 let mut chars: Vec<char> = source.chars().collect();
                 let mut io_index = 0;
@@ -2046,7 +2076,11 @@ impl<'a> Interpreter<'a> {
                         }
                         let mut var = cell.borrow_mut();
                         let Value::String(text) = &mut var.value else {
-                            return Err(Error::new(*span, "text location must be CHARS"));
+                            return Err(Error::coded(
+                                "E0500",
+                                *span,
+                                "text location must be CHARS",
+                            ));
                         };
                         *text = chars.into_iter().collect();
                     }
@@ -2073,7 +2107,11 @@ impl<'a> Interpreter<'a> {
                                         .find_var_cell(name)
                                         .map(|cell| cell.borrow().ty)
                                         .ok_or_else(|| {
-                                            Error::new(*span, format!("unknown variable `{name}`"))
+                                            Error::coded(
+                                                "E0505",
+                                                *span,
+                                                format!("unknown variable `{name}`"),
+                                            )
                                         })?;
                                     let value = read_conversion(
                                         &chars,
@@ -2147,7 +2185,8 @@ impl<'a> Interpreter<'a> {
             ),
             ir::Expr::PowerSetLiteral { entries, ty, span } => {
                 let Type::PowerSet(set) = ty else {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0500",
                         *span,
                         "internal: powerset literal has wrong mode",
                     ));
@@ -2246,10 +2285,15 @@ impl<'a> Interpreter<'a> {
                 name, args, span, ..
             } => {
                 let Some(proc_ref) = self.lookup_proc(name) else {
-                    return Err(Error::new(*span, format!("unknown name `{name}`")));
+                    return Err(Error::coded(
+                        "E0505",
+                        *span,
+                        format!("unknown name `{name}`"),
+                    ));
                 };
                 if proc_ref.def.params.len() != args.len() {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0506",
                         *span,
                         format!(
                             "procedure `{name}` expects {} argument(s), found {}",
@@ -2277,9 +2321,14 @@ impl<'a> Interpreter<'a> {
                         Value::Float(value) => Ok(Value::Float(-value)),
                         value => {
                             let (value, _) = self.expect_int(value, *span)?;
-                            let negated = value
-                                .checked_neg()
-                                .ok_or_else(|| Error::new(*span, "OVERFLOW in unary `-`"))?;
+                            let negated = value.checked_neg().ok_or_else(|| {
+                                Error::coded_exception(
+                                    "E0502",
+                                    "OVERFLOW",
+                                    *span,
+                                    "OVERFLOW in unary `-`",
+                                )
+                            })?;
                             self.make_int(negated, type_kind(*ty), *span)
                         }
                     },
@@ -2360,27 +2409,28 @@ impl<'a> Interpreter<'a> {
         span: Span,
     ) -> Result<Value, Error> {
         if self.depth >= 1024 {
-            return Err(Error::new(span, "call depth limit exceeded"));
+            return Err(Error::coded("E0506", span, "call depth limit exceeded"));
         }
         let object_ty = self
             .find_var_cell(object_name)
             .map(|cell| cell.borrow().ty)
-            .ok_or_else(|| Error::new(span, format!("unknown variable `{object_name}`")))?;
+            .ok_or_else(|| {
+                Error::coded("E0505", span, format!("unknown variable `{object_name}`"))
+            })?;
         let Type::Moreta(id) = object_ty else {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0507",
                 span,
                 "method call requires a module-mode object",
             ));
         };
         let object = self.read_var(object_name, span)?;
         let Value::Moreta(components) = object else {
-            return Err(Error::new(span, "expected a module-mode object"));
+            return Err(Error::coded("E0507", span, "expected a module-mode object"));
         };
-        let proc_def = self
-            .proc_defs
-            .get(&proc_span)
-            .copied()
-            .ok_or_else(|| Error::new(proc_span, "internal: missing method definition"))?;
+        let proc_def = self.proc_defs.get(&proc_span).copied().ok_or_else(|| {
+            Error::coded("E0500", proc_span, "internal: missing method definition")
+        })?;
 
         self.locals.push(Scope::default());
         self.call_bases.push(self.locals.len() - 1);
@@ -2434,7 +2484,7 @@ impl<'a> Interpreter<'a> {
         span: Span,
     ) -> Result<Value, Error> {
         if self.depth >= 1024 {
-            return Err(Error::new(span, "call depth limit exceeded"));
+            return Err(Error::coded("E0506", span, "call depth limit exceeded"));
         }
 
         let previous_module = self.active_module;
@@ -2466,7 +2516,8 @@ impl<'a> Interpreter<'a> {
             let value = self.convert(arg, ty, param.span)?;
             let scope = self.locals.last_mut().expect("local scope");
             if scope.vars.contains_key(&param.name) || scope.procs.contains_key(&param.name) {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0508",
                     param.span,
                     format!("duplicate declaration of `{}`", param.name),
                 ));
@@ -2489,15 +2540,19 @@ impl<'a> Interpreter<'a> {
             result: None,
         };
 
-        let body = self
-            .bodies
-            .get(proc_def.span)
-            .ok_or_else(|| Error::new(proc_def.span, "internal: missing procedure IR body"))?;
+        let body = self.bodies.get(proc_def.span).ok_or_else(|| {
+            Error::coded(
+                "E0500",
+                proc_def.span,
+                "internal: missing procedure IR body",
+            )
+        })?;
 
         match self.exec_with_handler(proc_def.span, &body, &mut frame)? {
             Flow::Return | Flow::Normal => {}
             Flow::Exit(_) => {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0508",
                     span,
                     "EXIT outside a loop is not implemented yet",
                 ));
@@ -2506,7 +2561,8 @@ impl<'a> Interpreter<'a> {
 
         match result_type {
             Some(_) => frame.result.ok_or_else(|| {
-                Error::new(
+                Error::coded(
+                    "E0506",
                     span,
                     format!("procedure `{}` returned no result", proc_def.name),
                 )
@@ -2548,7 +2604,8 @@ impl<'a> Interpreter<'a> {
             }
             BinaryOp::In => {
                 let Value::PowerSet(set) = right else {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0500",
                         span,
                         "the right operand of IN must be a powerset",
                     ));
@@ -2557,13 +2614,17 @@ impl<'a> Interpreter<'a> {
                     Value::Int { value, .. } => value,
                     Value::Char(value) => value as i128,
                     Value::Bool(value) => i128::from(value),
-                    _ => return Err(Error::new(span, "invalid powerset member value")),
+                    _ => return Err(Error::coded("E0500", span, "invalid powerset member value")),
                 };
                 Ok(Value::Bool(set.contains(&member)))
             }
             BinaryOp::Concat => match (left, right) {
                 (Value::String(left), Value::String(right)) => Ok(Value::String(left + &right)),
-                _ => Err(Error::new(span, "`//` requires character strings")),
+                _ => Err(Error::coded(
+                    "E0507",
+                    span,
+                    "`//` requires character strings",
+                )),
             },
             BinaryOp::Add
             | BinaryOp::Sub
@@ -2578,7 +2639,8 @@ impl<'a> Interpreter<'a> {
                         BinaryOp::Sub => left.difference(right).copied().collect(),
                         BinaryOp::Mul => left.intersection(right).copied().collect(),
                         _ => {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0500",
                                 span,
                                 "this operator does not accept powerset operands",
                             ));
@@ -2593,12 +2655,13 @@ impl<'a> Interpreter<'a> {
                         BinaryOp::Mul => left * right,
                         BinaryOp::Div => {
                             if *right == 0.0 {
-                                return Err(Error::new(span, "division by zero"));
+                                return Err(Error::coded("E0503", span, "division by zero"));
                             }
                             left / right
                         }
                         _ => {
-                            return Err(Error::new(
+                            return Err(Error::coded(
+                                "E0500",
                                 span,
                                 "this operator does not accept FLOAT operands",
                             ));
@@ -2612,7 +2675,8 @@ impl<'a> Interpreter<'a> {
                     Some(Type::Int(kind)) => Some(kind),
                     Some(Type::IntLiteral) | None => None,
                     Some(other) => {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0507",
                             span,
                             format!("expected an integer result, found {}", other.describe()),
                         ));
@@ -2625,19 +2689,23 @@ impl<'a> Interpreter<'a> {
                     BinaryOp::Mul => left.checked_mul(right),
                     BinaryOp::Div => {
                         if right == 0 {
-                            return Err(Error::new(span, "division by zero"));
+                            return Err(Error::coded("E0503", span, "division by zero"));
                         }
                         left.checked_div(right)
                     }
                     BinaryOp::Rem => {
                         if right == 0 {
-                            return Err(Error::new(span, "remainder by zero"));
+                            return Err(Error::coded("E0503", span, "remainder by zero"));
                         }
                         left.checked_rem(right)
                     }
                     BinaryOp::Mod => {
                         if right <= 0 {
-                            return Err(Error::new(span, "MOD requires a positive divisor"));
+                            return Err(Error::coded(
+                                "E0503",
+                                span,
+                                "MOD requires a positive divisor",
+                            ));
                         }
                         left.checked_rem(right).and_then(|remainder| {
                             if remainder < 0 {
@@ -2649,10 +2717,10 @@ impl<'a> Interpreter<'a> {
                     }
                     BinaryOp::Pow => {
                         if right < 0 {
-                            return Err(Error::new(span, "negative exponent"));
+                            return Err(Error::coded("E0503", span, "negative exponent"));
                         }
                         let exponent = u32::try_from(right)
-                            .map_err(|_| Error::new(span, "exponent is too large"))?;
+                            .map_err(|_| Error::coded("E0503", span, "exponent is too large"))?;
                         left.checked_pow(exponent)
                     }
                     _ => unreachable!(),
@@ -2660,7 +2728,9 @@ impl<'a> Interpreter<'a> {
 
                 match result {
                     Some(value) => self.make_int(value, kind, span),
-                    None => Err(Error::new(span, "OVERFLOW")),
+                    None => Err(Error::coded_exception(
+                        "E0502", "OVERFLOW", span, "OVERFLOW",
+                    )),
                 }
             }
         }
@@ -2668,7 +2738,7 @@ impl<'a> Interpreter<'a> {
 
     fn values_equal(&self, left: &Value, right: &Value, span: Span) -> Result<bool, Error> {
         if matches!(left, Value::Undefined) || matches!(right, Value::Undefined) {
-            return Err(Error::new(span, "use of undefined value"));
+            return Err(Error::coded("E0504", span, "use of undefined value"));
         }
         match (left, right) {
             (Value::Int { value: left, .. }, Value::Int { value: right, .. }) => Ok(left == right),
@@ -2700,14 +2770,16 @@ impl<'a> Interpreter<'a> {
             }
             (Value::Struct(left), Value::Struct(right)) => {
                 if left.len() != right.len() {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0507",
                         span,
                         "cannot compare structures of different modes",
                     ));
                 }
                 for ((left_name, left_value), (right_name, right_value)) in left.iter().zip(right) {
                     if left_name != right_name {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0507",
                             span,
                             "cannot compare structures of different modes",
                         ));
@@ -2718,7 +2790,7 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(true)
             }
-            _ => Err(Error::new(span, "cannot compare these values")),
+            _ => Err(Error::coded("E0507", span, "cannot compare these values")),
         }
     }
 
@@ -2730,7 +2802,7 @@ impl<'a> Interpreter<'a> {
             (Value::Char(left), Value::Char(right)) => Ok(left.cmp(right)),
             (Value::Float(left), Value::Float(right)) => left
                 .partial_cmp(right)
-                .ok_or_else(|| Error::new(span, "cannot order NaN values")),
+                .ok_or_else(|| Error::coded("E0507", span, "cannot order NaN values")),
             (Value::String(left), Value::String(right)) => Ok(left.cmp(right)),
             (Value::PowerSet(left), Value::PowerSet(right)) => {
                 if left == right {
@@ -2740,24 +2812,24 @@ impl<'a> Interpreter<'a> {
                 } else if left.is_superset(right) {
                     Ok(Ordering::Greater)
                 } else {
-                    Err(Error::new(span, "powersets are not ordered"))
+                    Err(Error::coded("E0500", span, "powersets are not ordered"))
                 }
             }
-            _ => Err(Error::new(span, "cannot order these values")),
+            _ => Err(Error::coded("E0507", span, "cannot order these values")),
         }
     }
 
     fn as_bool(&self, value: Value, span: Span) -> Result<bool, Error> {
         match value {
             Value::Bool(value) => Ok(value),
-            _ => Err(Error::new(span, "expected a BOOL value")),
+            _ => Err(Error::coded("E0507", span, "expected a BOOL value")),
         }
     }
 
     fn expect_int(&self, value: Value, span: Span) -> Result<(i128, Option<IntKind>), Error> {
         match value {
             Value::Int { value, kind } => Ok((value, kind)),
-            _ => Err(Error::new(span, "expected an integer value")),
+            _ => Err(Error::coded("E0507", span, "expected an integer value")),
         }
     }
 
@@ -2768,7 +2840,8 @@ impl<'a> Interpreter<'a> {
         };
 
         let Some((low, high)) = bounds else {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0507",
                 span,
                 "integer widths above 127 are not supported",
             ));
@@ -2776,7 +2849,9 @@ impl<'a> Interpreter<'a> {
 
         if value < low || value > high {
             let target = kind.map(IntKind::name).unwrap_or("&INT");
-            return Err(Error::new(
+            return Err(Error::coded_exception(
+                "E0502",
+                "OVERFLOW",
                 span,
                 format!("OVERFLOW: `{value}` does not fit {target}"),
             ));
@@ -2789,7 +2864,7 @@ impl<'a> Interpreter<'a> {
         match ty {
             Type::Float => match value {
                 Value::Float(value) => Ok(Value::Float(value)),
-                _ => Err(Error::new(span, "expected a FLOAT value")),
+                _ => Err(Error::coded("E0507", span, "expected a FLOAT value")),
             },
             Type::Int(kind) => {
                 let (value, _) = self.expect_int(value, span)?;
@@ -2797,15 +2872,19 @@ impl<'a> Interpreter<'a> {
             }
             Type::Bool => match value {
                 Value::Bool(value) => Ok(Value::Bool(value)),
-                _ => Err(Error::new(span, "expected a BOOL value")),
+                _ => Err(Error::coded("E0507", span, "expected a BOOL value")),
             },
             Type::Char => match value {
                 Value::Char(value) => Ok(Value::Char(value)),
-                _ => Err(Error::new(span, "expected a CHAR value")),
+                _ => Err(Error::coded("E0507", span, "expected a CHAR value")),
             },
             Type::String => match value {
                 Value::String(value) => Ok(Value::String(value)),
-                _ => Err(Error::new(span, "expected a character string value")),
+                _ => Err(Error::coded(
+                    "E0507",
+                    span,
+                    "expected a character string value",
+                )),
             },
             Type::BoundedString { length, varying } => match value {
                 Value::String(value) => {
@@ -2818,7 +2897,8 @@ impl<'a> Interpreter<'a> {
                     if fits {
                         Ok(Value::String(value))
                     } else {
-                        Err(Error::new(
+                        Err(Error::coded(
+                            "E0507",
                             span,
                             format!(
                                 "string length {actual} does not fit CHARS({length}){}",
@@ -2827,19 +2907,23 @@ impl<'a> Interpreter<'a> {
                         ))
                     }
                 }
-                _ => Err(Error::new(span, "expected a character string value")),
+                _ => Err(Error::coded(
+                    "E0507",
+                    span,
+                    "expected a character string value",
+                )),
             },
             Type::Struct(_) => match value {
                 Value::Struct(_) => Ok(value),
-                _ => Err(Error::new(span, "expected a structure value")),
+                _ => Err(Error::coded("E0507", span, "expected a structure value")),
             },
             Type::Moreta(_) => match value {
                 Value::Moreta(_) => Ok(value),
-                _ => Err(Error::new(span, "expected a module mode value")),
+                _ => Err(Error::coded("E0507", span, "expected a module mode value")),
             },
             Type::Set(_) => match value {
                 Value::Set(_) => Ok(value),
-                _ => Err(Error::new(span, "expected a set value")),
+                _ => Err(Error::coded("E0507", span, "expected a set value")),
             },
             Type::Array(array) => match value {
                 Value::Array { low, values }
@@ -2848,7 +2932,7 @@ impl<'a> Interpreter<'a> {
                 {
                     Ok(Value::Array { low, values })
                 }
-                _ => Err(Error::new(span, "expected an array value")),
+                _ => Err(Error::coded("E0507", span, "expected an array value")),
             },
             Type::MultiArray(array) => match value {
                 Value::Array { low, values }
@@ -2857,7 +2941,11 @@ impl<'a> Interpreter<'a> {
                 {
                     Ok(Value::Array { low, values })
                 }
-                _ => Err(Error::new(span, "expected a multidimensional array value")),
+                _ => Err(Error::coded(
+                    "E0507",
+                    span,
+                    "expected a multidimensional array value",
+                )),
             },
             Type::DynamicArray { low, .. } => match value {
                 Value::Array {
@@ -2867,22 +2955,30 @@ impl<'a> Interpreter<'a> {
                     low: value_low,
                     values,
                 }),
-                _ => Err(Error::new(span, "expected an array slice value")),
+                _ => Err(Error::coded("E0507", span, "expected an array slice value")),
             },
             Type::Association => match value {
                 Value::Association(_) => Ok(value),
-                _ => Err(Error::new(span, "expected an ASSOCIATION value")),
+                _ => Err(Error::coded("E0507", span, "expected an ASSOCIATION value")),
             },
             Type::PowerSet(_) => match value {
                 Value::PowerSet(_) => Ok(value),
-                _ => Err(Error::new(span, "expected a powerset value")),
+                _ => Err(Error::coded("E0507", span, "expected a powerset value")),
             },
             Type::Access(_) => match value {
                 Value::Access(_) => Ok(value),
-                _ => Err(Error::new(span, "expected an ACCESS value")),
+                _ => Err(Error::coded("E0507", span, "expected an ACCESS value")),
             },
-            Type::IntLiteral => Err(Error::new(span, "internal: cannot declare a literal type")),
-            Type::ArrayTuple => Err(Error::new(span, "array literal has no target array mode")),
+            Type::IntLiteral => Err(Error::coded(
+                "E0500",
+                span,
+                "internal: cannot declare a literal type",
+            )),
+            Type::ArrayTuple => Err(Error::coded(
+                "E0500",
+                span,
+                "array literal has no target array mode",
+            )),
         }
     }
 
@@ -2905,7 +3001,13 @@ impl<'a> Interpreter<'a> {
                 Some(Type::Int(kind)) => crate::types::PowerSetMember::Int(kind),
                 Some(Type::Bool) => crate::types::PowerSetMember::Bool,
                 Some(Type::Char) => crate::types::PowerSetMember::Char,
-                _ => return Err(Error::new(mode.span, "invalid POWERSET member mode")),
+                _ => {
+                    return Err(Error::coded(
+                        "E0500",
+                        mode.span,
+                        "invalid POWERSET member mode",
+                    ))
+                }
             };
             return Ok(Type::PowerSet(crate::types::PowerSetType { member }));
         }
@@ -2934,7 +3036,8 @@ impl<'a> Interpreter<'a> {
             };
             let base = self.resolve_mode(&element_mode)?;
             let Some(element) = crate::types::ArrayElement::from_type(base) else {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0500",
                     mode.span,
                     format!(
                         "array elements must be scalar or structure modes, found {}",
@@ -2943,7 +3046,7 @@ impl<'a> Interpreter<'a> {
                 ));
             };
             return crate::types::array_type_from_bounds(&mode.arrays, element)
-                .ok_or_else(|| Error::new(mode.span, "unsupported array dimensions"));
+                .ok_or_else(|| Error::coded("E0500", mode.span, "unsupported array dimensions"));
         }
         if let Some(length) = mode.string_length {
             return Ok(Type::BoundedString {
@@ -2992,9 +3095,9 @@ impl<'a> Interpreter<'a> {
     fn target_type(&self, target: &ir::AssignTarget, span: Span) -> Result<Type, Error> {
         match target {
             ir::AssignTarget::Var(name) => {
-                let cell = self
-                    .find_var_cell(name)
-                    .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+                let cell = self.find_var_cell(name).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{name}`"))
+                })?;
                 let ty = cell.borrow().ty;
                 Ok(ty)
             }
@@ -3046,7 +3149,11 @@ impl<'a> Interpreter<'a> {
                 ty,
             } => {
                 let Type::Array(array) = ty else {
-                    return Err(Error::new(span, "internal: slice is not an array"));
+                    return Err(Error::coded(
+                        "E0500",
+                        span,
+                        "internal: slice is not an array",
+                    ));
                 };
                 let value = self.read_var(name, span)?;
                 read_array_slice(value, *offset, *count, array.low, span)
@@ -3095,9 +3202,9 @@ impl<'a> Interpreter<'a> {
                     }
                     None => None,
                 };
-                let cell = self
-                    .find_var_cell(root)
-                    .ok_or_else(|| Error::new(span, format!("unknown variable `{root}`")))?;
+                let cell = self.find_var_cell(root).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{root}`"))
+                })?;
                 let mut var = cell.borrow_mut();
                 let target = match index {
                     Some(index) => array_element_mut(&mut var.value, index, span)?,
@@ -3119,9 +3226,9 @@ impl<'a> Interpreter<'a> {
                     index_values.push(index);
                 }
                 let offset = array_offset(*array, &index_values, span)?;
-                let cell = self
-                    .find_var_cell(name)
-                    .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+                let cell = self.find_var_cell(name).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{name}`"))
+                })?;
                 let mut cell = cell.borrow_mut();
                 assign_array_at(&mut cell.value, offset, value, span)
             }
@@ -3132,9 +3239,9 @@ impl<'a> Interpreter<'a> {
                 ty,
             } => {
                 let value = self.convert(value, *ty, span)?;
-                let cell = self
-                    .find_var_cell(name)
-                    .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+                let cell = self.find_var_cell(name).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{name}`"))
+                })?;
                 let mut var = cell.borrow_mut();
                 assign_array_slice(&mut var.value, *offset, *count, value, span)
             }
@@ -3151,9 +3258,9 @@ impl<'a> Interpreter<'a> {
                 let (first_value, _) = self.expect_int(first_value, first.span())?;
                 let last_value = self.eval_ir(last)?;
                 let (last_value, _) = self.expect_int(last_value, last.span())?;
-                let cell = self
-                    .find_var_cell(name)
-                    .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+                let cell = self.find_var_cell(name).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{name}`"))
+                })?;
                 let mut var = cell.borrow_mut();
                 let len = array_len(&var.value, span)?;
                 let (offset, count) =
@@ -3166,10 +3273,14 @@ impl<'a> Interpreter<'a> {
     fn read_var(&self, name: &str, span: Span) -> Result<Value, Error> {
         let cell = self
             .find_var_cell(name)
-            .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+            .ok_or_else(|| Error::coded("E0505", span, format!("unknown variable `{name}`")))?;
         let var = cell.borrow();
         match &var.value {
-            Value::Undefined => Err(Error::new(span, format!("use of undefined value `{name}`"))),
+            Value::Undefined => Err(Error::coded(
+                "E0504",
+                span,
+                format!("use of undefined value `{name}`"),
+            )),
             value => Ok(value.clone()),
         }
     }
@@ -3177,7 +3288,7 @@ impl<'a> Interpreter<'a> {
     fn assign_var(&mut self, name: &str, value: Value, span: Span) -> Result<(), Error> {
         let cell = self
             .find_var_cell(name)
-            .ok_or_else(|| Error::new(span, format!("unknown variable `{name}`")))?;
+            .ok_or_else(|| Error::coded("E0505", span, format!("unknown variable `{name}`")))?;
         let ty = cell.borrow().ty;
         let value = self.convert(value, ty, span)?;
         cell.borrow_mut().value = value;
@@ -3359,7 +3470,8 @@ fn declare_into_scope<'a>(
                 for var in vars {
                     let ty = resolve_mode_with(&var.mode, mode_names)?;
                     if scope.vars.contains_key(&var.name) || scope.procs.contains_key(&var.name) {
-                        return Err(Error::new(
+                        return Err(Error::coded(
+                            "E0508",
                             var.span,
                             format!("duplicate declaration of `{}`", var.name),
                         ));
@@ -3377,7 +3489,8 @@ fn declare_into_scope<'a>(
                 if scope.vars.contains_key(&proc_def.name)
                     || scope.procs.contains_key(&proc_def.name)
                 {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0508",
                         proc_def.span,
                         format!("duplicate declaration of `{}`", proc_def.name),
                     ));
@@ -3406,11 +3519,16 @@ fn array_offset(array: Type, indices: &[i128], span: Span) -> Result<i128, Error
     match array {
         Type::Array(array) => {
             if indices.len() != 1 {
-                return Err(Error::new(span, "array element requires one index"));
+                return Err(Error::coded(
+                    "E0507",
+                    span,
+                    "array element requires one index",
+                ));
             }
             let index = indices[0];
             if index < array.low || index > array.high {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0500",
                     span,
                     format!("array index `{index}` is out of bounds"),
                 ));
@@ -3419,7 +3537,8 @@ fn array_offset(array: Type, indices: &[i128], span: Span) -> Result<i128, Error
         }
         Type::MultiArray(array) => {
             if indices.len() != array.rank() {
-                return Err(Error::new(
+                return Err(Error::coded(
+                    "E0507",
                     span,
                     format!("array element requires {} indices", array.rank()),
                 ));
@@ -3427,7 +3546,8 @@ fn array_offset(array: Type, indices: &[i128], span: Span) -> Result<i128, Error
             let mut offset = 0;
             for (index, dim) in indices.iter().zip(array.dimensions()) {
                 if *index < dim.low || *index > dim.high {
-                    return Err(Error::new(
+                    return Err(Error::coded(
+                        "E0500",
                         span,
                         format!("array index `{index}` is out of bounds"),
                     ));
@@ -3436,14 +3556,14 @@ fn array_offset(array: Type, indices: &[i128], span: Span) -> Result<i128, Error
             }
             Ok(offset)
         }
-        _ => Err(Error::new(span, "expected an array value")),
+        _ => Err(Error::coded("E0507", span, "expected an array value")),
     }
 }
 
 fn array_len(value: &Value, span: Span) -> Result<usize, Error> {
     match value {
         Value::Array { values, .. } => Ok(values.len()),
-        _ => Err(Error::new(span, "expected an array value")),
+        _ => Err(Error::coded("E0507", span, "expected an array value")),
     }
 }
 
@@ -3457,19 +3577,27 @@ fn dynamic_slice_range(
 ) -> Result<(i128, i128), Error> {
     let upper = if up {
         if last < 1 {
-            return Err(Error::new(span, "array slice size must be positive"));
+            return Err(Error::coded(
+                "E0500",
+                span,
+                "array slice size must be positive",
+            ));
         }
         first
             .checked_add(last - 1)
-            .ok_or_else(|| Error::new(span, "array slice bounds overflow"))?
+            .ok_or_else(|| Error::coded("E0500", span, "array slice bounds overflow"))?
     } else {
         last
     };
     let high = low
         .checked_add(len as i128 - 1)
-        .ok_or_else(|| Error::new(span, "array slice bounds overflow"))?;
+        .ok_or_else(|| Error::coded("E0500", span, "array slice bounds overflow"))?;
     if first > upper || first < low || upper > high {
-        return Err(Error::new(span, "array slice range is out of bounds"));
+        return Err(Error::coded(
+            "E0500",
+            span,
+            "array slice range is out of bounds",
+        ));
     }
     Ok((first - low, upper - first + 1))
 }
@@ -3482,10 +3610,10 @@ fn read_array_slice(
     span: Span,
 ) -> Result<Value, Error> {
     let Value::Array { values, .. } = value else {
-        return Err(Error::new(span, "expected an array value"));
+        return Err(Error::coded("E0507", span, "expected an array value"));
     };
     if offset < 0 || count < 0 || offset + count > values.len() as i128 {
-        return Err(Error::new(span, "array slice is out of bounds"));
+        return Err(Error::coded("E0500", span, "array slice is out of bounds"));
     }
     let start = offset as usize;
     let end = (offset + count) as usize;
@@ -3497,13 +3625,17 @@ fn read_array_slice(
 
 fn read_array_at(value: Value, offset: i128, span: Span) -> Result<Value, Error> {
     let Value::Array { values, .. } = value else {
-        return Err(Error::new(span, "expected an array value"));
+        return Err(Error::coded("E0507", span, "expected an array value"));
     };
     if offset < 0 || offset as usize >= values.len() {
-        return Err(Error::new(span, "array index is out of bounds"));
+        return Err(Error::coded("E0500", span, "array index is out of bounds"));
     }
     match &values[offset as usize] {
-        Value::Undefined => Err(Error::new(span, "use of undefined array element")),
+        Value::Undefined => Err(Error::coded(
+            "E0500",
+            span,
+            "use of undefined array element",
+        )),
         value => Ok(value.clone()),
     }
 }
@@ -3515,10 +3647,10 @@ fn assign_array_at(
     span: Span,
 ) -> Result<(), Error> {
     let Value::Array { values, .. } = value else {
-        return Err(Error::new(span, "expected an array value"));
+        return Err(Error::coded("E0507", span, "expected an array value"));
     };
     if offset < 0 || offset as usize >= values.len() {
-        return Err(Error::new(span, "array index is out of bounds"));
+        return Err(Error::coded("E0500", span, "array index is out of bounds"));
     }
     values[offset as usize] = new_value;
     Ok(())
@@ -3532,20 +3664,20 @@ fn assign_array_slice(
     span: Span,
 ) -> Result<(), Error> {
     let Value::Array { values, .. } = value else {
-        return Err(Error::new(span, "expected an array value"));
+        return Err(Error::coded("E0507", span, "expected an array value"));
     };
     let Value::Array {
         values: new_values, ..
     } = new_value
     else {
-        return Err(Error::new(span, "expected an array value"));
+        return Err(Error::coded("E0507", span, "expected an array value"));
     };
     if offset < 0
         || count < 0
         || offset + count > values.len() as i128
         || new_values.len() != count as usize
     {
-        return Err(Error::new(span, "array slice is out of bounds"));
+        return Err(Error::coded("E0500", span, "array slice is out of bounds"));
     }
     let start = offset as usize;
     for (index, item) in new_values.into_iter().enumerate() {
@@ -3556,17 +3688,19 @@ fn assign_array_slice(
 
 fn read_array_element(value: Value, index: i128, span: Span) -> Result<Value, Error> {
     let Value::Array { low, values } = value else {
-        return Err(Error::new(span, "expected an array value"));
+        return Err(Error::coded("E0507", span, "expected an array value"));
     };
     let offset = index - low;
     if offset < 0 || offset as usize >= values.len() {
-        return Err(Error::new(
+        return Err(Error::coded(
+            "E0500",
             span,
             format!("array index `{index}` is out of bounds"),
         ));
     }
     match &values[offset as usize] {
-        Value::Undefined => Err(Error::new(
+        Value::Undefined => Err(Error::coded(
+            "E0500",
             span,
             format!("use of undefined array element `{index}`"),
         )),
@@ -3576,11 +3710,12 @@ fn read_array_element(value: Value, index: i128, span: Span) -> Result<Value, Er
 
 fn array_element_mut(value: &mut Value, index: i128, span: Span) -> Result<&mut Value, Error> {
     let Value::Array { low, values } = value else {
-        return Err(Error::new(span, "expected an array value"));
+        return Err(Error::coded("E0507", span, "expected an array value"));
     };
     let offset = index - *low;
     if offset < 0 || offset as usize >= values.len() {
-        return Err(Error::new(
+        return Err(Error::coded(
+            "E0500",
             span,
             format!("array index `{index}` is out of bounds"),
         ));
@@ -3592,17 +3727,23 @@ fn read_field(value: Value, field: &str, span: Span) -> Result<Value, Error> {
     let fields = match value {
         Value::Struct(fields) | Value::Moreta(fields) => fields,
         _ => {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0507",
                 span,
                 "expected a structure or module mode value",
             ))
         }
     };
     let Some((_, value)) = fields.iter().find(|(name, _)| name == field) else {
-        return Err(Error::new(span, format!("unknown field `{field}`")));
+        return Err(Error::coded(
+            "E0500",
+            span,
+            format!("unknown field `{field}`"),
+        ));
     };
     match value {
-        Value::Undefined => Err(Error::new(
+        Value::Undefined => Err(Error::coded(
+            "E0504",
             span,
             format!("use of undefined value `{field}`"),
         )),
@@ -3627,14 +3768,19 @@ fn assign_path(
     let fields = match value {
         Value::Struct(fields) | Value::Moreta(fields) => fields,
         _ => {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0507",
                 span,
                 "expected a structure or module mode value",
             ))
         }
     };
     let Some((_, slot)) = fields.iter_mut().find(|(name, _)| name == &path[0]) else {
-        return Err(Error::new(span, format!("unknown field `{}`", path[0])));
+        return Err(Error::coded(
+            "E0500",
+            span,
+            format!("unknown field `{}`", path[0]),
+        ));
     };
     if path.len() == 1 {
         *slot = new_value;
@@ -3646,7 +3792,8 @@ fn assign_path(
 
 fn resolve_mode_with(mode: &ModeRef, mode_names: &HashMap<String, Type>) -> Result<Type, Error> {
     types::resolve_mode_ref(mode, mode_names).ok_or_else(|| {
-        Error::new(
+        Error::coded(
+            "E0500",
             mode.span,
             format!("unknown or unsupported mode `{}`", mode.name),
         )
@@ -3662,7 +3809,7 @@ fn powerset_member_rep(
         (crate::types::PowerSetMember::Int(_), Value::Int { value, .. }) => Ok(value),
         (crate::types::PowerSetMember::Char, Value::Char(value)) => Ok(value as i128),
         (crate::types::PowerSetMember::Bool, Value::Bool(value)) => Ok(i128::from(value)),
-        _ => Err(Error::new(span, "invalid powerset member value")),
+        _ => Err(Error::coded("E0500", span, "invalid powerset member value")),
     }
 }
 
@@ -3877,7 +4024,8 @@ fn format_value(
             conversion.exponent_width,
         ),
         _ => {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0507",
                 span,
                 "format conversion is not compatible with the value",
             ));
@@ -4062,7 +4210,8 @@ fn read_conversion(
             parse_external(&token, conversion, target, span)?
         }
         _ => {
-            return Err(Error::new(
+            return Err(Error::coded(
+                "E0507",
                 span,
                 "format conversion is not compatible with the target mode",
             ));
@@ -4136,7 +4285,11 @@ fn parse_external(
             Ok(Value::Char(ch))
         }
         Type::String | Type::BoundedString { .. } => Ok(Value::String(text.to_owned())),
-        _ => Err(Error::new(span, "unsupported text conversion target")),
+        _ => Err(Error::coded(
+            "E0507",
+            span,
+            "unsupported text conversion target",
+        )),
     }
 }
 
@@ -4229,7 +4382,8 @@ fn combine_kinds(
 ) -> Result<Option<IntKind>, Error> {
     match (left, right) {
         (Some(left), Some(right)) if left == right => Ok(Some(left)),
-        (Some(left), Some(right)) => Err(Error::new(
+        (Some(left), Some(right)) => Err(Error::coded(
+            "E0500",
             span,
             format!(
                 "integer mode mismatch: {} and {}",

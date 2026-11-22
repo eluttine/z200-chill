@@ -1,7 +1,8 @@
 # Diagnostics and Source Locations
 
-Every diagnostic carries a stable code, an optional source span, and a message. The CLI
-renders them as:
+Every diagnostic carries a stable code, an optional source span, and a message. Codes are
+assigned explicitly where diagnostics are constructed; message substrings are not used
+to infer codes. The CLI renders them as:
 
 ```text
 src/main.ch:4:3: error[E0404]: cannot assign LONG_INT to SHORT_INT

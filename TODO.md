@@ -157,6 +157,7 @@ deferred.
 
 ## 8. Cleanup
 
-- [ ] Replace message-based error classification with explicit codes.
+- [x] Replace message-based error classification with explicit codes at checker and
+      interpreter error-construction sites.
 - [ ] Reduce repeated temp-dir setup in CLI tests.
 - [ ] Reconcile docs status matrices with the implementation.
