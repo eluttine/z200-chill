@@ -43,7 +43,8 @@ Current scope includes:
 - arrays including slices, multidimensional arrays, literals, and arrays of structures;
 - `REF`/`PTR`/`ROW` modes, `NULL`, `ALLOCATE`/`GETSTACK`/`TERMINATE`, and
   dereferencing;
-- text modes, text I/O, format codes, associations/access modes;
+- narrow and wide text modes (`TEXT(n)`, `WTEXT(n)`), text I/O, format codes,
+  associations/access modes;
 - generic procedure/module templates over `MODE`, `SYN`, and `PROC`;
 - moreta module-body objects in the documented subset.
 
@@ -494,7 +495,7 @@ Z.200 permits implementation-defined built-in routine names. `z200c` provides:
 - `WRITELINE();` / `WRITELINE(chars);` writes a line to stdout.
 - `line := READLINE();` reads one stdin line as `CHARS`, without the terminator.
 
-`READTEXT`/`WRITETEXT` are also supported for **`CHARS` locations with literal format
+`READTEXT`/`WRITETEXT` are also supported for **character/wide-text locations with literal format
 text**:
 
 - `WRITETEXT(text, format)` writes at index 0.
@@ -530,7 +531,8 @@ text**:
 - Indexed access is supported with `ACCESS (index-mode) CHARS`, indexed `CONNECT`, and
   indexed `READRECORD`/`WRITERECORD`.
 - Text locations must have a varying string mode (`CHARS` or `CHARS(n) VARYING`;
-  varying `WCHARS` locations are also accepted by `READTEXT`/`WRITETEXT`).
+  varying `WCHARS`, `TEXT`, and `WTEXT` locations are also accepted by
+  `READTEXT`/`WRITETEXT`).
 
 ### 5.6 Text modes
 
@@ -551,7 +553,13 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
   `CHARS` modes. Narrow and wide strings are distinct modes and are not implicitly
   assignable to one another.
 - `ACCESS`/association record paths and record I/O remain narrow `CHARS` only.
-- `WTEXT` and wide-character text records are not implemented.
+- `TEXT(n)` and `WTEXT(n)` are text location modes. Their text record is represented
+  as a varying `CHARS(n)` / `WCHARS(n)` value, initialized to the empty string.
+- `TEXT(n)`/`WTEXT(n)` accept the optional index-mode and `DYNAMIC` surface syntax;
+  the interpreter does not currently maintain a separate text index sub-mode or
+  access sub-location.
+- `READTEXT`/`WRITETEXT` accept `TEXT` and `WTEXT` locations in addition to varying
+  `CHARS`/`WCHARS` locations.
 - `BOOLS`, `BOOLS(n)`, and `BOOLS(n) VARYING` are bit-string modes. `B'...'`,
   `O'...'`, and `H'...'` with a closing apostrophe are bit-string literals; without
   the closing apostrophe they are based integer literals (`B'1010` is binary 10).

@@ -87,6 +87,7 @@ impl ArrayElement {
             | Type::MultiArray(_)
             | Type::DynamicArray { .. }
             | Type::ArrayTuple
+            | Type::Text { .. }
             | Type::Ref(_)
             | Type::Ptr
             | Type::Row(_)
@@ -191,6 +192,7 @@ pub enum RefTarget {
     WBoundedString { length: usize, varying: bool },
     Bits,
     BoundedBits { length: usize, varying: bool },
+    Text { length: usize, wide: bool },
     Struct(ModeId),
     Set(SetId),
     Moreta(MoretaId),
@@ -216,6 +218,7 @@ impl RefTarget {
             Type::WBoundedString { length, varying } => Self::WBoundedString { length, varying },
             Type::Bits => Self::Bits,
             Type::BoundedBits { length, varying } => Self::BoundedBits { length, varying },
+            Type::Text { length, wide } => Self::Text { length, wide },
             Type::Struct(id) => Self::Struct(id),
             Type::Set(id) => Self::Set(id),
             Type::Moreta(id) => Self::Moreta(id),
@@ -249,6 +252,7 @@ impl RefTarget {
             Self::WBoundedString { length, varying } => Type::WBoundedString { length, varying },
             Self::Bits => Type::Bits,
             Self::BoundedBits { length, varying } => Type::BoundedBits { length, varying },
+            Self::Text { length, wide } => Type::Text { length, wide },
             Self::Struct(id) => Type::Struct(id),
             Self::Set(id) => Type::Set(id),
             Self::Moreta(id) => Type::Moreta(id),
@@ -294,6 +298,11 @@ pub enum Type {
     BoundedBits {
         length: usize,
         varying: bool,
+    },
+    /// A `TEXT(n)` or `WTEXT(n)` text location mode.
+    Text {
+        length: usize,
+        wide: bool,
     },
     /// A bound reference mode `REF M`.
     Ref(RefTarget),
@@ -367,6 +376,7 @@ impl Type {
             | Self::MultiArray(_)
             | Self::DynamicArray { .. }
             | Self::ArrayTuple
+            | Self::Text { .. }
             | Self::Ref(_)
             | Self::Ptr
             | Self::Row(_)
@@ -407,6 +417,8 @@ impl Type {
             Self::Bits => "bit string",
             Self::BoundedBits { varying: true, .. } => "varying bit string",
             Self::BoundedBits { .. } => "fixed bit string",
+            Self::Text { wide: true, .. } => "wide text",
+            Self::Text { .. } => "text",
             Self::Ref(target) => match target {
                 RefTarget::Struct(_) => "bound reference",
                 _ => "bound reference",
@@ -441,6 +453,8 @@ pub fn resolve_mode(name: &str) -> Option<Type> {
         "WCHAR" => Some(Type::WChar),
         "WCHARS" => Some(Type::WString),
         "BOOLS" => Some(Type::Bits),
+        "TEXT" => Some(Type::String),
+        "WTEXT" => Some(Type::WString),
         "PTR" => Some(Type::Ptr),
         "ASSOCIATION" => Some(Type::Association),
         _ => None,
@@ -491,6 +505,12 @@ pub fn resolve_mode_ref(
                 high: bounds.high,
             }),
         }));
+    }
+    if matches!(mode.name.as_str(), "TEXT" | "WTEXT") {
+        return Some(Type::Text {
+            length: mode.string_length?,
+            wide: mode.name == "WTEXT",
+        });
     }
     let base = mode_names
         .get(&mode.name)

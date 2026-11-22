@@ -1439,6 +1439,46 @@ impl<'a> Parser<'a> {
                 span,
             });
         }
+        if self.at_keyword(Keyword::Text) || self.at_keyword(Keyword::WText) {
+            let wide = self.at_keyword(Keyword::WText);
+            let span = self.current_span();
+            self.advance();
+            self.expect_lparen()?;
+            let length = self.parse_mode_integer()?;
+            self.expect_rparen()?;
+            if length < 0 {
+                return Err(Error::coded(
+                    "E0205",
+                    span,
+                    "text length must be non-negative",
+                ));
+            }
+            // Optional index mode and DYNAMIC are accepted for compatibility with
+            // the surface syntax. The interpreter represents a text location by
+            // its varying text record mode and does not keep a separate index
+            // sub-mode yet.
+            if let Some(TokenKind::Identifier(name)) = self.kind() {
+                if matches!(name.as_str(), "INT" | "SHORT_INT" | "LONG_INT") {
+                    self.advance();
+                }
+            }
+            if self.at_keyword(Keyword::Dynamic) {
+                self.advance();
+            }
+            return Ok(ModeRef {
+                name: if wide { "WTEXT" } else { "TEXT" }.to_owned(),
+                arrays: Vec::new(),
+                string_length: Some(length as usize),
+                varying: true,
+                access: false,
+                powerset: false,
+                reference: false,
+                row: false,
+                access_indexed: false,
+                access_index: None,
+                span,
+            });
+        }
         if self.at_keyword(Keyword::Ref) || self.at_keyword(Keyword::Row) {
             let row = self.at_keyword(Keyword::Row);
             let start = self.current_span();
@@ -2522,6 +2562,8 @@ impl<'a> Parser<'a> {
                     | TokenKind::Keyword(Keyword::Chars)
                     | TokenKind::Keyword(Keyword::WChars)
                     | TokenKind::Keyword(Keyword::Bools)
+                    | TokenKind::Keyword(Keyword::Text)
+                    | TokenKind::Keyword(Keyword::WText)
                     | TokenKind::Keyword(Keyword::Ref)
                     | TokenKind::Keyword(Keyword::Row)
             )

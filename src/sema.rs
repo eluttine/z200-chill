@@ -1407,6 +1407,11 @@ impl Checker {
         }
         if let Some(length) = mode.string_length {
             return Ok(match mode.name.as_str() {
+                "TEXT" => Type::Text {
+                    length,
+                    wide: false,
+                },
+                "WTEXT" => Type::Text { length, wide: true },
                 "WCHARS" => Type::WBoundedString {
                     length,
                     varying: mode.varying,
@@ -3537,6 +3542,8 @@ impl Checker {
             Type::WChar => value == Type::WChar,
             Type::WString => is_wide_string_type(value),
             Type::WBoundedString { .. } => is_wide_string_type(value),
+            Type::Text { wide: true, .. } => is_wide_string_type(value),
+            Type::Text { wide: false, .. } => is_narrow_string_type(value),
             Type::Bits => is_bits_type(value),
             Type::BoundedBits { .. } => is_bits_type(value),
             Type::Ref(target) => {
@@ -3682,11 +3689,17 @@ fn member_compatible(member: crate::types::PowerSetMember, ty: Type) -> bool {
 }
 
 fn is_narrow_string_type(ty: Type) -> bool {
-    matches!(ty, Type::String | Type::BoundedString { .. })
+    matches!(
+        ty,
+        Type::String | Type::BoundedString { .. } | Type::Text { wide: false, .. }
+    )
 }
 
 fn is_wide_string_type(ty: Type) -> bool {
-    matches!(ty, Type::WString | Type::WBoundedString { .. })
+    matches!(
+        ty,
+        Type::WString | Type::WBoundedString { .. } | Type::Text { wide: true, .. }
+    )
 }
 
 fn is_string_type(ty: Type) -> bool {
@@ -3726,6 +3739,7 @@ fn is_varying_string(ty: Type) -> bool {
             | Type::WString
             | Type::BoundedString { varying: true, .. }
             | Type::WBoundedString { varying: true, .. }
+            | Type::Text { .. }
     )
 }
 

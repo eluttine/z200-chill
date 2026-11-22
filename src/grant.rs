@@ -485,6 +485,30 @@ fn parse_external_type(
         };
         return Ok(program::ExternalType::Builtin(Type::Access(access)));
     }
+    if let Some(rest) = name.strip_prefix("WTEXT(") {
+        let length = rest
+            .strip_suffix(')')
+            .ok_or_else(|| format!("invalid text mode `{name}` in grant file"))?
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| format!("invalid text length in `{name}`"))?;
+        return Ok(program::ExternalType::Builtin(Type::Text {
+            length,
+            wide: true,
+        }));
+    }
+    if let Some(rest) = name.strip_prefix("TEXT(") {
+        let length = rest
+            .strip_suffix(')')
+            .ok_or_else(|| format!("invalid text mode `{name}` in grant file"))?
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| format!("invalid text length in `{name}`"))?;
+        return Ok(program::ExternalType::Builtin(Type::Text {
+            length,
+            wide: false,
+        }));
+    }
     if let Some(rest) = name.strip_prefix("BOOLS(") {
         let (length, suffix) = rest
             .split_once(')')
@@ -596,6 +620,11 @@ fn type_name(ty: Type) -> String {
             length,
             varying: false,
         } => format!("WCHARS({length})"),
+        Type::Text { length, wide: true } => format!("WTEXT({length})"),
+        Type::Text {
+            length,
+            wide: false,
+        } => format!("TEXT({length})"),
         Type::Bits => "BOOLS".to_owned(),
         Type::BoundedBits {
             length,
@@ -1039,6 +1068,14 @@ END M;
             Type::BoundedBits {
                 length: 12,
                 varying: true,
+            },
+            Type::Text {
+                length: 20,
+                wide: false,
+            },
+            Type::Text {
+                length: 20,
+                wide: true,
             },
         ] {
             let text = type_name(ty);

@@ -3186,6 +3186,40 @@ impl<'a> Interpreter<'a> {
                 Value::Ref(_) => Ok(value),
                 _ => Err(Error::coded("E0507", span, "expected a reference value")),
             },
+            Type::Text { length, wide } => match value {
+                Value::String(value) => {
+                    let actual = value.chars().count();
+                    let valid = actual <= length
+                        && value.chars().all(|ch| {
+                            if wide {
+                                (ch as u32) <= 0xFFFF
+                            } else {
+                                (ch as u32) <= 0xFF
+                            }
+                        });
+                    if valid {
+                        Ok(Value::String(value))
+                    } else {
+                        Err(Error::coded(
+                            "E0507",
+                            span,
+                            format!(
+                                "text length {actual} does not fit {}({length})",
+                                if wide { "WTEXT" } else { "TEXT" }
+                            ),
+                        ))
+                    }
+                }
+                _ => Err(Error::coded(
+                    "E0507",
+                    span,
+                    if wide {
+                        "expected a wide character string value"
+                    } else {
+                        "expected a character string value"
+                    },
+                )),
+            },
             Type::Bits => match value {
                 Value::Bits(value) => Ok(Value::Bits(value)),
                 _ => Err(Error::coded("E0507", span, "expected a bit string value")),
@@ -3408,6 +3442,11 @@ impl<'a> Interpreter<'a> {
         }
         if let Some(length) = mode.string_length {
             return Ok(match mode.name.as_str() {
+                "TEXT" => Type::Text {
+                    length,
+                    wide: false,
+                },
+                "WTEXT" => Type::Text { length, wide: true },
                 "WCHARS" => Type::WBoundedString {
                     length,
                     varying: mode.varying,
@@ -4818,6 +4857,7 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
         Type::Association => Value::Association(None),
         Type::Access(_) => Value::Access(None),
         Type::PowerSet(_) => Value::PowerSet(std::collections::BTreeSet::new()),
+        Type::Text { .. } => Value::String(String::new()),
         Type::Set(_) => Value::Undefined,
         Type::MultiArray(array) => {
             let element = array.element.ty();
