@@ -1973,15 +1973,18 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                if self.at_keyword(Keyword::Priority) {
+                let priority = if self.at_keyword(Keyword::Priority) {
                     self.advance();
-                    self.parse_expr()?;
-                }
+                    Some(self.parse_expr()?)
+                } else {
+                    None
+                };
                 let end = self.expect_semicolon()?;
                 Ok(Action::Send {
                     signal,
                     values,
                     target,
+                    priority,
                     span: Span::new(self.source, start.start, end.end),
                 })
             }

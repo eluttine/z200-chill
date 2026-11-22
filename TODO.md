@@ -192,9 +192,11 @@ deferred.
       `SEND ... TO instance` delivery with pending targeted signals.
 - [x] `RECEIVE CASE SET instance;` for signal and buffer receives, carrying sender
       instance values through queued and direct handoffs.
-- [ ] Absolute/cyclic timing actions, signal `TO process-name` restrictions, buffer
-      priorities, region/task object modes, process handlers, and process
-      `LOC`/`OUT`/`INOUT` parameters.
+- [x] Signal `SEND` priority selection and prioritized buffer messages/delayed
+      senders.
+- [x] Process `ON` handlers for process-local exceptions and `CAUSE`.
+- [ ] Absolute/cyclic timing actions, signal `TO process-name` restrictions,
+      region/task object modes, and process `LOC`/`OUT`/`INOUT` parameters.
 
 ## 8. Cleanup
 

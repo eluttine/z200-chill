@@ -422,6 +422,7 @@ pub enum Action {
         signal: String,
         values: Vec<Expr>,
         target: Option<Expr>,
+        priority: Option<Expr>,
         span: Span,
     },
     ReceiveCase {

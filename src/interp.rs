@@ -572,6 +572,7 @@ struct EventWaiter {
 struct SignalMessage {
     target: Option<usize>,
     sender: usize,
+    priority: i128,
     values: Vec<Value>,
 }
 
@@ -1787,8 +1788,24 @@ impl<'a> Interpreter<'a> {
                     signal,
                     values,
                     target,
+                    priority,
                     span,
                 } => {
+                    let priority = match priority {
+                        Some(priority) => {
+                            let value = self.eval_ir(priority)?;
+                            let (priority, _) = self.expect_int(value, priority.span())?;
+                            if priority < 0 {
+                                return Err(Error::coded(
+                                    "E0500",
+                                    *span,
+                                    "SEND priority must be non-negative",
+                                ));
+                            }
+                            priority
+                        }
+                        None => 0,
+                    };
                     if self.lookup_signal_modes(signal).is_none() {
                         let (key, length, mode) = self.buffer_location(signal, *span)?;
                         if values.len() != 1 {
@@ -1840,9 +1857,12 @@ impl<'a> Interpreter<'a> {
                             });
                             if full {
                                 drop(scheduler);
-                                if let ProcessInput::Timeout =
-                                    cooperative_send_buffer(key, 0, vec![value], self.deadline)?
-                                {
+                                if let ProcessInput::Timeout = cooperative_send_buffer(
+                                    key,
+                                    priority,
+                                    vec![value],
+                                    self.deadline,
+                                )? {
                                     return Ok(Flow::Timeout);
                                 }
                             } else {
@@ -1852,7 +1872,7 @@ impl<'a> Interpreter<'a> {
                                     .or_default()
                                     .messages
                                     .push_back(BufferMessage {
-                                        priority: 0,
+                                        priority,
                                         sender: self.process_id,
                                         values: vec![value],
                                     });
@@ -1934,6 +1954,7 @@ impl<'a> Interpreter<'a> {
                             .push_back(SignalMessage {
                                 target,
                                 sender: self.process_id,
+                                priority,
                                 values: lowered,
                             });
                     }
@@ -1949,10 +1970,16 @@ impl<'a> Interpreter<'a> {
                         {
                             let mut scheduler = self.scheduler.borrow_mut();
                             if let Some(queue) = scheduler.signals.get_mut(&alternative.signal) {
-                                if let Some(index) = queue.iter().position(|message| {
-                                    message.target.is_none()
-                                        || message.target == Some(self.process_id)
-                                }) {
+                                let selected = queue
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, message)| {
+                                        message.target.is_none()
+                                            || message.target == Some(self.process_id)
+                                    })
+                                    .max_by_key(|(_, message)| message.priority)
+                                    .map(|(index, _)| index);
+                                if let Some(index) = selected {
                                     let message = queue.remove(index).expect("signal message");
                                     pending = Some((
                                         alternative.signal.clone(),

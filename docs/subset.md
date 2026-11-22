@@ -42,7 +42,8 @@ Current scope includes:
 - modules, nested modulions, `GRANT`/`SEIZE`, specs, contexts, regions, remote pieces;
 - `PROCESS` definitions, `START` actions/expressions, `STOP`, `THIS`, `INSTANCE`,
   `EVENT`, `BUFFER`, `DELAY`, `DELAY CASE`, `CONTINUE`, `SIGNAL`, `SEND`
-  (including `TO instance`), `RECEIVE CASE` (including `SET instance`), relative
+  (including `TO instance` and priority), `RECEIVE CASE` (including `SET instance`),
+  process `ON` handlers, relative
   timing actions, region-call
   mutual exclusion, and cooperative round-robin process scheduling at action
   boundaries;
@@ -57,7 +58,7 @@ Current scope includes:
 Explicitly **deferred**:
 
 - absolute/cyclic timing actions;
-- signal `TO process-name` restrictions, buffer priorities, process
+- signal `TO process-name` restrictions, process
   instances/`THIS`, process handlers, process `LOC`/`OUT`/`INOUT` parameters,
   region object/task modes, and priority scheduling;
 - general reference targets beyond simple variables and whole allocated locations;

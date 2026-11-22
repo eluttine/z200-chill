@@ -2047,8 +2047,19 @@ impl Checker {
                 signal,
                 values,
                 target,
+                priority,
                 span,
             } => {
+                if let Some(priority) = priority {
+                    let ty = self.check_expr(priority)?;
+                    if !ty.is_int() {
+                        return Err(Error::coded(
+                            "E0404",
+                            priority.span(),
+                            "SEND PRIORITY requires an integer expression",
+                        ));
+                    }
+                }
                 if let Some(target) = target {
                     let ty = self.check_expr(target)?;
                     if ty != Type::Instance {

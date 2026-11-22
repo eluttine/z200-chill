@@ -367,6 +367,7 @@ pub enum Stmt {
         signal: String,
         values: Vec<Node>,
         target: Option<Node>,
+        priority: Option<Node>,
         span: Span,
     },
     ReceiveCase {
@@ -717,6 +718,7 @@ impl Lowerer<'_> {
                 signal,
                 values,
                 target,
+                priority,
                 span,
             } => Ok(Stmt::Send {
                 signal: signal.clone(),
@@ -727,6 +729,10 @@ impl Lowerer<'_> {
                 target: target
                     .as_ref()
                     .map(|target| self.lower_expr(target))
+                    .transpose()?,
+                priority: priority
+                    .as_ref()
+                    .map(|priority| self.lower_expr(priority))
                     .transpose()?,
                 span: *span,
             }),

@@ -10,14 +10,16 @@
 - `EVENT` and `EVENT(n)` synchronization modes.
 - `DELAY event [PRIORITY expr];` and `CONTINUE event;`.
 - `SIGNAL name [= (modes)];` declarations.
-- `SEND signal [(values)] [TO instance];` when the target is a signal.
+- `SEND signal [(values)] [TO instance] [PRIORITY expr];` when the target is a
+  signal. Pending signals are received highest-priority first.
 - `INSTANCE` values, `THIS`, and `START process(args)` as an expression.
 - Targeted signals are delivered only to the indicated process; if it is not yet
   waiting, the targeted signal remains pending for that process.
 - `RECEIVE CASE SET instance-location;` stores the sending process instance before
   entering the receive branch, for both signal and buffer receives.
 - `BUFFER [(length)] element-mode` synchronization modes.
-- `SEND buffer(value);` and `(buffer IN name)` receive alternatives.
+- `SEND buffer(value) [PRIORITY expr];` and `(buffer IN name)` receive
+  alternatives. Buffer messages and delayed senders honor send priority.
 - Buffer capacity limits park sending processes until space is available.
 - `RECEIVE CASE (signal [IN names]): actions ... [ELSE actions] ESAC;`.
 - Pending signals are queued; waiting receivers are parked on every alternative and
@@ -59,7 +61,8 @@
 - buffer element modes beyond scalar grant encoding.
 - region locations (region object modes), task modes, and critical procedures on
   region objects.
-- process handlers and full exception termination semantics.
+- full process termination propagation semantics beyond the implemented process
+  handler path.
 - process instance values and `THIS`.
 - `LOC` and `OUT`/`INOUT` process parameters.
 - fair/priority scheduling guarantees.
