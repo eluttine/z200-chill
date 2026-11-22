@@ -237,6 +237,7 @@ enum ReachKind {
 struct Scope {
     vars: HashMap<String, Type>,
     procs: HashMap<String, ProcType>,
+    processes: HashMap<String, ProcType>,
     modes: HashMap<String, Type>,
     set_values: HashMap<String, (Type, i128)>,
     /// Names granted into this reach by directly enclosed modules.
@@ -552,6 +553,7 @@ impl Checker {
             let mut current_names = HashSet::new();
             for declaration in &context.declarations {
                 match declaration {
+                    Declaration::Process(_) => {}
                     Declaration::Var(list) => {
                         for var in list {
                             if !declared_names.insert(var.name.clone()) {
@@ -979,6 +981,15 @@ impl Checker {
                     )?;
                     self.declare_proc(&proc_def.name, signature, proc_def.span)?;
                 }
+                Declaration::Process(process_def) => {
+                    let signature = self.signature_from_params(
+                        &process_def.params,
+                        &None,
+                        &[],
+                        process_def.span,
+                    )?;
+                    self.declare_process(&process_def.name, signature, process_def.span)?;
+                }
                 Declaration::ProcSignature(signature) => {
                     let proc_sig = self.signature_from_params(
                         &signature.params,
@@ -1183,12 +1194,15 @@ impl Checker {
         let mut first_error = None;
 
         for declaration in declarations {
-            if let Declaration::Proc(proc_def) = declaration {
-                if let Err(error) = self.check_proc(proc_def) {
-                    self.push_diagnostic(error.clone());
-                    if first_error.is_none() {
-                        first_error = Some(error);
-                    }
+            let result = match declaration {
+                Declaration::Proc(proc_def) => self.check_proc(proc_def),
+                Declaration::Process(process_def) => self.check_process(process_def),
+                _ => continue,
+            };
+            if let Err(error) = result {
+                self.push_diagnostic(error.clone());
+                if first_error.is_none() {
+                    first_error = Some(error);
                 }
             }
         }
@@ -1206,6 +1220,48 @@ impl Checker {
         }
         self.scopes.push(Scope::default());
         let result = self.check_proc_body(proc_def);
+        self.scopes.pop();
+        result
+    }
+
+    fn check_process(&mut self, process_def: &ProcessDef) -> Result<(), Error> {
+        self.scopes.push(Scope::default());
+        let result = (|| {
+            let mut seen = HashSet::new();
+            for param in &process_def.params {
+                if !seen.insert(param.name.as_str()) {
+                    return Err(Error::coded(
+                        "E0402",
+                        param.span,
+                        format!("duplicate parameter `{}`", param.name),
+                    ));
+                }
+                if param.passing != Passing::In {
+                    return Err(Error::coded(
+                        "E0409",
+                        param.span,
+                        "process parameters currently require IN passing",
+                    ));
+                }
+                let ty = self.resolve_mode(&param.mode)?;
+                self.declare_var(&param.name, ty, param.span)?;
+            }
+            self.collect_declarations(&process_def.declarations)?;
+            reject_nested_procs(&process_def.declarations)?;
+            self.check_initializers(&process_def.declarations)?;
+            self.check_proc_bodies(&process_def.declarations)?;
+            self.push_exception_set();
+            let body = self.check_actions(&process_def.actions);
+            let incoming = self.take_exception_set();
+            let _escaped = body.and_then(|()| {
+                if let Some(handler) = &process_def.handler {
+                    self.check_handler_flow(handler, incoming)
+                } else {
+                    Ok(incoming)
+                }
+            })?;
+            Ok(())
+        })();
         self.scopes.pop();
         result
     }
@@ -1284,6 +1340,7 @@ impl Checker {
         let scope = self.scopes.last_mut().expect("scope stack is never empty");
         if scope.vars.contains_key(name)
             || scope.procs.contains_key(name)
+            || scope.processes.contains_key(name)
             || scope.set_values.contains_key(name)
         {
             return Err(Error::coded(
@@ -1296,10 +1353,33 @@ impl Checker {
         Ok(())
     }
 
+    fn declare_process(
+        &mut self,
+        name: &str,
+        signature: ProcType,
+        span: Span,
+    ) -> Result<(), Error> {
+        let scope = self.scopes.last_mut().expect("scope stack is never empty");
+        if scope.vars.contains_key(name)
+            || scope.procs.contains_key(name)
+            || scope.processes.contains_key(name)
+            || scope.set_values.contains_key(name)
+        {
+            return Err(Error::coded(
+                "E0402",
+                span,
+                format!("duplicate declaration of `{name}`"),
+            ));
+        }
+        scope.processes.insert(name.to_owned(), signature);
+        Ok(())
+    }
+
     fn declare_proc(&mut self, name: &str, signature: ProcType, span: Span) -> Result<(), Error> {
         let scope = self.scopes.last_mut().expect("scope stack is never empty");
         if scope.vars.contains_key(name)
             || scope.procs.contains_key(name)
+            || scope.processes.contains_key(name)
             || scope.set_values.contains_key(name)
         {
             return Err(Error::coded(
@@ -1556,6 +1636,15 @@ impl Checker {
                         return Some(*ty);
                     }
                 }
+            }
+        }
+        None
+    }
+
+    fn lookup_process(&self, name: &str) -> Option<ProcType> {
+        for scope in self.scopes[self.module_floor..].iter().rev() {
+            if let Some(signature) = scope.processes.get(name) {
+                return Some(signature.clone());
             }
         }
         None
@@ -1844,6 +1933,46 @@ impl Checker {
                     Ok(())
                 }
             }
+            Action::Start {
+                process,
+                args,
+                span,
+            } => {
+                let Some(signature) = self.lookup_process(process) else {
+                    return Err(Error::coded(
+                        "E0403",
+                        *span,
+                        format!("unknown process `{process}`"),
+                    ));
+                };
+                if signature.params.len() != args.len() {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        format!(
+                            "process `{process}` expects {} argument(s), found {}",
+                            signature.params.len(),
+                            args.len()
+                        ),
+                    ));
+                }
+                for (arg, (param_ty, passing)) in args
+                    .iter()
+                    .zip(signature.params.iter().zip(&signature.passing))
+                {
+                    if *passing != Passing::In {
+                        return Err(Error::coded(
+                            "E0409",
+                            arg.span(),
+                            "process arguments currently require IN passing",
+                        ));
+                    }
+                    let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
+                    self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
+                }
+                Ok(())
+            }
+            Action::Stop { .. } => Ok(()),
             Action::Empty { .. } => Ok(()),
             Action::Cause { name, .. } => {
                 self.record_exception(name);

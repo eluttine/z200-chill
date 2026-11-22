@@ -243,6 +243,7 @@ impl<'a> Parser<'a> {
             let declarations = self.parse_declarations(true, true)?;
             for declaration in &declarations {
                 match declaration {
+                    Declaration::Process(_) => {}
                     Declaration::Visibility(visibility) => {
                         if contexts.is_empty() && remote.is_none() {
                             return Err(Error::coded(
@@ -626,6 +627,8 @@ impl<'a> Parser<'a> {
                 declarations.push(Declaration::GenericProcInstance(
                     self.parse_generic_proc_instance()?,
                 ));
+            } else if self.at_process_definition() {
+                declarations.push(Declaration::Process(self.parse_process()?));
             } else if self.at_proc_definition() {
                 if spec {
                     declarations.push(Declaration::ProcSignature(self.parse_proc_signature()?));
@@ -1114,6 +1117,43 @@ impl<'a> Parser<'a> {
             }
         }
         (constructor, destructor)
+    }
+
+    fn parse_process(&mut self) -> Result<ProcessDef, Error> {
+        let start = self.current_span();
+        let (name, _) = self.expect_identifier()?;
+        self.expect_colon()?;
+        self.expect_keyword(Keyword::Process)?;
+        let params = self.parse_formal_params()?;
+        if matches!(self.kind(), Some(TokenKind::Semicolon)) {
+            self.advance();
+        }
+        let declarations = self.parse_declarations(false, false)?;
+        let actions = self.parse_actions_until(&[Keyword::End])?;
+        self.expect_keyword(Keyword::End)?;
+        let handler = if self.at_keyword(Keyword::On) {
+            Some(self.parse_handler()?)
+        } else {
+            None
+        };
+        if let Some(TokenKind::Identifier(trailing)) = self.kind() {
+            if trailing != &name {
+                return Err(self.error_here_code(
+                    "E0202",
+                    format!("process end name `{trailing}` does not match `{name}`"),
+                ));
+            }
+            self.advance();
+        }
+        let end = self.expect_semicolon()?;
+        Ok(ProcessDef {
+            name,
+            params,
+            declarations,
+            actions,
+            handler,
+            span: Span::new(self.source, start.start, end.end),
+        })
     }
 
     fn parse_proc(&mut self) -> Result<ProcDef, Error> {
@@ -1669,6 +1709,39 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Keyword(Keyword::Case)) => self.parse_case(),
             Some(TokenKind::Keyword(Keyword::Do)) => self.parse_do(),
             Some(TokenKind::Keyword(Keyword::Begin)) => self.parse_begin(),
+            Some(TokenKind::Keyword(Keyword::Start)) => {
+                let start = self.current_span();
+                self.advance();
+                let (process, _) = self.expect_identifier()?;
+                self.expect_lparen()?;
+                let mut args = Vec::new();
+                if !self.at_rparen() {
+                    loop {
+                        args.push(self.parse_expr()?);
+                        if self.at_comma() {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.expect_rparen()?;
+                let semicolon = self.expect_semicolon()?;
+                let span = Span::new(self.source, start.start, semicolon.end);
+                Ok(Action::Start {
+                    process,
+                    args,
+                    span,
+                })
+            }
+            Some(TokenKind::Keyword(Keyword::Stop)) => {
+                let start = self.current_span();
+                self.advance();
+                let end = self.expect_semicolon()?;
+                Ok(Action::Stop {
+                    span: Span::new(self.source, start.start, end.end),
+                })
+            }
             Some(TokenKind::Semicolon) => {
                 let span = self.current_span();
                 self.advance();
@@ -2570,6 +2643,12 @@ impl<'a> Parser<'a> {
 
     fn at_identifier(&self) -> bool {
         matches!(self.kind(), Some(TokenKind::Identifier(_)))
+    }
+
+    fn at_process_definition(&self) -> bool {
+        self.at_identifier()
+            && self.kind_at(1) == Some(&TokenKind::Colon)
+            && self.kind_at(2) == Some(&TokenKind::Keyword(Keyword::Process))
     }
 
     fn at_proc_definition(&self) -> bool {

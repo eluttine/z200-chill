@@ -5,8 +5,11 @@ use crate::manifest::WidthProfile;
 use crate::program::{self, ExportKind};
 use crate::sema::{self, CheckResult};
 use crate::types::{self, IntKind, Type};
-use std::cell::RefCell;
+use corosensei::stack::DefaultStack;
+use corosensei::{Coroutine, Yielder};
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
+use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -183,6 +186,7 @@ pub fn run_checked(
             moreta_invariants.insert(id, invariant);
         }
     }
+    let scheduler = Rc::new(RefCell::new(ScheduleState::default()));
     let mut interpreter = Interpreter {
         profile,
         modules: Vec::new(),
@@ -198,6 +202,8 @@ pub fn run_checked(
         reaches: info.reaches,
         modules_by_span: collect_modules_by_span(&program),
         proc_defs: collect_proc_defs(&program),
+        process_defs: collect_process_defs(&program),
+        scheduler: Rc::clone(&scheduler),
         moreta_decls,
         moreta_invariants,
         package_names: program
@@ -225,6 +231,23 @@ pub fn run_checked(
         interpreter.initialize_declarations(&module.declarations)?;
         interpreter.run_module(module)?;
     }
+
+    drop(interpreter);
+    loop {
+        let Some(mut entry) = scheduler.borrow_mut().ready.pop_front() else {
+            break;
+        };
+        CURRENT_YIELDER.with(|slot| slot.set(entry.yielder.get()));
+        match entry.coroutine.resume(()) {
+            corosensei::CoroutineResult::Yield(()) => {
+                scheduler.borrow_mut().ready.push_back(entry);
+            }
+            corosensei::CoroutineResult::Return(result) => {
+                result?;
+            }
+        }
+    }
+    CURRENT_YIELDER.with(|slot| slot.set(std::ptr::null()));
 
     Ok(())
 }
@@ -320,10 +343,47 @@ enum ReachKind<'a> {
     Mode(Type),
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Copy)]
+struct ProcessRef<'a> {
+    def: &'a ProcessDef,
+    module: usize,
+    scope_key: Option<Span>,
+}
+
+type ProcessCoroutine = Coroutine<(), (), Result<(), Error>, DefaultStack>;
+
+struct ProcessEntry {
+    coroutine: ProcessCoroutine,
+    yielder: Rc<Cell<*const Yielder<(), ()>>>,
+}
+
+#[derive(Default)]
+struct ScheduleState {
+    ready: VecDeque<ProcessEntry>,
+}
+
+thread_local! {
+    static CURRENT_YIELDER: Cell<*const Yielder<(), ()>> = const { Cell::new(std::ptr::null()) };
+}
+
+fn cooperative_yield() {
+    CURRENT_YIELDER.with(|slot| {
+        let ptr = slot.get();
+        if !ptr.is_null() {
+            // The pointer is installed by the scheduler only while this process is
+            // executing on the current thread.
+            unsafe {
+                (*ptr).suspend(());
+            }
+        }
+    });
+}
+
+#[derive(Clone, Default)]
 struct Scope<'a> {
     vars: HashMap<String, VarCell>,
     procs: HashMap<String, ProcRef<'a>>,
+    processes: HashMap<String, ProcessRef<'a>>,
     modes: HashMap<String, Type>,
     /// Names granted into this reach by directly enclosed modules.
     exports: HashMap<String, Vec<ReachBinding<'a>>>,
@@ -342,6 +402,7 @@ struct Frame {
 enum Flow {
     Normal,
     Return,
+    Stop,
     Exit(Option<String>),
 }
 
@@ -370,6 +431,8 @@ struct Interpreter<'a> {
     package_names: Vec<Option<String>>,
     /// Scopes for nested modules declared in a module body, keyed by span.
     nested_scopes: HashMap<Span, Scope<'a>>,
+    process_defs: HashMap<Span, &'a ProcessDef>,
+    scheduler: Rc<RefCell<ScheduleState>>,
     exprs: ir::ExprTable,
     bodies: ir::BodyTable,
     refs: Vec<Option<VarCell>>,
@@ -878,7 +941,8 @@ impl<'a> Interpreter<'a> {
                 | Declaration::Mode(_)
                 | Declaration::SpecModule(_)
                 | Declaration::GenericProc(_)
-                | Declaration::GenericProcInstance(_) => {}
+                | Declaration::GenericProcInstance(_)
+                | Declaration::Process(_) => {}
             }
         }
         Ok(())
@@ -893,7 +957,7 @@ impl<'a> Interpreter<'a> {
             result: None,
         };
         match self.exec_with_handler(module.span, &body, &mut frame)? {
-            Flow::Normal | Flow::Return | Flow::Exit(None) => Ok(()),
+            Flow::Normal | Flow::Return | Flow::Stop | Flow::Exit(None) => Ok(()),
             Flow::Exit(Some(name)) => {
                 if module.name.as_deref() == Some(name.as_str()) {
                     Ok(())
@@ -939,6 +1003,7 @@ impl<'a> Interpreter<'a> {
 
     fn exec_stmts(&mut self, stmts: &[ir::Stmt], frame: &mut Frame) -> Result<Flow, Error> {
         for stmt in stmts {
+            cooperative_yield();
             match stmt {
                 ir::Stmt::Assign {
                     target,
@@ -975,6 +1040,55 @@ impl<'a> Interpreter<'a> {
                 }
                 ir::Stmt::Call { call, .. } => {
                     self.eval_ir(call)?;
+                }
+                ir::Stmt::Stop { .. } => return Ok(Flow::Stop),
+                ir::Stmt::Start {
+                    process,
+                    args,
+                    span,
+                } => {
+                    let Some(process_ref) = self.lookup_process(process) else {
+                        return Err(Error::coded(
+                            "E0505",
+                            *span,
+                            format!("unknown process `{process}`"),
+                        ));
+                    };
+                    let mut values = Vec::with_capacity(args.len());
+                    for arg in args {
+                        values.push(self.eval_ir(arg)?);
+                    }
+                    if values.len() != process_ref.def.params.len() {
+                        return Err(Error::coded(
+                            "E0506",
+                            *span,
+                            format!(
+                                "process `{process}` expects {} argument(s), found {}",
+                                process_ref.def.params.len(),
+                                values.len()
+                            ),
+                        ));
+                    }
+                    let mut child =
+                        self.fork_for_process(process_ref.module, process_ref.scope_key);
+                    let yielder = Rc::new(Cell::new(std::ptr::null()));
+                    let yielder_slot = Rc::clone(&yielder);
+                    let def = process_ref.def;
+                    // Safety: the coroutine is owned by the scheduler and is dropped
+                    // before the borrowed program/check data leaves `run_checked`.
+                    let coroutine = unsafe {
+                        Coroutine::with_stack_unchecked(
+                            DefaultStack::default(),
+                            move |current: &Yielder<(), ()>, ()| {
+                                yielder_slot.set(current as *const _);
+                                child.run_process(def, values)
+                            },
+                        )
+                    };
+                    self.scheduler
+                        .borrow_mut()
+                        .ready
+                        .push_back(ProcessEntry { coroutine, yielder });
                 }
                 ir::Stmt::Return { value, span } => {
                     if let Some(value) = value {
@@ -2932,16 +3046,15 @@ impl<'a> Interpreter<'a> {
         })?;
 
         match self.exec_with_handler(proc_def.span, &body, &mut frame)? {
-            Flow::Return | Flow::Normal => {}
-            Flow::Exit(_) => {
+            Flow::Normal | Flow::Return | Flow::Stop | Flow::Exit(None) => (),
+            Flow::Exit(Some(name)) => {
                 return Err(Error::coded(
                     "E0508",
-                    span,
-                    "EXIT outside a loop is not implemented yet",
-                ));
+                    proc_def.span,
+                    format!("unknown EXIT label `{name}`"),
+                ))
             }
         }
-
         let result = match result_type {
             Some(_) => frame.result.ok_or_else(|| {
                 Error::coded(
@@ -4137,6 +4250,90 @@ impl<'a> Interpreter<'a> {
         None
     }
 
+    fn lookup_process(&self, name: &str) -> Option<ProcessRef<'a>> {
+        let floor = self.local_floor();
+        for scope in self.locals[floor..].iter().rev() {
+            if let Some(process_ref) = scope.processes.get(name) {
+                return Some(*process_ref);
+            }
+        }
+        for scope in self.modules.iter().rev() {
+            if let Some(process_ref) = scope.processes.get(name) {
+                return Some(*process_ref);
+            }
+        }
+        None
+    }
+
+    fn fork_for_process(&self, module: usize, scope_key: Option<Span>) -> Interpreter<'a> {
+        Interpreter {
+            profile: self.profile,
+            modules: self.modules.clone(),
+            locals: Vec::new(),
+            call_bases: Vec::new(),
+            active_module: module,
+            active_scope_key: scope_key,
+            module_floor: 0,
+            depth: 0,
+            exports: self.exports.clone(),
+            modes: Rc::clone(&self.modes),
+            module_modes: self.module_modes.clone(),
+            reaches: self.reaches.clone(),
+            modules_by_span: self.modules_by_span.clone(),
+            proc_defs: self.proc_defs.clone(),
+            process_defs: self.process_defs.clone(),
+            scheduler: Rc::clone(&self.scheduler),
+            moreta_decls: self.moreta_decls.clone(),
+            moreta_invariants: self.moreta_invariants.clone(),
+            package_names: self.package_names.clone(),
+            nested_scopes: self.nested_scopes.clone(),
+            exprs: self.exprs.clone(),
+            bodies: self.bodies.clone(),
+            refs: Vec::new(),
+            ref_allocated: Vec::new(),
+            self_cells: Vec::new(),
+            self_modes: Vec::new(),
+        }
+    }
+
+    fn run_process(&mut self, def: &'a ProcessDef, args: Vec<Value>) -> Result<(), Error> {
+        self.locals.push(Scope::default());
+        self.call_bases.push(self.locals.len() - 1);
+        self.depth += 1;
+        let result = (|| {
+            for (param, value) in def.params.iter().zip(args) {
+                let ty = self.resolve_mode(&param.mode)?;
+                let value = self.convert(value, ty, param.span)?;
+                self.locals
+                    .last_mut()
+                    .expect("process scope")
+                    .vars
+                    .insert(param.name.clone(), Rc::new(RefCell::new(Var { ty, value })));
+            }
+            self.declare_local(&def.declarations)?;
+            self.initialize_declarations(&def.declarations)?;
+            let body = self.bodies.get(def.span).ok_or_else(|| {
+                Error::coded("E0500", def.span, "internal: missing process IR body")
+            })?;
+            let mut frame = Frame {
+                result_type: None,
+                result: None,
+            };
+            match self.exec_with_handler(def.span, &body, &mut frame)? {
+                Flow::Normal | Flow::Return | Flow::Stop | Flow::Exit(None) => Ok(()),
+                Flow::Exit(Some(name)) => Err(Error::coded(
+                    "E0508",
+                    def.span,
+                    format!("unknown EXIT label `{name}` in process `{}`", def.name),
+                )),
+            }
+        })();
+        self.depth -= 1;
+        self.call_bases.pop();
+        self.locals.pop();
+        result
+    }
+
     fn lookup_proc(&self, name: &str) -> Option<ProcRef<'a>> {
         let floor = self.local_floor();
         for scope in self.locals[floor..].iter().rev() {
@@ -4175,6 +4372,30 @@ fn collect_modules_by_span(program: &Program) -> HashMap<Span, &Module> {
     let mut map = HashMap::new();
     for module in &program.modules {
         collect_module_span(module, &mut map);
+    }
+    map
+}
+
+fn collect_process_defs(program: &Program) -> HashMap<Span, &ProcessDef> {
+    fn collect<'a>(declarations: &'a [Declaration], map: &mut HashMap<Span, &'a ProcessDef>) {
+        for declaration in declarations {
+            match declaration {
+                Declaration::Process(def) => {
+                    map.insert(def.span, def);
+                }
+                Declaration::Mode(mode) => {
+                    if let crate::ast::ModeDefinitionBody::Moreta { declarations, .. } = &mode.body
+                    {
+                        collect(declarations, map);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut map = HashMap::new();
+    for module in &program.modules {
+        collect(&module.declarations, &mut map);
     }
     map
 }
@@ -4276,7 +4497,10 @@ fn declare_into_scope<'a>(
             Declaration::Var(vars) => {
                 for var in vars {
                     let ty = resolve_mode_with(&var.mode, mode_names)?;
-                    if scope.vars.contains_key(&var.name) || scope.procs.contains_key(&var.name) {
+                    if scope.vars.contains_key(&var.name)
+                        || scope.procs.contains_key(&var.name)
+                        || scope.processes.contains_key(&var.name)
+                    {
                         return Err(Error::coded(
                             "E0508",
                             var.span,
@@ -4306,6 +4530,26 @@ fn declare_into_scope<'a>(
                     proc_def.name.clone(),
                     ProcRef {
                         def: proc_def,
+                        module,
+                        scope_key,
+                    },
+                );
+            }
+            Declaration::Process(process_def) => {
+                if scope.vars.contains_key(&process_def.name)
+                    || scope.procs.contains_key(&process_def.name)
+                    || scope.processes.contains_key(&process_def.name)
+                {
+                    return Err(Error::coded(
+                        "E0508",
+                        process_def.span,
+                        format!("duplicate declaration of `{}`", process_def.name),
+                    ));
+                }
+                scope.processes.insert(
+                    process_def.name.clone(),
+                    ProcessRef {
+                        def: process_def,
                         module,
                         scope_key,
                     },

@@ -27,7 +27,7 @@ earlier editions, but 1999 is the normative target.
 ## 1. Scope and status
 
 The first release targets **language coverage and static semantics**, with a
-single-threaded, non-preemptive interpreter.
+single-threaded cooperative process scheduler.
 
 Current scope includes:
 
@@ -40,6 +40,8 @@ Current scope includes:
 - procedures and calls (`IN`, `OUT`, `INOUT`, and `LOC` parameters, `RETURNS`,
   `RESULT`/`RETURN`);
 - modules, nested modulions, `GRANT`/`SEIZE`, specs, contexts, regions, remote pieces;
+- `PROCESS` definitions, `START`, `STOP`, and cooperative round-robin process
+  scheduling at action boundaries;
 - arrays including slices, multidimensional arrays, literals, and arrays of structures;
 - `REF`/`PTR`/`ROW` modes, `NULL`, `ALLOCATE`/`GETSTACK`/`TERMINATE`, and
   dereferencing;
@@ -50,8 +52,8 @@ Current scope includes:
 
 Explicitly **deferred**:
 
-- faithful processes/signals/timers and region mutual exclusion (single-threaded first
-  release);
+- `DELAY`/timers, signals, receive cases, process instances/`THIS`, process handlers,
+  process `LOC`/`OUT`/`INOUT` parameters, and region mutual exclusion;
 - general reference targets beyond simple variables and whole allocated locations;
 - constructors/destructors, `SELF`, task/region object modes, and the rest of moreta;
 - generic region/process templates;
@@ -126,8 +128,7 @@ Not implemented yet (rejected or deferred with a diagnostic):
 
 - interface-only external dependencies for `run`;
 - multiple `CASE` selectors and non-integer `CASE` labels;
-- region concurrency/mutual exclusion;
-- faithful processes/signals/timers (first release is single-threaded);
+- `DELAY`/timers, signals, and region concurrency/mutual exclusion;
 - general reference targets beyond simple variables and whole allocated locations;
 - moreta constructors/destructors, `SELF`, and task/region object modes;
 - generic region/process templates;

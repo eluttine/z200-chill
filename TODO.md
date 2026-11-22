@@ -170,8 +170,10 @@ deferred.
       region/process templates remain deferred.
 - [ ] Static-object destructors at reach/lifetime end; complete `Mode!Component` name
       preservation in grant files.
-- [ ] Faithful processes/signals/timers and region mutual exclusion: deferred pending
-      a resumable/concurrent runtime (post-first-release).
+- [x] First concurrency layer: `PROCESS`, `START`, `STOP`, a cooperative
+      action-boundary scheduler, shared module locations, and process-local state.
+- [ ] `DELAY`, timers, signals/`SEND`/receive cases, region mutual exclusion, process
+      handlers/instances, and process `LOC`/`OUT`/`INOUT` parameters.
 
 ## 8. Cleanup
 

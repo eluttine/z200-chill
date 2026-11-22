@@ -83,6 +83,7 @@ pub(super) fn check_contexts(
         let mut current_names = HashSet::new();
         for declaration in &context.declarations {
             match declaration {
+                Declaration::Process(_) => {}
                 Declaration::Var(list) => {
                     for var in list {
                         let ty = resolve_mode_with(&var.mode, &empty_modes)?;

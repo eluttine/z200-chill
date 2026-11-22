@@ -332,6 +332,14 @@ pub enum Stmt {
         call: Node,
         span: Span,
     },
+    Start {
+        process: String,
+        args: Vec<Node>,
+        span: Span,
+    },
+    Stop {
+        span: Span,
+    },
     Return {
         value: Option<Node>,
         span: Span,
@@ -434,7 +442,7 @@ pub struct HandlerIr {
     pub else_actions: Option<Vec<Stmt>>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct BodyTable {
     bodies: HashMap<Span, Rc<Vec<Stmt>>>,
     handlers: HashMap<Span, Rc<HandlerIr>>,
@@ -464,7 +472,7 @@ pub struct Lowered {
     pub bodies: BodyTable,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ExprTable {
     exprs: HashMap<Span, Node>,
 }
@@ -544,6 +552,15 @@ impl Lowerer<'_> {
                         }
                     }
                 }
+                Declaration::Process(process_def) => {
+                    self.lower_declarations(&process_def.declarations)?;
+                    let actions = self.lower_actions(&process_def.actions)?;
+                    self.bodies.insert(process_def.span, actions);
+                    if let Some(handler) = &process_def.handler {
+                        let handler = self.lower_handler(handler)?;
+                        self.bodies.insert_handler(process_def.span, handler);
+                    }
+                }
                 Declaration::Proc(proc_def) => {
                     self.lower_declarations(&proc_def.declarations)?;
                     let actions = self.lower_actions(&proc_def.actions)?;
@@ -605,6 +622,19 @@ impl Lowerer<'_> {
                 call: self.lower_expr(callee)?,
                 span: *span,
             }),
+            Action::Start {
+                process,
+                args,
+                span,
+            } => Ok(Stmt::Start {
+                process: process.clone(),
+                args: args
+                    .iter()
+                    .map(|arg| self.lower_expr(arg))
+                    .collect::<Result<Vec<_>, _>>()?,
+                span: *span,
+            }),
+            Action::Stop { span } => Ok(Stmt::Stop { span: *span }),
             Action::Return { value, span } => Ok(Stmt::Return {
                 value: match value {
                     Some(value) => Some(self.lower_expr(value)?),

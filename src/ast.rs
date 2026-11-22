@@ -118,6 +118,7 @@ impl ModuleKind {
 pub enum Declaration {
     Var(Vec<VarDecl>),
     Proc(ProcDef),
+    Process(ProcessDef),
     ProcSignature(ProcSignature),
     Visibility(Visibility),
     Mode(ModeDefinition),
@@ -333,6 +334,16 @@ pub struct Param {
 }
 
 #[derive(Debug, Clone)]
+pub struct ProcessDef {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub declarations: Vec<Declaration>,
+    pub actions: Vec<Action>,
+    pub handler: Option<Handler>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct ProcDef {
     pub name: String,
     pub params: Vec<Param>,
@@ -360,6 +371,16 @@ pub enum Action {
     },
     Call {
         callee: Expr,
+        span: Span,
+    },
+    /// `START process(args);`
+    Start {
+        process: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
+    /// `STOP;`
+    Stop {
         span: Span,
     },
     Return {
@@ -618,6 +639,8 @@ impl Action {
             Self::Assign { span, .. }
             | Self::Assert { span, .. }
             | Self::Call { span, .. }
+            | Self::Start { span, .. }
+            | Self::Stop { span }
             | Self::Return { span, .. }
             | Self::Result { span, .. }
             | Self::If { span, .. }

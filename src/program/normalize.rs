@@ -769,6 +769,9 @@ fn substitute_declaration_modes(
                     substitute_mode(&mut var.mode, substitutions)?;
                 }
             }
+            Declaration::Process(process_def) => {
+                substitute_declaration_modes(&mut process_def.declarations, substitutions)?;
+            }
             Declaration::Proc(proc_def) => substitute_proc_modes(proc_def, substitutions)?,
             Declaration::ProcSignature(signature) => {
                 for param in &mut signature.params {

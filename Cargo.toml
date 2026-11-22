@@ -6,6 +6,7 @@ description = "Compiler and build tool for the CHILL language (ITU-T Z.200)"
 license = "MIT"
 
 [dependencies]
+corosensei = "0.3.4"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 
