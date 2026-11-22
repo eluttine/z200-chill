@@ -1879,6 +1879,9 @@ impl<'a> Interpreter<'a> {
                                         *span,
                                     )?;
                                 }
+                                crate::builtins::FormatOp::Io(control) => {
+                                    apply_io_write(&mut chars, &mut cursor, *control, *span)?;
+                                }
                             }
                         }
                         let mut var = cell.borrow_mut();
@@ -1930,6 +1933,9 @@ impl<'a> Interpreter<'a> {
                                         *span,
                                     )?;
                                     apply_editing_read(&chars, &mut cursor, editing, width, *span)?;
+                                }
+                                crate::builtins::FormatOp::Io(control) => {
+                                    apply_io_read(&chars, &mut cursor, *control, *span)?;
                                 }
                             }
                         }
@@ -3235,6 +3241,46 @@ fn pad_to(chars: &mut Vec<char>, cursor: usize) {
     while chars.len() < cursor {
         chars.push(' ');
     }
+}
+
+fn apply_io_write(
+    chars: &mut Vec<char>,
+    cursor: &mut i128,
+    control: crate::builtins::IoControl,
+    span: Span,
+) -> Result<(), Error> {
+    match control {
+        crate::builtins::IoControl::NextRecord | crate::builtins::IoControl::Prompt => {
+            write_text_at(chars, cursor, "\n", span)
+        }
+        crate::builtins::IoControl::NextPage => write_text_at(chars, cursor, "\x0c", span),
+        crate::builtins::IoControl::CurrentLine
+        | crate::builtins::IoControl::Emit
+        | crate::builtins::IoControl::EndPage => Ok(()),
+    }
+}
+
+fn apply_io_read(
+    chars: &[char],
+    cursor: &mut i128,
+    control: crate::builtins::IoControl,
+    span: Span,
+) -> Result<(), Error> {
+    let expected = match control {
+        crate::builtins::IoControl::NextRecord | crate::builtins::IoControl::Prompt => Some('\n'),
+        crate::builtins::IoControl::NextPage => Some('\x0c'),
+        crate::builtins::IoControl::CurrentLine
+        | crate::builtins::IoControl::Emit
+        | crate::builtins::IoControl::EndPage => None,
+    };
+    if let Some(expected) = expected {
+        let position = *cursor as usize;
+        if chars.get(position) != Some(&expected) {
+            return Err(textfail(span, "expected a record separator"));
+        }
+        *cursor += 1;
+    }
+    Ok(())
 }
 
 fn apply_editing_write(

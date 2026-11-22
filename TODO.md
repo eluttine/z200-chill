@@ -119,7 +119,8 @@ all existing tests pass with no new special cases.
       `SEQUENCIBLE`, and `VARIABLE`.
 - [x] Floating-point mode `FLOAT`, literals, arithmetic/comparisons, `FLOAT(...)`
       conversion, float arrays, fractional/exponent format widths, and `%F`.
-- [ ] I/O control clauses, `MODIFY`, and indexed access.
+- [x] I/O control format clauses (`%/`, `%+`, `%-`, `%?`, `%!`, `%=`).
+- [ ] Association `MODIFY` and indexed access.
 - [ ] Processes, signals, and timers.
 - [ ] Sets/powersets, moreta modes, templates.
 

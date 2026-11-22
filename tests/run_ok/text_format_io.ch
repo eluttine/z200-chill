@@ -101,6 +101,19 @@ M: MODULE
   ASSERT n = 9;
 
   s := "";
+  WRITETEXT(s, "a%/b");
+  ASSERT s = "a
+b";
+
+  s := "";
+  WRITETEXT(s, "a%!b%-c%=d");
+  ASSERT s = "abcd";
+
+  s := "a
+b";
+  READTEXT(s, "a%/b");
+
+  s := "";
   WRITETEXT(s, 2, "%C", 7);
   ASSERT s = "  7";
 END M;

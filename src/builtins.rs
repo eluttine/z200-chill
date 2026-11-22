@@ -72,6 +72,17 @@ pub enum FormatOp {
     Text(String),
     Convert(Conversion),
     Edit(Editing),
+    Io(IoControl),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoControl {
+    NextRecord,
+    NextPage,
+    CurrentLine,
+    Prompt,
+    Emit,
+    EndPage,
 }
 
 /// Parse the supported subset of a Z.200 format control string.
@@ -271,7 +282,18 @@ pub fn parse_format(text: &str) -> Result<Vec<FormatOp>, String> {
                 continue;
             }
             '/' | '-' | '+' | '?' | '!' | '=' => {
-                return Err("I/O control format clauses are not implemented yet".to_owned());
+                let control = match code {
+                    '/' => IoControl::NextRecord,
+                    '+' => IoControl::NextPage,
+                    '-' => IoControl::CurrentLine,
+                    '?' => IoControl::Prompt,
+                    '!' => IoControl::Emit,
+                    _ => IoControl::EndPage,
+                };
+                for _ in 0..repetition {
+                    ops.push(FormatOp::Io(control));
+                }
+                continue;
             }
             '(' => {
                 let inner_start = index;
@@ -343,6 +365,7 @@ pub fn format_items(ops: &[FormatOp]) -> Vec<FormatItem> {
                     items.push(FormatItem::Width);
                 }
             }
+            FormatOp::Io(_) => {}
         }
     }
     items

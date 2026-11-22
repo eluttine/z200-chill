@@ -458,6 +458,8 @@ text**:
     such as `%3C`;
   - editing clauses `%X` (space), `%>` (skip right), `%<` (skip left), and `%T`
     (tabulate), with optional widths;
+  - I/O control clauses `%/` (next record), `%+` (next page), `%-` (current line),
+    `%?` (prompt), `%!` (emit), and `%=` (end page);
   - `%%` for a literal percent and ordinary format text;
   - io lists after the format argument. Each conversion takes one value/location
     (or a width value first when its width is variable).
@@ -465,7 +467,10 @@ text**:
 - Parenthesized clauses are supported, e.g. `%2(%C:%C %)`.
 - Variable widths are taken from the io list in format order; for example
   `WRITETEXT(s, "%CV", 5, 42)` uses width 5 and value 42.
-- Not implemented yet: I/O control clauses (`%/`, `%+`, etc.).
+- For in-memory strings, record/page controls are mapped to implementation-defined
+  separators: `%/` and `%?` use newline, `%+` uses form feed, and `%-`, `%!`, `%=`
+  have no textual effect.
+- Association `MODIFY` and indexed access are not implemented yet.
 - Text locations must have a varying string mode (`CHARS` or `CHARS(n) VARYING`).
 
 ### 5.6 Text modes
