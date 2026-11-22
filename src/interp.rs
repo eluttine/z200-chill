@@ -252,6 +252,7 @@ enum Value {
     Char(char),
     String(String),
     Struct(Vec<(String, Value)>),
+    Moreta(Vec<(String, Value)>),
     Array { low: i128, values: Vec<Value> },
     Set(i128),
     PowerSet(std::collections::BTreeSet<i128>),
@@ -2641,6 +2642,10 @@ impl<'a> Interpreter<'a> {
                 Value::Struct(_) => Ok(value),
                 _ => Err(Error::new(span, "expected a structure value")),
             },
+            Type::Moreta(_) => match value {
+                Value::Moreta(_) => Ok(value),
+                _ => Err(Error::new(span, "expected a module mode value")),
+            },
             Type::Set(_) => match value {
                 Value::Set(_) => Ok(value),
                 _ => Err(Error::new(span, "expected a set value")),
@@ -3357,8 +3362,14 @@ fn array_element_mut(value: &mut Value, index: i128, span: Span) -> Result<&mut 
 }
 
 fn read_field(value: Value, field: &str, span: Span) -> Result<Value, Error> {
-    let Value::Struct(fields) = value else {
-        return Err(Error::new(span, "expected a structure value"));
+    let fields = match value {
+        Value::Struct(fields) | Value::Moreta(fields) => fields,
+        _ => {
+            return Err(Error::new(
+                span,
+                "expected a structure or module mode value",
+            ))
+        }
     };
     let Some((_, value)) = fields.iter().find(|(name, _)| name == field) else {
         return Err(Error::new(span, format!("unknown field `{field}`")));
@@ -3386,8 +3397,14 @@ fn assign_path(
     new_value: Value,
     span: Span,
 ) -> Result<(), Error> {
-    let Value::Struct(fields) = value else {
-        return Err(Error::new(span, "expected a structure value"));
+    let fields = match value {
+        Value::Struct(fields) | Value::Moreta(fields) => fields,
+        _ => {
+            return Err(Error::new(
+                span,
+                "expected a structure or module mode value",
+            ))
+        }
     };
     let Some((_, slot)) = fields.iter_mut().find(|(name, _)| name == &path[0]) else {
         return Err(Error::new(span, format!("unknown field `{}`", path[0])));
@@ -3904,6 +3921,14 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
                 .fields
                 .iter()
                 .map(|field| (field.name.clone(), default_value(modes, field.ty)))
+                .collect(),
+        ),
+        Type::Moreta(id) => Value::Moreta(
+            modes
+                .get_moreta(id)
+                .components
+                .iter()
+                .map(|(name, ty)| (name.clone(), default_value(modes, *ty)))
                 .collect(),
         ),
         Type::Array(array) => {

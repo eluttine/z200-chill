@@ -441,6 +441,7 @@ fn type_name(ty: Type) -> String {
         // not be reached because portable types use `ExternalType::Mode`.
         Type::Struct(_) => "STRUCT".to_owned(),
         Type::Set(_) => "SET".to_owned(),
+        Type::Moreta(_) => "MODULE".to_owned(),
         Type::Array(array) => format!(
             "ARRAY({}:{}) {}",
             array.low,

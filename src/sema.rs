@@ -1804,11 +1804,24 @@ impl Checker {
 
     fn check_field(&mut self, base: &Expr, field: &str, span: Span) -> Result<Type, Error> {
         let base_ty = self.check_expr(base)?;
+        if let Type::Moreta(id) = base_ty {
+            let Some((_, ty)) = self.modes.moreta_component(id, field) else {
+                return Err(Error::new(
+                    span,
+                    format!(
+                        "unknown component `{field}` in module mode `{}`",
+                        self.modes.get_moreta(id).name
+                    ),
+                ));
+            };
+            return Ok(*ty);
+        }
+
         let Type::Struct(id) = base_ty else {
             return Err(Error::new(
                 span,
                 format!(
-                    "field selection requires a structure, found {}",
+                    "field selection requires a structure or module mode, found {}",
                     base_ty.describe()
                 ),
             ));
@@ -2910,6 +2923,7 @@ impl Checker {
             Type::BoundedString { .. } => is_string_type(value),
             Type::Struct(id) => value == Type::Struct(id),
             Type::Set(id) => value == Type::Set(id),
+            Type::Moreta(id) => value == Type::Moreta(id),
             Type::Association => value == Type::Association,
             Type::Access(access) => value == Type::Access(access),
             Type::PowerSet(set) => value == Type::PowerSet(set),

@@ -567,6 +567,9 @@ fn substitute_declaration_modes(
                     substitute_mode(mode, substitutions)?;
                 }
                 crate::ast::ModeDefinitionBody::Set(_) => {}
+                crate::ast::ModeDefinitionBody::Moreta { declarations, .. } => {
+                    substitute_declaration_modes(declarations, substitutions)?;
+                }
             },
             Declaration::Visibility(_)
             | Declaration::SpecModule(_)
@@ -1141,6 +1144,38 @@ fn process_module_modes(
                     elements: infos,
                 });
                 Type::Set(id)
+            }
+            crate::ast::ModeDefinitionBody::Moreta { declarations, .. } => {
+                let mut components = Vec::new();
+                let mut seen = HashSet::new();
+                for declaration in declarations {
+                    let Declaration::Var(vars) = declaration else {
+                        return Err(Error::new(
+                            mode_def.span,
+                            "only variable components are implemented for module modes",
+                        ));
+                    };
+                    for var in vars {
+                        let ty = resolve_mode_with(&var.mode, resolution)?;
+                        if !seen.insert(var.name.clone()) {
+                            return Err(Error::new(
+                                var.span,
+                                format!("duplicate component `{}`", var.name),
+                            ));
+                        }
+                        components.push((var.name.clone(), ty));
+                    }
+                }
+                let id = crate::types::MoretaId(table.moretas.len());
+                table.moretas.push(crate::modes::MoretaMode {
+                    name: mode_def.name.clone(),
+                    package: top_package,
+                    module: top,
+                    package_name: top_package_name.clone(),
+                    module_name: module.name.clone(),
+                    components,
+                });
+                Type::Moreta(id)
             }
             crate::ast::ModeDefinitionBody::Alias(mode) => resolve_mode_with(mode, resolution)?,
         };

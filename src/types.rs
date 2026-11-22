@@ -33,6 +33,9 @@ pub struct ModeId(pub usize);
 pub struct SetId(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MoretaId(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scalar {
     Int(IntKind),
     Float,
@@ -64,6 +67,7 @@ impl ArrayElement {
             | Type::Access(_)
             | Type::PowerSet(_)
             | Type::Set(_)
+            | Type::Moreta(_)
             | Type::IntLiteral
             | Type::Array(_)
             | Type::MultiArray(_)
@@ -169,6 +173,7 @@ pub enum Type {
     },
     Struct(ModeId),
     Set(SetId),
+    Moreta(MoretaId),
     Array(ArrayType),
     MultiArray(MultiArrayType),
     /// A slice whose upper bound is only known at runtime. The lower bound is
@@ -215,6 +220,7 @@ impl Type {
             | Self::Access(_)
             | Self::PowerSet(_)
             | Self::Set(_)
+            | Self::Moreta(_)
             | Self::IntLiteral
             | Self::Struct(_)
             | Self::Array(_)
@@ -247,6 +253,7 @@ impl Type {
             Self::BoundedString { .. } => "fixed character string",
             Self::Struct(_) => "structure",
             Self::Set(_) => "set",
+            Self::Moreta(_) => "module mode object",
             Self::Array(_) => "array",
             Self::MultiArray(_) => "multidimensional array",
             Self::DynamicArray { .. } => "dynamic array slice",

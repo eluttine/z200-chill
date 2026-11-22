@@ -156,6 +156,10 @@ pub struct ModeDefinition {
 pub enum ModeDefinitionBody {
     Struct(Vec<FieldDef>),
     Set(Vec<SetElement>),
+    Moreta {
+        declarations: Vec<Declaration>,
+        span: Span,
+    },
     Alias(ModeRef),
 }
 

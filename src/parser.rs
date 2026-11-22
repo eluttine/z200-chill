@@ -785,6 +785,34 @@ impl<'a> Parser<'a> {
             }
             self.expect_rparen()?;
             ModeDefinitionBody::Set(elements)
+        } else if self.at_keyword(Keyword::Module) {
+            let body_start = self.current_span();
+            self.advance();
+            if self.at_keyword(Keyword::Spec) {
+                return Err(Error::coded(
+                    "E0206",
+                    body_start,
+                    "moreta module mode specifications are not implemented yet",
+                ));
+            }
+            if self.at_keyword(Keyword::Body) {
+                self.advance();
+            }
+            let declarations = self.parse_declarations(false, false)?;
+            self.expect_keyword(Keyword::End)?;
+            if let Some(TokenKind::Identifier(trailing)) = self.kind() {
+                if trailing != &name {
+                    return Err(self.error_here_code(
+                        "E0202",
+                        format!("module mode end name `{trailing}` does not match `{name}`"),
+                    ));
+                }
+                self.advance();
+            }
+            ModeDefinitionBody::Moreta {
+                declarations,
+                span: Span::new(self.source, body_start.start, self.current_span().start),
+            }
         } else {
             ModeDefinitionBody::Alias(self.parse_mode_ref()?)
         };

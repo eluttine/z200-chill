@@ -1,4 +1,4 @@
-use crate::types::{ModeId, SetId, Type};
+use crate::types::{ModeId, MoretaId, SetId, Type};
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
@@ -40,6 +40,16 @@ pub fn mode_symbol(package: Option<&str>, module: Option<&str>, name: &str) -> S
 }
 
 #[derive(Debug, Clone)]
+pub struct MoretaMode {
+    pub name: String,
+    pub package: usize,
+    pub module: usize,
+    pub package_name: Option<String>,
+    pub module_name: Option<String>,
+    pub components: Vec<(String, Type)>,
+}
+
+#[derive(Debug, Clone)]
 pub struct SetMode {
     pub name: String,
     pub package: usize,
@@ -53,6 +63,7 @@ pub struct SetMode {
 pub struct ModeTable {
     pub modes: Vec<StructMode>,
     pub sets: Vec<SetMode>,
+    pub moretas: Vec<MoretaMode>,
 }
 
 impl ModeTable {
@@ -62,6 +73,17 @@ impl ModeTable {
 
     pub fn get_mut(&mut self, id: ModeId) -> &mut StructMode {
         &mut self.modes[id.0]
+    }
+
+    pub fn get_moreta(&self, id: MoretaId) -> &MoretaMode {
+        &self.moretas[id.0]
+    }
+
+    pub fn moreta_component(&self, id: MoretaId, name: &str) -> Option<&(String, Type)> {
+        self.get_moreta(id)
+            .components
+            .iter()
+            .find(|(component, _)| component == name)
     }
 
     pub fn get_set(&self, id: SetId) -> &SetMode {

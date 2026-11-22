@@ -611,6 +611,29 @@ PairInt: MODULE = NEW Pair (INT) END;
   contexts, nested modules, actions, and handlers.
 - Generic region and process templates are not implemented yet.
 
+### 6.3 Minimal moreta module modes
+
+`NEWMODE`/`SYNMODE` may define a module-body mode with variable components:
+
+```chill
+NEWMODE Point = MODULE BODY
+  DCL x INT;
+  DCL y INT;
+END Point;
+
+DCL p Point;
+p.x := 1;
+ASSERT p.x = 1;
+```
+
+- Each object has its own variable components.
+- Components are accessed and assigned with `.`.
+- Component modes are resolved when the module mode is defined.
+- Whole-object assignment uses value-copy semantics.
+
+Not implemented yet: module mode specifications, procedure components/methods,
+inheritance, invariants, component `INIT` evaluation, and object constructors.
+
 ## 7. Modules and visibility
 
 ### 7.1 Syntax (§10.6)
