@@ -296,6 +296,10 @@ pub struct ModeRef {
     pub access: bool,
     /// True for a `POWERSET member-mode` mode.
     pub powerset: bool,
+    /// True for a `REF mode` reference mode.
+    pub reference: bool,
+    /// True for a `ROW mode` row mode.
+    pub row: bool,
     /// True when ACCESS declares an index mode.
     pub access_indexed: bool,
     /// Literal index range for an indexed ACCESS mode, if specified.
@@ -501,6 +505,27 @@ pub enum Expr {
         value: String,
         span: Span,
     },
+    Null {
+        span: Span,
+    },
+    /// `-> location`, creating a reference to a location.
+    AddressOf {
+        target: Box<Expr>,
+        span: Span,
+    },
+    /// `reference -> [mode]`, dereferencing a reference or row.
+    Deref {
+        base: Box<Expr>,
+        mode: Option<Box<ModeRef>>,
+        span: Span,
+    },
+    /// `ALLOCATE(mode [, value])` or `GETSTACK(mode [, value])`.
+    Allocate {
+        mode: Box<ModeRef>,
+        value: Option<Box<Expr>>,
+        stack: bool,
+        span: Span,
+    },
     Name {
         name: String,
         span: Span,
@@ -561,6 +586,10 @@ impl Expr {
             | Self::WideChar { span, .. }
             | Self::WideString { span, .. }
             | Self::Bits { span, .. }
+            | Self::Null { span }
+            | Self::AddressOf { span, .. }
+            | Self::Deref { span, .. }
+            | Self::Allocate { span, .. }
             | Self::Name { span, .. }
             | Self::Apply { span, .. }
             | Self::Unary { span, .. }

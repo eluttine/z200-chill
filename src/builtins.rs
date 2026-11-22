@@ -16,6 +16,8 @@ pub enum Builtin {
     WriteLine,
     /// Read one line from stdin as CHARS, without the line terminator.
     ReadLine,
+    /// End the lifetime of an allocated location.
+    Terminate,
 }
 
 pub fn lookup(name: &str) -> Option<Builtin> {
@@ -23,6 +25,7 @@ pub fn lookup(name: &str) -> Option<Builtin> {
         "WRITE" => Some(Builtin::Write),
         "WRITELINE" => Some(Builtin::WriteLine),
         "READLINE" => Some(Builtin::ReadLine),
+        "TERMINATE" => Some(Builtin::Terminate),
         _ => None,
     }
 }

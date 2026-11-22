@@ -1,0 +1,4 @@
+M: MODULE
+  DCL p REF INT INIT := NULL;
+  TERMINATE(p);
+END M;

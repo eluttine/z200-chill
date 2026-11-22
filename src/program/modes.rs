@@ -58,6 +58,22 @@ fn process_module_modes(
 
         let ty = match &mode_def.body {
             crate::ast::ModeDefinitionBody::Struct(fields) => {
+                // Predeclare the structure so fields may refer to it (directly
+                // or through REF), then resolve and install the fields.
+                let id = ModeId(table.modes.len());
+                table.modes.push(StructMode {
+                    name: mode_def.name.clone(),
+                    package: top_package,
+                    module: top,
+                    package_name: top_package_name.clone(),
+                    module_name: module.name.clone(),
+                    fields: Vec::new(),
+                    forbidden: std::collections::HashSet::new(),
+                });
+                let ty = Type::Struct(id);
+                local.insert(mode_def.name.clone(), ty);
+                resolution.insert(mode_def.name.clone(), ty);
+
                 let mut field_infos = Vec::with_capacity(fields.len());
                 let mut names = std::collections::HashSet::new();
                 for field in fields {
@@ -73,16 +89,7 @@ fn process_module_modes(
                         ty,
                     });
                 }
-                let id = ModeId(table.modes.len());
-                table.modes.push(StructMode {
-                    name: mode_def.name.clone(),
-                    package: top_package,
-                    module: top,
-                    package_name: top_package_name.clone(),
-                    module_name: module.name.clone(),
-                    fields: field_infos,
-                    forbidden: std::collections::HashSet::new(),
-                });
+                table.modes[id.0].fields = field_infos;
                 Type::Struct(id)
             }
             crate::ast::ModeDefinitionBody::Set(elements) => {
@@ -133,6 +140,8 @@ fn process_module_modes(
                         varying: false,
                         access: false,
                         powerset: false,
+                        reference: false,
+                        row: false,
                         access_indexed: false,
                         access_index: None,
                         span: mode_def.span,
@@ -243,11 +252,15 @@ fn process_module_modes(
             crate::ast::ModeDefinitionBody::Alias(mode) => resolve_mode_with(mode, resolution)?,
         };
 
-        if local.insert(mode_def.name.clone(), ty).is_some() {
-            return Err(Error::new(
-                mode_def.span,
-                format!("duplicate mode `{}`", mode_def.name),
-            ));
+        if let Some(existing) = local.get(&mode_def.name) {
+            if *existing != ty {
+                return Err(Error::new(
+                    mode_def.span,
+                    format!("duplicate mode `{}`", mode_def.name),
+                ));
+            }
+        } else {
+            local.insert(mode_def.name.clone(), ty);
         }
         resolution.insert(mode_def.name.clone(), ty);
     }

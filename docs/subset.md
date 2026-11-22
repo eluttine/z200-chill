@@ -41,6 +41,8 @@ Current scope includes:
   `RESULT`/`RETURN`);
 - modules, nested modulions, `GRANT`/`SEIZE`, specs, contexts, regions, remote pieces;
 - arrays including slices, multidimensional arrays, literals, and arrays of structures;
+- `REF`/`PTR`/`ROW` modes, `NULL`, `ALLOCATE`/`GETSTACK`/`TERMINATE`, and
+  dereferencing;
 - text modes, text I/O, format codes, associations/access modes;
 - generic procedure/module templates over `MODE`, `SYN`, and `PROC`;
 - moreta module-body objects in the documented subset.
@@ -49,7 +51,7 @@ Explicitly **deferred**:
 
 - faithful processes/signals/timers and region mutual exclusion (single-threaded first
   release);
-- references/rows and `ALLOCATE`/`TERMINATE`;
+- general reference targets beyond simple variables and whole allocated locations;
 - constructors/destructors, `SELF`, task/region object modes, and the rest of moreta;
 - generic region/process templates;
 - grant encoding for named set modes and moreta module modes;
@@ -106,6 +108,9 @@ Implemented in `z200c`:
 - bit strings (`BOOLS`, `BOOLS(n)`, `BOOLS(n) VARYING`), binary/octal/hexadecimal
   bit-string literals, elementwise `AND`/`OR`/`XOR`/`NOT`, concatenation, ordering,
   and comparison;
+- bound references (`REF M`), free references (`PTR`), rows (`ROW M`), `NULL`,
+  dereferencing (`->`), referencing simple variables (`-> name`), and
+  `ALLOCATE` / `GETSTACK` / `TERMINATE`;
 - bounded text modes, format conversion/editing codes, variable widths, and I/O
   control clauses;
 - simplified text-file associations/access modes with indexed access;
@@ -122,7 +127,7 @@ Not implemented yet (rejected or deferred with a diagnostic):
 - multiple `CASE` selectors and non-integer `CASE` labels;
 - region concurrency/mutual exclusion;
 - faithful processes/signals/timers (first release is single-threaded);
-- references/rows and `ALLOCATE`/`TERMINATE`;
+- general reference targets beyond simple variables and whole allocated locations;
 - moreta constructors/destructors, `SELF`, and task/region object modes;
 - generic region/process templates;
 - grant encoding for named set modes and moreta module modes.
@@ -553,7 +558,31 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
 - Elementwise `AND`, `OR`, `XOR`, and `NOT` require equal-length bit strings.
   Concatenation delivers an unbounded `BOOLS` value.
 
-### 5.7 Associations and access modes (simplified)
+### 5.7 References, rows, and dynamic storage
+
+- `REF M` is a bound reference mode. `PTR` is the free reference mode; dereferencing
+  a `PTR` requires an explicit mode, e.g. `p->INT`.
+- `ROW M` is a row mode. Rows may currently target string, bit-string, and array
+  modes; dereferencing a row takes no mode.
+- `NULL` is the empty reference value.
+- `-> name` creates a reference to a variable; `ref->` dereferences it. A dereference
+  is usable as a value or as an assignment target, including `ref->.field`.
+- `ALLOCATE(mode [, value])` and `GETSTACK(mode [, value])` create a location and
+  return a reference to it. `GETSTACK` is currently treated like `ALLOCATE`; both
+  create interpreter-managed locations.
+- Without an initial value, structured locations receive the same default shape as
+  declarations; scalar locations start undefined. This differs from the standard's
+  strictly undefined initial value but preserves field assignment on freshly
+  allocated structures.
+- `TERMINATE(ref)` ends the lifetime of an allocated location and raises `EMPTY` for
+  `NULL`; terminating a non-allocated reference is rejected.
+- Dereferencing `NULL` or a terminated reference raises `EMPTY`.
+- References and rows are not yet encodable in grant interfaces. Arrays of
+  references, nested `REF`/`ROW` modes, references to fields/indexes, and mutually
+  recursive structure modes are not implemented yet. Self-referential structure
+  modes (such as linked-list nodes) are supported.
+
+### 5.8 Associations and access modes (simplified)
 
 `ASSOCIATION` is an opaque association-mode location. `ACCESS CHARS` is an opaque
 sequential access-mode location for character-string line records. The current

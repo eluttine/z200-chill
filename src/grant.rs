@@ -375,6 +375,9 @@ fn validate_external_type(ty: &program::ExternalType) -> Result<(), String> {
         program::ExternalType::Builtin(Type::Moreta(_)) => {
             Err("module mode types are not supported in grant interfaces yet".to_owned())
         }
+        program::ExternalType::Builtin(Type::Ref(_) | Type::Ptr | Type::Row(_) | Type::Null) => {
+            Err("reference and row modes are not supported in grant interfaces yet".to_owned())
+        }
         program::ExternalType::Array { element, .. }
         | program::ExternalType::MultiArray { element, .. } => validate_external_type(element),
         _ => Ok(()),
@@ -602,6 +605,10 @@ fn type_name(ty: Type) -> String {
             length,
             varying: false,
         } => format!("BOOLS({length})"),
+        Type::Ref(target) => format!("REF {}", type_name(target.ty())),
+        Type::Ptr => "PTR".to_owned(),
+        Type::Row(target) => format!("ROW {}", type_name(target.ty())),
+        Type::Null => "NULL".to_owned(),
         // Structure modes must be referenced symbolically; this branch should
         // not be reached because portable types use `ExternalType::Mode`.
         Type::Struct(_) => "STRUCT".to_owned(),

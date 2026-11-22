@@ -208,6 +208,8 @@ pub fn run_checked(
         nested_scopes: HashMap::new(),
         exprs: lowered.exprs,
         bodies: lowered.bodies,
+        refs: Vec::new(),
+        ref_allocated: Vec::new(),
     };
 
     interpreter.declare_modules(&program)?;
@@ -247,6 +249,7 @@ enum Value {
     Char(char),
     String(String),
     Bits(String),
+    Ref(Option<usize>),
     Struct(Vec<(String, Value)>),
     Moreta(Vec<(String, Value)>),
     Array { low: i128, values: Vec<Value> },
@@ -367,6 +370,8 @@ struct Interpreter<'a> {
     nested_scopes: HashMap<Span, Scope<'a>>,
     exprs: ir::ExprTable,
     bodies: ir::BodyTable,
+    refs: Vec<Option<VarCell>>,
+    ref_allocated: Vec<bool>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -1966,6 +1971,44 @@ impl<'a> Interpreter<'a> {
             ir::Expr::Char { value, .. } => Ok(Value::Char(*value)),
             ir::Expr::String { value, .. } => Ok(Value::String(value.clone())),
             ir::Expr::Bits { value, .. } => Ok(Value::Bits(value.clone())),
+            ir::Expr::Null { .. } => Ok(Value::Ref(None)),
+            ir::Expr::AddressOf { name, span, .. } => {
+                let cell = self.find_var_cell(name).ok_or_else(|| {
+                    Error::coded("E0505", *span, format!("unknown variable `{name}`"))
+                })?;
+                Ok(Value::Ref(Some(self.intern_ref(cell, false))))
+            }
+            ir::Expr::Deref { base, ty, span, .. } => {
+                let cell = self.eval_reference(base, *span)?;
+                let (value, cell_ty) = {
+                    let var = cell.borrow();
+                    (var.value.clone(), var.ty)
+                };
+                if cell_ty != *ty {
+                    return Err(Error::coded(
+                        "E0507",
+                        *span,
+                        "reference mode does not match the referenced location",
+                    ));
+                }
+                if matches!(value, Value::Undefined) {
+                    return Err(Error::coded("E0504", *span, "use of undefined value"));
+                }
+                self.convert(value, *ty, *span)
+            }
+            ir::Expr::Allocate {
+                mode, value, span, ..
+            } => {
+                let value = match value {
+                    Some(value) => {
+                        let value = self.eval_ir(value)?;
+                        self.convert(value, *mode, *span)?
+                    }
+                    None => default_value(&self.modes, *mode),
+                };
+                let cell = Rc::new(RefCell::new(Var { ty: *mode, value }));
+                Ok(Value::Ref(Some(self.intern_ref(cell, true))))
+            }
             ir::Expr::Name { name, span, .. } => self.read_var(name, *span),
             ir::Expr::Builtin {
                 builtin,
@@ -2003,6 +2046,36 @@ impl<'a> Interpreter<'a> {
                             println!("{text}");
                         } else {
                             println!();
+                        }
+                        Ok(Value::Undefined)
+                    }
+                    crate::builtins::Builtin::Terminate => {
+                        let Some(Value::Ref(reference)) = values.first() else {
+                            return Err(Error::coded(
+                                "E0507",
+                                *span,
+                                "TERMINATE requires a reference value",
+                            ));
+                        };
+                        let Some(handle) = reference else {
+                            return Err(Error::exception(
+                                "EMPTY",
+                                *span,
+                                "EMPTY: TERMINATE of NULL",
+                            ));
+                        };
+                        if !self.ref_allocated.get(*handle).copied().unwrap_or(false) {
+                            return Err(Error::coded(
+                                "E0507",
+                                *span,
+                                "TERMINATE requires an allocated reference value",
+                            ));
+                        }
+                        if let Some(cell) = self.refs.get(*handle).and_then(Clone::clone) {
+                            cell.borrow_mut().value = Value::Undefined;
+                        }
+                        if let Some(slot) = self.refs.get_mut(*handle) {
+                            *slot = None;
                         }
                         Ok(Value::Undefined)
                     }
@@ -2926,6 +2999,7 @@ impl<'a> Interpreter<'a> {
             (Value::Char(left), Value::Char(right)) => Ok(left == right),
             (Value::String(left), Value::String(right)) => Ok(left == right),
             (Value::Bits(left), Value::Bits(right)) => Ok(left == right),
+            (Value::Ref(left), Value::Ref(right)) => Ok(left == right),
             (Value::PowerSet(left), Value::PowerSet(right)) => Ok(left == right),
             (Value::Set(left), Value::Set(right)) => Ok(left == right),
             (
@@ -3108,6 +3182,10 @@ impl<'a> Interpreter<'a> {
                     "expected a wide character string value",
                 )),
             },
+            Type::Ref(_) | Type::Ptr | Type::Row(_) | Type::Null => match value {
+                Value::Ref(_) => Ok(value),
+                _ => Err(Error::coded("E0507", span, "expected a reference value")),
+            },
             Type::Bits => match value {
                 Value::Bits(value) => Ok(Value::Bits(value)),
                 _ => Err(Error::coded("E0507", span, "expected a bit string value")),
@@ -3240,6 +3318,24 @@ impl<'a> Interpreter<'a> {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        if mode.reference || mode.row {
+            let mut inner = mode.clone();
+            inner.reference = false;
+            inner.row = false;
+            let base = self.resolve_mode(&inner)?;
+            let Some(target) = crate::types::RefTarget::from_type(base) else {
+                return Err(Error::coded(
+                    "E0400",
+                    mode.span,
+                    "this mode cannot be referenced",
+                ));
+            };
+            return Ok(if mode.reference {
+                Type::Ref(target)
+            } else {
+                Type::Row(target)
+            });
+        }
         if mode.powerset {
             let member = match crate::types::resolve_mode_ref(
                 &ModeRef {
@@ -3249,6 +3345,8 @@ impl<'a> Interpreter<'a> {
                     varying: false,
                     access: false,
                     powerset: false,
+                    reference: false,
+                    row: false,
                     access_indexed: false,
                     access_index: None,
                     span: mode.span,
@@ -3288,6 +3386,8 @@ impl<'a> Interpreter<'a> {
                 varying: mode.varying,
                 access: mode.access,
                 powerset: mode.powerset,
+                reference: mode.reference,
+                row: mode.row,
                 access_indexed: mode.access_indexed,
                 access_index: mode.access_index,
                 span: mode.span,
@@ -3360,6 +3460,35 @@ impl<'a> Interpreter<'a> {
         self.modules.get(self.active_module)
     }
 
+    fn intern_ref(&mut self, cell: VarCell, allocated: bool) -> usize {
+        if let Some(index) = self
+            .refs
+            .iter()
+            .position(|slot| slot.as_ref().is_some_and(|slot| Rc::ptr_eq(slot, &cell)))
+        {
+            if allocated {
+                self.ref_allocated[index] = true;
+            }
+            return index;
+        }
+        let index = self.refs.len();
+        self.refs.push(Some(cell));
+        self.ref_allocated.push(allocated);
+        index
+    }
+
+    fn eval_reference(&mut self, reference: &ir::Node, span: Span) -> Result<VarCell, Error> {
+        match self.eval_ir(reference)? {
+            Value::Ref(Some(handle)) => {
+                self.refs.get(handle).and_then(Clone::clone).ok_or_else(|| {
+                    Error::exception("EMPTY", span, "EMPTY: reference lifetime has ended")
+                })
+            }
+            Value::Ref(None) => Err(Error::exception("EMPTY", span, "EMPTY: NULL reference")),
+            _ => Err(Error::coded("E0507", span, "expected a reference value")),
+        }
+    }
+
     fn target_type(&self, target: &ir::AssignTarget, span: Span) -> Result<Type, Error> {
         match target {
             ir::AssignTarget::Var(name) => {
@@ -3371,9 +3500,10 @@ impl<'a> Interpreter<'a> {
             }
             ir::AssignTarget::Field { ty, .. } => Ok(*ty),
             ir::AssignTarget::Index { ty, .. } => Ok(*ty),
-            ir::AssignTarget::Slice { ty, .. } | ir::AssignTarget::SliceDynamic { ty, .. } => {
-                Ok(*ty)
-            }
+            ir::AssignTarget::Slice { ty, .. }
+            | ir::AssignTarget::SliceDynamic { ty, .. }
+            | ir::AssignTarget::Deref { ty, .. }
+            | ir::AssignTarget::DerefField { ty, .. } => Ok(*ty),
         }
     }
 
@@ -3443,6 +3573,31 @@ impl<'a> Interpreter<'a> {
                 let (offset, count) =
                     dynamic_slice_range(len, *low, first_value, last_value, *up, span)?;
                 read_array_slice(value, offset, count, *low, span)
+            }
+            ir::AssignTarget::Deref { reference, ty } => {
+                let cell = self.eval_reference(reference, span)?;
+                let (value, cell_ty) = {
+                    let var = cell.borrow();
+                    (var.value.clone(), var.ty)
+                };
+                if cell_ty != *ty {
+                    return Err(Error::coded(
+                        "E0507",
+                        span,
+                        "reference mode does not match the referenced location",
+                    ));
+                }
+                if matches!(value, Value::Undefined) {
+                    return Err(Error::coded("E0504", span, "use of undefined value"));
+                }
+                self.convert(value, *ty, span)
+            }
+            ir::AssignTarget::DerefField {
+                reference, path, ..
+            } => {
+                let cell = self.eval_reference(reference, span)?;
+                let value = cell.borrow().value.clone();
+                read_path(value, path, span)
             }
         }
     }
@@ -3534,6 +3689,29 @@ impl<'a> Interpreter<'a> {
                 let (offset, count) =
                     dynamic_slice_range(len, *low, first_value, last_value, *up, span)?;
                 assign_array_slice(&mut var.value, offset, count, value, span)
+            }
+            ir::AssignTarget::Deref { reference, ty } => {
+                let value = self.convert(value, *ty, span)?;
+                let cell = self.eval_reference(reference, span)?;
+                if cell.borrow().ty != *ty {
+                    return Err(Error::coded(
+                        "E0507",
+                        span,
+                        "reference mode does not match the referenced location",
+                    ));
+                }
+                cell.borrow_mut().value = value;
+                Ok(())
+            }
+            ir::AssignTarget::DerefField {
+                reference,
+                path,
+                ty,
+            } => {
+                let value = self.convert(value, *ty, span)?;
+                let cell = self.eval_reference(reference, span)?;
+                let mut var = cell.borrow_mut();
+                assign_path(&mut var.value, path, value, span)
             }
         }
     }

@@ -84,7 +84,7 @@ struct Parser<'a> {
     depth: usize,
 }
 
-const MAX_NESTING_DEPTH: usize = 256;
+const MAX_NESTING_DEPTH: usize = 128;
 
 impl<'a> Parser<'a> {
     fn parse_program(&mut self) -> Result<Program, Error> {
@@ -1288,6 +1288,8 @@ impl<'a> Parser<'a> {
                 varying: false,
                 access: true,
                 powerset: false,
+                reference: false,
+                row: false,
                 access_indexed,
                 access_index,
                 span: Span::new(self.source, start.start, record.span.end),
@@ -1315,6 +1317,8 @@ impl<'a> Parser<'a> {
                 varying: false,
                 access: false,
                 powerset: true,
+                reference: false,
+                row: false,
                 access_indexed: false,
                 access_index: None,
                 span: Span::new(self.source, start.start, element.span.end),
@@ -1369,6 +1373,8 @@ impl<'a> Parser<'a> {
                 varying: element.varying,
                 access: false,
                 powerset: false,
+                reference: false,
+                row: false,
                 access_indexed: false,
                 access_index: None,
                 span: Span::new(self.source, start.start, element.span.end),
@@ -1426,10 +1432,29 @@ impl<'a> Parser<'a> {
                 varying,
                 access: false,
                 powerset: false,
+                reference: false,
+                row: false,
                 access_indexed: false,
                 access_index: None,
                 span,
             });
+        }
+        if self.at_keyword(Keyword::Ref) || self.at_keyword(Keyword::Row) {
+            let row = self.at_keyword(Keyword::Row);
+            let start = self.current_span();
+            self.advance();
+            let mut inner = self.parse_mode_ref()?;
+            if inner.reference || inner.row {
+                return Err(Error::coded(
+                    "E0205",
+                    inner.span,
+                    "nested REF/ROW modes are not implemented yet",
+                ));
+            }
+            inner.reference = !row;
+            inner.row = row;
+            inner.span = Span::new(self.source, start.start, inner.span.end);
+            return Ok(inner);
         }
         let (name, span) = self.expect_identifier()?;
         Ok(ModeRef {
@@ -1439,6 +1464,8 @@ impl<'a> Parser<'a> {
             varying: false,
             access: false,
             powerset: false,
+            reference: false,
+            row: false,
             access_indexed: false,
             access_index: None,
             span,
@@ -2019,6 +2046,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_unary_inner(&mut self) -> Result<Expr, Error> {
+        if self.at_arrow() {
+            let start = self.current_span();
+            self.advance();
+            let target = self.parse_primary()?;
+            let span = Span::new(self.source, start.start, target.span().end);
+            return Ok(Expr::AddressOf {
+                target: Box::new(target),
+                span,
+            });
+        }
         let op = match self.kind() {
             Some(TokenKind::Minus) => Some(UnaryOp::Neg),
             Some(TokenKind::Keyword(Keyword::Not)) => Some(UnaryOp::Not),
@@ -2042,15 +2079,36 @@ impl<'a> Parser<'a> {
 
     fn parse_primary(&mut self) -> Result<Expr, Error> {
         let mut expr = self.parse_primary_base()?;
-        while matches!(self.kind(), Some(TokenKind::Dot)) {
-            self.advance();
-            let (field, field_span) = self.expect_identifier()?;
-            let span = Span::new(self.source, expr.span().start, field_span.end);
-            expr = Expr::Field {
-                base: Box::new(expr),
-                field,
-                span,
-            };
+        loop {
+            if matches!(self.kind(), Some(TokenKind::Dot)) {
+                self.advance();
+                let (field, field_span) = self.expect_identifier()?;
+                let span = Span::new(self.source, expr.span().start, field_span.end);
+                expr = Expr::Field {
+                    base: Box::new(expr),
+                    field,
+                    span,
+                };
+            } else if self.at_arrow() {
+                self.advance();
+                let start = expr.span().start;
+                let mode = if self.starts_mode_ref() {
+                    Some(Box::new(self.parse_mode_ref()?))
+                } else {
+                    None
+                };
+                let end = mode
+                    .as_ref()
+                    .map(|mode| mode.span.end)
+                    .unwrap_or_else(|| self.current_span().start);
+                expr = Expr::Deref {
+                    base: Box::new(expr),
+                    mode,
+                    span: Span::new(self.source, start, end),
+                };
+            } else {
+                break;
+            }
         }
         if self.at_lparen() {
             if let Expr::Field { base, field, span } = expr {
@@ -2152,6 +2210,26 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Identifier(_) => {
                 let (name, name_span) = self.expect_identifier()?;
+                if name == "NULL" && !self.at_lparen() {
+                    return Ok(Expr::Null { span });
+                }
+                if (name == "ALLOCATE" || name == "GETSTACK") && self.at_lparen() {
+                    self.advance();
+                    let mode = self.parse_mode_ref()?;
+                    let value = if self.at_comma() {
+                        self.advance();
+                        Some(Box::new(self.parse_expr()?))
+                    } else {
+                        None
+                    };
+                    let end = self.expect_rparen()?;
+                    return Ok(Expr::Allocate {
+                        mode: Box::new(mode),
+                        value,
+                        stack: name == "GETSTACK",
+                        span: Span::new(self.source, name_span.start, end.end),
+                    });
+                }
                 if self.at_lparen() {
                     self.advance();
                     if self.at_rparen() {
@@ -2431,6 +2509,23 @@ impl<'a> Parser<'a> {
             index += 1;
         }
         false
+    }
+
+    fn starts_mode_ref(&self) -> bool {
+        matches!(
+            self.kind(),
+            Some(
+                TokenKind::Identifier(_)
+                    | TokenKind::Keyword(Keyword::Array)
+                    | TokenKind::Keyword(Keyword::Access)
+                    | TokenKind::Keyword(Keyword::Powerset)
+                    | TokenKind::Keyword(Keyword::Chars)
+                    | TokenKind::Keyword(Keyword::WChars)
+                    | TokenKind::Keyword(Keyword::Bools)
+                    | TokenKind::Keyword(Keyword::Ref)
+                    | TokenKind::Keyword(Keyword::Row)
+            )
+        )
     }
 
     fn at_assign(&self) -> bool {

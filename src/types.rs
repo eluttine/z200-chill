@@ -86,7 +86,11 @@ impl ArrayElement {
             | Type::Array(_)
             | Type::MultiArray(_)
             | Type::DynamicArray { .. }
-            | Type::ArrayTuple => None,
+            | Type::ArrayTuple
+            | Type::Ref(_)
+            | Type::Ptr
+            | Type::Row(_)
+            | Type::Null => None,
         }
     }
 
@@ -172,6 +176,96 @@ impl MultiArrayType {
     }
 }
 
+/// The referent of a bound reference or row mode. Kept separate from `Type` so
+/// `Type` remains `Copy` and can stay embedded in arrays and table entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RefTarget {
+    Int(IntKind),
+    Float,
+    Bool,
+    Char,
+    String,
+    BoundedString { length: usize, varying: bool },
+    WChar,
+    WString,
+    WBoundedString { length: usize, varying: bool },
+    Bits,
+    BoundedBits { length: usize, varying: bool },
+    Struct(ModeId),
+    Set(SetId),
+    Moreta(MoretaId),
+    Array(ArrayType),
+    MultiArray(MultiArrayType),
+    DynamicArray { low: i128, element: ArrayElement },
+    Association,
+    Access(AccessType),
+    PowerSet(PowerSetType),
+}
+
+impl RefTarget {
+    pub fn from_type(ty: Type) -> Option<Self> {
+        Some(match ty {
+            Type::Int(kind) => Self::Int(kind),
+            Type::Float => Self::Float,
+            Type::Bool => Self::Bool,
+            Type::Char => Self::Char,
+            Type::String => Self::String,
+            Type::BoundedString { length, varying } => Self::BoundedString { length, varying },
+            Type::WChar => Self::WChar,
+            Type::WString => Self::WString,
+            Type::WBoundedString { length, varying } => Self::WBoundedString { length, varying },
+            Type::Bits => Self::Bits,
+            Type::BoundedBits { length, varying } => Self::BoundedBits { length, varying },
+            Type::Struct(id) => Self::Struct(id),
+            Type::Set(id) => Self::Set(id),
+            Type::Moreta(id) => Self::Moreta(id),
+            Type::Array(array) => Self::Array(array),
+            Type::MultiArray(array) => Self::MultiArray(array),
+            Type::DynamicArray { low, element } => Self::DynamicArray { low, element },
+            Type::Association => Self::Association,
+            Type::Access(access) => Self::Access(access),
+            Type::PowerSet(set) => Self::PowerSet(set),
+            Type::IntLiteral
+            | Type::ArrayTuple
+            | Type::Null
+            | Type::Ref(_)
+            | Type::Ptr
+            | Type::Row(_) => {
+                return None;
+            }
+        })
+    }
+
+    pub fn ty(self) -> Type {
+        match self {
+            Self::Int(kind) => Type::Int(kind),
+            Self::Float => Type::Float,
+            Self::Bool => Type::Bool,
+            Self::Char => Type::Char,
+            Self::String => Type::String,
+            Self::BoundedString { length, varying } => Type::BoundedString { length, varying },
+            Self::WChar => Type::WChar,
+            Self::WString => Type::WString,
+            Self::WBoundedString { length, varying } => Type::WBoundedString { length, varying },
+            Self::Bits => Type::Bits,
+            Self::BoundedBits { length, varying } => Type::BoundedBits { length, varying },
+            Self::Struct(id) => Type::Struct(id),
+            Self::Set(id) => Type::Set(id),
+            Self::Moreta(id) => Type::Moreta(id),
+            Self::Array(array) => Type::Array(array),
+            Self::MultiArray(array) => Type::MultiArray(array),
+            Self::DynamicArray { low, element } => Type::DynamicArray { low, element },
+            Self::Association => Type::Association,
+            Self::Access(access) => Type::Access(access),
+            Self::PowerSet(set) => Type::PowerSet(set),
+        }
+    }
+
+    pub fn describe(self) -> &'static str {
+        self.ty().describe()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Type {
     Int(IntKind),
@@ -201,6 +295,14 @@ pub enum Type {
         length: usize,
         varying: bool,
     },
+    /// A bound reference mode `REF M`.
+    Ref(RefTarget),
+    /// The free reference mode `PTR`.
+    Ptr,
+    /// A row mode `ROW M`.
+    Row(RefTarget),
+    /// The emptiness literal class.
+    Null,
     Struct(ModeId),
     Set(SetId),
     Moreta(MoretaId),
@@ -264,7 +366,11 @@ impl Type {
             | Self::Array(_)
             | Self::MultiArray(_)
             | Self::DynamicArray { .. }
-            | Self::ArrayTuple => None,
+            | Self::ArrayTuple
+            | Self::Ref(_)
+            | Self::Ptr
+            | Self::Row(_)
+            | Self::Null => None,
         }
     }
 
@@ -301,6 +407,13 @@ impl Type {
             Self::Bits => "bit string",
             Self::BoundedBits { varying: true, .. } => "varying bit string",
             Self::BoundedBits { .. } => "fixed bit string",
+            Self::Ref(target) => match target {
+                RefTarget::Struct(_) => "bound reference",
+                _ => "bound reference",
+            },
+            Self::Ptr => "free reference",
+            Self::Row(_) => "row",
+            Self::Null => "NULL",
             Self::Struct(_) => "structure",
             Self::Set(_) => "set",
             Self::Moreta(_) => "module mode object",
@@ -328,6 +441,7 @@ pub fn resolve_mode(name: &str) -> Option<Type> {
         "WCHAR" => Some(Type::WChar),
         "WCHARS" => Some(Type::WString),
         "BOOLS" => Some(Type::Bits),
+        "PTR" => Some(Type::Ptr),
         "ASSOCIATION" => Some(Type::Association),
         _ => None,
     }
@@ -399,12 +513,19 @@ pub fn resolve_mode_ref(
         },
         None => base,
     };
-    if mode.arrays.is_empty() {
-        Some(base)
+    let base = if mode.arrays.is_empty() {
+        base
     } else {
         let element = ArrayElement::from_type(base)?;
-        array_type_from_bounds(&mode.arrays, element)
+        array_type_from_bounds(&mode.arrays, element)?
+    };
+    if mode.reference {
+        return RefTarget::from_type(base).map(Type::Ref);
     }
+    if mode.row {
+        return RefTarget::from_type(base).map(Type::Row);
+    }
+    Some(base)
 }
 
 /// Inclusive bounds for a signed integer mode, or `None` if the width is

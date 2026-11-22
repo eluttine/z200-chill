@@ -53,6 +53,26 @@ pub enum Expr {
         ty: Type,
         span: Span,
     },
+    Null {
+        ty: Type,
+        span: Span,
+    },
+    AddressOf {
+        name: String,
+        ty: Type,
+        span: Span,
+    },
+    Deref {
+        base: Node,
+        ty: Type,
+        span: Span,
+    },
+    Allocate {
+        mode: Type,
+        value: Option<Node>,
+        ty: Type,
+        span: Span,
+    },
     Name {
         name: String,
         ty: Type,
@@ -178,6 +198,10 @@ impl Expr {
             | Self::Char { span, .. }
             | Self::String { span, .. }
             | Self::Bits { span, .. }
+            | Self::Null { span, .. }
+            | Self::AddressOf { span, .. }
+            | Self::Deref { span, .. }
+            | Self::Allocate { span, .. }
             | Self::Name { span, .. }
             | Self::SetValue { span, .. }
             | Self::Conversion { span, .. }
@@ -207,6 +231,10 @@ impl Expr {
             | Self::Char { ty, .. }
             | Self::String { ty, .. }
             | Self::Bits { ty, .. }
+            | Self::Null { ty, .. }
+            | Self::AddressOf { ty, .. }
+            | Self::Deref { ty, .. }
+            | Self::Allocate { ty, .. }
             | Self::Name { ty, .. }
             | Self::SetValue { ty, .. }
             | Self::Conversion { ty, .. }
@@ -258,6 +286,15 @@ pub enum AssignTarget {
         last: Node,
         up: bool,
         low: i128,
+        ty: Type,
+    },
+    Deref {
+        reference: Node,
+        ty: Type,
+    },
+    DerefField {
+        reference: Node,
+        path: Vec<String>,
         ty: Type,
     },
 }
@@ -758,6 +795,13 @@ impl Lowerer<'_> {
                     .ok_or_else(|| {
                         Error::new(target.span(), "internal: field has no checked mode")
                     })?;
+                if let Some((reference, path)) = flatten_deref_field(target) {
+                    return Ok(AssignTarget::DerefField {
+                        reference: self.lower_expr(reference)?,
+                        path,
+                        ty,
+                    });
+                }
                 let (root, index, path) = flatten_field_location(target).ok_or_else(|| {
                     Error::new(
                         target.span(),
@@ -772,6 +816,15 @@ impl Lowerer<'_> {
                     root,
                     index,
                     path,
+                    ty,
+                })
+            }
+            AstExpr::Deref { base, span, .. } => {
+                let ty = self.check.types.get(span).copied().ok_or_else(|| {
+                    Error::new(*span, "internal: dereference has no checked mode")
+                })?;
+                Ok(AssignTarget::Deref {
+                    reference: self.lower_expr(base)?,
                     ty,
                 })
             }
@@ -1089,6 +1142,42 @@ impl Lowerer<'_> {
                 ty,
                 span,
             }),
+            AstExpr::Null { .. } => Rc::new(Expr::Null { ty, span }),
+            AstExpr::AddressOf { target, span } => {
+                let AstExpr::Name { name, .. } = target.as_ref() else {
+                    return Err(Error::new(
+                        *span,
+                        "referencing currently requires a simple variable",
+                    ));
+                };
+                Rc::new(Expr::AddressOf {
+                    name: name.clone(),
+                    ty,
+                    span: *span,
+                })
+            }
+            AstExpr::Deref { base, span, .. } => Rc::new(Expr::Deref {
+                base: self.lower_expr(base)?,
+                ty,
+                span: *span,
+            }),
+            AstExpr::Allocate { value, span, .. } => {
+                let Type::Ref(target) = ty else {
+                    return Err(Error::new(
+                        *span,
+                        "internal: ALLOCATE has no reference type",
+                    ));
+                };
+                Rc::new(Expr::Allocate {
+                    mode: target.ty(),
+                    value: value
+                        .as_ref()
+                        .map(|value| self.lower_expr(value))
+                        .transpose()?,
+                    ty,
+                    span: *span,
+                })
+            }
             AstExpr::Name { name, .. } => {
                 if let Some(ApplyResolution::SetElement { ty, value }) =
                     self.check.resolutions.get(&span)
@@ -1300,6 +1389,20 @@ impl Lowerer<'_> {
 
 /// Flatten `a.b.c` or `a(i).b.c` into the root name, optional array index, and
 /// field path.
+fn flatten_deref_field(expr: &AstExpr) -> Option<(&AstExpr, Vec<String>)> {
+    match expr {
+        AstExpr::Field { base, field, .. } => match base.as_ref() {
+            AstExpr::Deref { base, .. } => Some((base.as_ref(), vec![field.clone()])),
+            _ => {
+                let (reference, mut path) = flatten_deref_field(base)?;
+                path.push(field.clone());
+                Some((reference, path))
+            }
+        },
+        _ => None,
+    }
+}
+
 fn flatten_field_location(expr: &AstExpr) -> Option<(String, Option<&AstExpr>, Vec<String>)> {
     match expr {
         AstExpr::Name { name, .. } => Some((name.clone(), None, Vec::new())),

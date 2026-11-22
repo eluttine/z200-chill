@@ -111,6 +111,10 @@ deferred.
       and grant-interface encoding. `WTEXT` remains deferred.
 - [x] Bit strings: `BOOLS`, bounded `BOOLS(n)` modes, binary/octal/hexadecimal bit
       literals, elementwise logic, concatenation, comparison, and grant encoding.
+- [x] References and rows: `REF M`, `PTR`, `ROW M`, `NULL`, referencing/dereferencing,
+      `ALLOCATE`/`GETSTACK`/`TERMINATE`, `EMPTY`, and self-referential structure modes.
+      Grant encoding, arrays of references, nested references, and references to
+      fields/indexes remain deferred.
 - [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
 - [x] Action-level handlers, including handlers on bracketed actions, assignment,
       assert, and call actions.

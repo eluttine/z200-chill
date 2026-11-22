@@ -1000,6 +1000,8 @@ impl Checker {
                             varying: false,
                             access: false,
                             powerset: false,
+                            reference: false,
+                            row: false,
                             access_indexed: false,
                             access_index: None,
                             span: mode_def.span,
@@ -1060,6 +1062,8 @@ impl Checker {
                         varying: false,
                         access: false,
                         powerset: false,
+                        reference: false,
+                        row: false,
                         access_indexed: false,
                         access_index: None,
                         span: mode_def.span,
@@ -1328,6 +1332,24 @@ impl Checker {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        if mode.reference || mode.row {
+            let mut inner = mode.clone();
+            inner.reference = false;
+            inner.row = false;
+            let base = self.resolve_mode(&inner)?;
+            let Some(target) = crate::types::RefTarget::from_type(base) else {
+                return Err(Error::coded(
+                    "E0400",
+                    mode.span,
+                    "this mode cannot be referenced",
+                ));
+            };
+            return Ok(if mode.reference {
+                Type::Ref(target)
+            } else {
+                Type::Row(target)
+            });
+        }
         if mode.powerset {
             let member = match crate::types::resolve_mode(&mode.name) {
                 Some(Type::Int(kind)) => crate::types::PowerSetMember::Int(kind),
@@ -1363,6 +1385,8 @@ impl Checker {
                 varying: mode.varying,
                 access: mode.access,
                 powerset: mode.powerset,
+                reference: mode.reference,
+                row: mode.row,
                 access_indexed: mode.access_indexed,
                 access_index: mode.access_index,
                 span: mode.span,
@@ -1846,6 +1870,7 @@ impl Checker {
                     Error::coded("E0403", *span, format!("unknown variable `{name}`"))
                 })
             }
+            Expr::Deref { .. } | Expr::Null { .. } => self.check_expr(target),
             _ => Err(Error::coded(
                 "E0400",
                 target.span(),
@@ -2109,6 +2134,7 @@ impl Checker {
         match expr {
             Expr::Name { .. } => true,
             Expr::Field { base, .. } => self.is_field_location(base),
+            Expr::Deref { .. } => true,
             Expr::Apply { name, args, .. } => {
                 args.len() == 1 && matches!(self.lookup_var(name), Some(Type::Array(_)))
             }
@@ -2194,6 +2220,92 @@ impl Checker {
                 Ok(Type::WString)
             }
             Expr::Bits { .. } => Ok(Type::Bits),
+            Expr::Null { .. } => Ok(Type::Null),
+            Expr::AddressOf { target, span } => {
+                let Expr::Name { name, .. } = target.as_ref() else {
+                    return Err(Error::coded(
+                        "E0409",
+                        *span,
+                        "referencing currently requires a simple variable",
+                    ));
+                };
+                let ty = self.lookup_var(name).ok_or_else(|| {
+                    Error::coded("E0403", *span, format!("unknown variable `{name}`"))
+                })?;
+                let target = crate::types::RefTarget::from_type(ty).ok_or_else(|| {
+                    Error::coded("E0400", *span, "this variable cannot be referenced")
+                })?;
+                Ok(Type::Ref(target))
+            }
+            Expr::Deref { base, mode, span } => {
+                let base_ty = self.check_expr(base)?;
+                match base_ty {
+                    Type::Ref(target) => {
+                        if let Some(mode) = mode {
+                            let ty = self.resolve_mode(mode)?;
+                            if ty != target.ty() {
+                                return Err(Error::coded(
+                                    "E0404",
+                                    *span,
+                                    format!(
+                                        "reference mode {} does not match {}",
+                                        target.describe(),
+                                        ty.describe()
+                                    ),
+                                ));
+                            }
+                            Ok(ty)
+                        } else {
+                            Ok(target.ty())
+                        }
+                    }
+                    Type::Ptr => {
+                        let Some(mode) = mode else {
+                            return Err(Error::coded(
+                                "E0400",
+                                *span,
+                                "dereferencing PTR requires an explicit mode",
+                            ));
+                        };
+                        self.resolve_mode(mode)
+                    }
+                    Type::Row(target) => {
+                        if mode.is_some() {
+                            return Err(Error::coded(
+                                "E0400",
+                                *span,
+                                "a row dereference does not take a mode",
+                            ));
+                        }
+                        Ok(target.ty())
+                    }
+                    other => Err(Error::coded(
+                        "E0400",
+                        *span,
+                        format!(
+                            "dereference requires a reference, found {}",
+                            other.describe()
+                        ),
+                    )),
+                }
+            }
+            Expr::Allocate {
+                mode, value, span, ..
+            } => {
+                let ty = self.resolve_mode(mode)?;
+                let Some(target) = crate::types::RefTarget::from_type(ty) else {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        "ALLOCATE cannot create a reference to this mode",
+                    ));
+                };
+                if let Some(value) = value {
+                    let value_ty = self.check_expr_for_mode(value, ty)?;
+                    self.ensure_assignable(ty, value_ty, value.span())?;
+                }
+                Ok(Type::Ref(target))
+            }
             Expr::ArrayTuple { elements, .. } => {
                 for element in elements {
                     self.check_expr(&element.value)?;
@@ -2346,6 +2458,7 @@ impl Checker {
                     ))
                     || strings_compatible(left, right)
                     || bits_compatible(left, right)
+                    || reference_compatible(left, right)
                     || (matches!(left, Type::PowerSet(_)) && left == right)
                     || arrays_compatible(left, right)
                 {
@@ -2989,6 +3102,25 @@ impl Checker {
                     }
                     Some(Type::String)
                 }
+                crate::builtins::Builtin::Terminate => {
+                    if args.len() != 1 {
+                        return Err(Error::coded(
+                            "E0400",
+                            span,
+                            "TERMINATE takes exactly one reference argument",
+                        ));
+                    }
+                    let ty = self.check_expr(&args[0])?;
+                    if !is_reference_type(ty) {
+                        return Err(Error::coded(
+                            "E0404",
+                            args[0].span(),
+                            format!("TERMINATE requires a reference, found {}", ty.describe()),
+                        ));
+                    }
+                    self.record_exception("EMPTY");
+                    None
+                }
             };
             self.resolutions
                 .insert(span, ApplyResolution::Builtin(builtin));
@@ -3407,6 +3539,19 @@ impl Checker {
             Type::WBoundedString { .. } => is_wide_string_type(value),
             Type::Bits => is_bits_type(value),
             Type::BoundedBits { .. } => is_bits_type(value),
+            Type::Ref(target) => {
+                value == Type::Null
+                    || matches!(value, Type::Ref(value_target) if value_target == target)
+            }
+            Type::Ptr => matches!(value, Type::Ref(_) | Type::Ptr | Type::Row(_) | Type::Null),
+            Type::Row(target) => {
+                value == Type::Null
+                    || matches!(
+                        value,
+                        Type::Row(value_target) | Type::Ref(value_target) if value_target == target
+                    )
+            }
+            Type::Null => value == Type::Null,
             Type::Struct(id) => value == Type::Struct(id),
             Type::Set(id) => value == Type::Set(id),
             Type::Moreta(id) => value == Type::Moreta(id),
@@ -3554,6 +3699,19 @@ fn is_bits_type(ty: Type) -> bool {
 
 fn bits_compatible(left: Type, right: Type) -> bool {
     is_bits_type(left) && is_bits_type(right)
+}
+
+fn is_reference_type(ty: Type) -> bool {
+    matches!(ty, Type::Ref(_) | Type::Ptr | Type::Row(_))
+}
+
+fn reference_compatible(left: Type, right: Type) -> bool {
+    (left == Type::Null && is_reference_type(right))
+        || (right == Type::Null && is_reference_type(left))
+        || (left == Type::Null && right == Type::Null)
+        || (is_reference_type(left)
+            && is_reference_type(right)
+            && (left == right || left == Type::Ptr || right == Type::Ptr))
 }
 
 fn strings_compatible(left: Type, right: Type) -> bool {
