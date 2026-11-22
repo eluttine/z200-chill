@@ -272,6 +272,20 @@ Arithmetic supports `+`, `-`, `*`, and `/`; comparisons and equality are defined
 matching `FLOAT` operands. `FLOAT(expr)` converts an integer or floating-point value.
 Floating-point values may be array elements and procedure parameters/results.
 
+### 4.3.2 Powersets
+
+`POWERSET member-mode` declares a powerset whose members are discrete scalar values
+`INT`/`SHORT_INT`/`LONG_INT`, `BOOL`, or `CHAR`.
+
+- Tuple literals supply members and inclusive ranges:
+  `['A':'C', 'x']`, `[1, 3:5]`, `[TRUE]`, or `[]`.
+- `x IN s` tests membership.
+- `+`, `-`, and `*` perform union, difference, and intersection.
+- `=`, `/=`, `<=`, `>=`, `<`, and `>` compare powersets by value/subset ordering.
+- Powerset literals take their member mode from context, like array tuples.
+
+Named `SET (...)` modes are not implemented yet.
+
 ### 4.4 Runtime checks
 
 - Assignment checks that the value lies in the target mode's value set. For plain

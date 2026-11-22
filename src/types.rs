@@ -59,6 +59,7 @@ impl ArrayElement {
             Type::Struct(id) => Some(Self::Struct(id)),
             Type::Association
             | Type::Access(_)
+            | Type::PowerSet(_)
             | Type::IntLiteral
             | Type::Array(_)
             | Type::MultiArray(_)
@@ -80,6 +81,18 @@ pub struct ArrayType {
     pub low: i128,
     pub high: i128,
     pub element: ArrayElement,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PowerSetMember {
+    Int(IntKind),
+    Bool,
+    Char,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PowerSetType {
+    pub member: PowerSetMember,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -163,6 +176,8 @@ pub enum Type {
     Association,
     /// An opaque access-mode value.
     Access(AccessType),
+    /// A powerset over a discrete scalar member mode.
+    PowerSet(PowerSetType),
     /// An array tuple before its target array mode is known.
     ArrayTuple,
 }
@@ -193,6 +208,7 @@ impl Type {
             }
             Self::Association
             | Self::Access(_)
+            | Self::PowerSet(_)
             | Self::IntLiteral
             | Self::Struct(_)
             | Self::Array(_)
@@ -229,6 +245,7 @@ impl Type {
             Self::DynamicArray { .. } => "dynamic array slice",
             Self::Association => "association",
             Self::Access(_) => "access",
+            Self::PowerSet(_) => "powerset",
             Self::ArrayTuple => "array literal",
         }
     }
@@ -275,6 +292,15 @@ pub fn resolve_mode_ref(
     mode: &ModeRef,
     mode_names: &std::collections::HashMap<String, Type>,
 ) -> Option<Type> {
+    if mode.powerset {
+        let member = match resolve_mode(&mode.name)? {
+            Type::Int(kind) => PowerSetMember::Int(kind),
+            Type::Bool => PowerSetMember::Bool,
+            Type::Char => PowerSetMember::Char,
+            _ => return None,
+        };
+        return Some(Type::PowerSet(PowerSetType { member }));
+    }
     if mode.access {
         return Some(Type::Access(AccessType {
             indexed: mode.access_indexed,

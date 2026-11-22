@@ -219,6 +219,8 @@ pub struct ModeRef {
     pub varying: bool,
     /// True for an `ACCESS` mode.
     pub access: bool,
+    /// True for a `POWERSET member-mode` mode.
+    pub powerset: bool,
     /// True when ACCESS declares an index mode.
     pub access_indexed: bool,
     /// Literal index range for an indexed ACCESS mode, if specified.
@@ -352,6 +354,8 @@ pub struct ArrayTupleElement {
     /// `None` for an unlabelled tuple entry.
     pub labels: Option<Vec<CaseLabel>>,
     pub value: Expr,
+    /// Powerset range upper bound, as in `[low:high]`.
+    pub range_end: Option<Box<Expr>>,
     pub span: Span,
 }
 
@@ -520,6 +524,7 @@ pub enum BinaryOp {
     Mod,
     Rem,
     Pow,
+    In,
 }
 
 impl BinaryOp {
@@ -529,6 +534,7 @@ impl BinaryOp {
             Self::Or | Self::OrIf | Self::Xor => 1,
             Self::And | Self::AndIf => 2,
             Self::Eq | Self::Ne | Self::Lt | Self::Le | Self::Gt | Self::Ge => 3,
+            Self::In => 3,
             Self::Add | Self::Sub | Self::Concat => 4,
             Self::Mul | Self::Div | Self::Mod | Self::Rem => 5,
             Self::Pow => 6,

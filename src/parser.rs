@@ -912,9 +912,37 @@ impl<'a> Parser<'a> {
                 string_length: None,
                 varying: false,
                 access: true,
+                powerset: false,
                 access_indexed,
                 access_index,
                 span: Span::new(self.source, start.start, record.span.end),
+            });
+        }
+        if self.at_keyword(Keyword::Powerset) {
+            let start = self.current_span();
+            self.advance();
+            let element = self.parse_mode_ref()?;
+            if !element.arrays.is_empty()
+                || element.access
+                || element.powerset
+                || element.string_length.is_some()
+            {
+                return Err(Error::coded(
+                    "E0205",
+                    element.span,
+                    "POWERSET member mode must be a scalar mode",
+                ));
+            }
+            return Ok(ModeRef {
+                name: element.name,
+                arrays: Vec::new(),
+                string_length: None,
+                varying: false,
+                access: false,
+                powerset: true,
+                access_indexed: false,
+                access_index: None,
+                span: Span::new(self.source, start.start, element.span.end),
             });
         }
         if self.at_keyword(Keyword::Array) {
@@ -965,6 +993,7 @@ impl<'a> Parser<'a> {
                 string_length: element.string_length,
                 varying: element.varying,
                 access: false,
+                powerset: false,
                 access_indexed: false,
                 access_index: None,
                 span: Span::new(self.source, start.start, element.span.end),
@@ -1007,6 +1036,7 @@ impl<'a> Parser<'a> {
                 string_length: length,
                 varying,
                 access: false,
+                powerset: false,
                 access_indexed: false,
                 access_index: None,
                 span,
@@ -1019,6 +1049,7 @@ impl<'a> Parser<'a> {
             string_length: None,
             varying: false,
             access: false,
+            powerset: false,
             access_indexed: false,
             access_index: None,
             span,
@@ -1775,9 +1806,20 @@ impl<'a> Parser<'a> {
                             labelled = Some(is_labelled);
                         }
                         let value = self.parse_expr()?;
+                        let range_end = if self.at_colon() {
+                            self.advance();
+                            Some(Box::new(self.parse_expr()?))
+                        } else {
+                            None
+                        };
+                        let end = range_end
+                            .as_ref()
+                            .map(|end| end.span().end)
+                            .unwrap_or(value.span().end);
                         elements.push(ArrayTupleElement {
                             labels,
-                            span: Span::new(self.source, entry_start.start, value.span().end),
+                            range_end,
+                            span: Span::new(self.source, entry_start.start, end),
                             value,
                         });
                         if self.at_comma() {
@@ -1823,6 +1865,7 @@ impl<'a> Parser<'a> {
             TokenKind::Slash => BinaryOp::Div,
             TokenKind::Keyword(Keyword::Mod) => BinaryOp::Mod,
             TokenKind::Keyword(Keyword::Rem) => BinaryOp::Rem,
+            TokenKind::Keyword(Keyword::In) => BinaryOp::In,
             TokenKind::StarStar => BinaryOp::Pow,
             _ => return None,
         };

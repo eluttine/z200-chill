@@ -1238,13 +1238,20 @@ pub(crate) fn resolve_mode_with(
     mode_names: &HashMap<String, Type>,
 ) -> Result<Type, Error> {
     types::resolve_mode_ref(mode, mode_names).ok_or_else(|| {
-        Error::new(
-            mode.span,
-            format!(
-                "unknown mode `{}`; array elements must be scalar modes or the mode must be previously defined",
-                mode.name
-            ),
-        )
+        if mode.powerset {
+            Error::new(
+                mode.span,
+                "POWERSET member mode must be a scalar mode",
+            )
+        } else {
+            Error::new(
+                mode.span,
+                format!(
+                    "unknown mode `{}`; array elements must be scalar modes or the mode must be previously defined",
+                    mode.name
+                ),
+            )
+        }
     })
 }
 

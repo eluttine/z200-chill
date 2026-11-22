@@ -253,6 +253,7 @@ enum Value {
     String(String),
     Struct(Vec<(String, Value)>),
     Array { low: i128, values: Vec<Value> },
+    PowerSet(std::collections::BTreeSet<i128>),
     Association(Option<Rc<RefCell<AssociationState>>>),
     Access(Option<Rc<RefCell<AccessState>>>),
 }
@@ -2049,6 +2050,31 @@ impl<'a> Interpreter<'a> {
                 *ty,
                 *span,
             ),
+            ir::Expr::PowerSetLiteral { entries, ty, span } => {
+                let Type::PowerSet(set) = ty else {
+                    return Err(Error::new(
+                        *span,
+                        "internal: powerset literal has wrong mode",
+                    ));
+                };
+                let mut values = std::collections::BTreeSet::new();
+                for (value, end) in entries {
+                    let value = self.eval_ir(value)?;
+                    let start = powerset_member_rep(set.member, value, *span)?;
+                    if let Some(end) = end {
+                        let end = self.eval_ir(end)?;
+                        let end = powerset_member_rep(set.member, end, *span)?;
+                        if start <= end {
+                            for member in start..=end {
+                                values.insert(member);
+                            }
+                        }
+                    } else {
+                        values.insert(start);
+                    }
+                }
+                Ok(Value::PowerSet(values))
+            }
             ir::Expr::LabelledArrayLiteral { entries, array, .. } => {
                 let element = array.element.ty();
                 let mut values =
@@ -2324,6 +2350,21 @@ impl<'a> Interpreter<'a> {
                 };
                 Ok(Value::Bool(result))
             }
+            BinaryOp::In => {
+                let Value::PowerSet(set) = right else {
+                    return Err(Error::new(
+                        span,
+                        "the right operand of IN must be a powerset",
+                    ));
+                };
+                let member = match left {
+                    Value::Int { value, .. } => value,
+                    Value::Char(value) => value as i128,
+                    Value::Bool(value) => i128::from(value),
+                    _ => return Err(Error::new(span, "invalid powerset member value")),
+                };
+                Ok(Value::Bool(set.contains(&member)))
+            }
             BinaryOp::Concat => match (left, right) {
                 (Value::String(left), Value::String(right)) => Ok(Value::String(left + &right)),
                 _ => Err(Error::new(span, "`//` requires character strings")),
@@ -2335,6 +2376,20 @@ impl<'a> Interpreter<'a> {
             | BinaryOp::Mod
             | BinaryOp::Rem
             | BinaryOp::Pow => {
+                if let (Value::PowerSet(left), Value::PowerSet(right)) = (&left, &right) {
+                    let result = match op {
+                        BinaryOp::Add => left.union(right).copied().collect(),
+                        BinaryOp::Sub => left.difference(right).copied().collect(),
+                        BinaryOp::Mul => left.intersection(right).copied().collect(),
+                        _ => {
+                            return Err(Error::new(
+                                span,
+                                "this operator does not accept powerset operands",
+                            ));
+                        }
+                    };
+                    return Ok(Value::PowerSet(result));
+                }
                 if let (Value::Float(left), Value::Float(right)) = (&left, &right) {
                     let value = match op {
                         BinaryOp::Add => left + right,
@@ -2425,6 +2480,7 @@ impl<'a> Interpreter<'a> {
             (Value::Bool(left), Value::Bool(right)) => Ok(left == right),
             (Value::Char(left), Value::Char(right)) => Ok(left == right),
             (Value::String(left), Value::String(right)) => Ok(left == right),
+            (Value::PowerSet(left), Value::PowerSet(right)) => Ok(left == right),
             (
                 Value::Array {
                     low: left_low,
@@ -2479,6 +2535,17 @@ impl<'a> Interpreter<'a> {
                 .partial_cmp(right)
                 .ok_or_else(|| Error::new(span, "cannot order NaN values")),
             (Value::String(left), Value::String(right)) => Ok(left.cmp(right)),
+            (Value::PowerSet(left), Value::PowerSet(right)) => {
+                if left == right {
+                    Ok(Ordering::Equal)
+                } else if left.is_subset(right) {
+                    Ok(Ordering::Less)
+                } else if left.is_superset(right) {
+                    Ok(Ordering::Greater)
+                } else {
+                    Err(Error::new(span, "powersets are not ordered"))
+                }
+            }
             _ => Err(Error::new(span, "cannot order these values")),
         }
     }
@@ -2601,6 +2668,10 @@ impl<'a> Interpreter<'a> {
                 Value::Association(_) => Ok(value),
                 _ => Err(Error::new(span, "expected an ASSOCIATION value")),
             },
+            Type::PowerSet(_) => match value {
+                Value::PowerSet(_) => Ok(value),
+                _ => Err(Error::new(span, "expected a powerset value")),
+            },
             Type::Access(_) => match value {
                 Value::Access(_) => Ok(value),
                 _ => Err(Error::new(span, "expected an ACCESS value")),
@@ -2611,6 +2682,28 @@ impl<'a> Interpreter<'a> {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        if mode.powerset {
+            let member = match crate::types::resolve_mode_ref(
+                &ModeRef {
+                    name: mode.name.clone(),
+                    arrays: Vec::new(),
+                    string_length: None,
+                    varying: false,
+                    access: false,
+                    powerset: false,
+                    access_indexed: false,
+                    access_index: None,
+                    span: mode.span,
+                },
+                &self.module_modes[self.active_module],
+            ) {
+                Some(Type::Int(kind)) => crate::types::PowerSetMember::Int(kind),
+                Some(Type::Bool) => crate::types::PowerSetMember::Bool,
+                Some(Type::Char) => crate::types::PowerSetMember::Char,
+                _ => return Err(Error::new(mode.span, "invalid POWERSET member mode")),
+            };
+            return Ok(Type::PowerSet(crate::types::PowerSetType { member }));
+        }
         if mode.access {
             return Ok(Type::Access(crate::types::AccessType {
                 indexed: mode.access_indexed,
@@ -2629,6 +2722,7 @@ impl<'a> Interpreter<'a> {
                 string_length: mode.string_length,
                 varying: mode.varying,
                 access: mode.access,
+                powerset: mode.powerset,
                 access_indexed: mode.access_indexed,
                 access_index: mode.access_index,
                 span: mode.span,
@@ -3304,6 +3398,19 @@ fn resolve_mode_with(mode: &ModeRef, mode_names: &HashMap<String, Type>) -> Resu
     })
 }
 
+fn powerset_member_rep(
+    member: crate::types::PowerSetMember,
+    value: Value,
+    span: Span,
+) -> Result<i128, Error> {
+    match (member, value) {
+        (crate::types::PowerSetMember::Int(_), Value::Int { value, .. }) => Ok(value),
+        (crate::types::PowerSetMember::Char, Value::Char(value)) => Ok(value as i128),
+        (crate::types::PowerSetMember::Bool, Value::Bool(value)) => Ok(i128::from(value)),
+        _ => Err(Error::new(span, "invalid powerset member value")),
+    }
+}
+
 fn check_index_range(
     range: Option<types::ArrayDimension>,
     index: i128,
@@ -3802,6 +3909,7 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
         }
         Type::Association => Value::Association(None),
         Type::Access(_) => Value::Access(None),
+        Type::PowerSet(_) => Value::PowerSet(std::collections::BTreeSet::new()),
         Type::MultiArray(array) => {
             let element = array.element.ty();
             let value = if matches!(element, Type::Struct(_)) {

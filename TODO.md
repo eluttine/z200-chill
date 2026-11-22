@@ -124,7 +124,10 @@ all existing tests pass with no new special cases.
       indexed `CONNECT`/`READRECORD`/`WRITERECORD`, record-range checks, and
       `INDEXABLE` reporting.
 - [ ] Processes, signals, and timers.
-- [ ] Sets/powersets, moreta modes, templates.
+- [x] `POWERSET` of `INT` / `BOOL` / `CHAR` with literals, ranges, union,
+      intersection, difference, equality/ordering, and `IN`.
+- [ ] Named `SET (...)` modes, moreta modes, and templates.
+- [ ] Processes/signals/timers: deferred pending a resumable/concurrent runtime.
 
 ## 8. Cleanup
 

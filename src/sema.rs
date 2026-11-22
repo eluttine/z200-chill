@@ -1197,6 +1197,20 @@ impl Checker {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        if mode.powerset {
+            let member = match crate::types::resolve_mode(&mode.name) {
+                Some(Type::Int(kind)) => crate::types::PowerSetMember::Int(kind),
+                Some(Type::Bool) => crate::types::PowerSetMember::Bool,
+                Some(Type::Char) => crate::types::PowerSetMember::Char,
+                _ => {
+                    return Err(Error::new(
+                        mode.span,
+                        "POWERSET member mode must be INT/SHORT_INT/LONG_INT, BOOL, or CHAR",
+                    ));
+                }
+            };
+            return Ok(Type::PowerSet(crate::types::PowerSetType { member }));
+        }
         if mode.access {
             return Ok(Type::Access(crate::types::AccessType {
                 indexed: mode.access_indexed,
@@ -1215,6 +1229,7 @@ impl Checker {
                 string_length: mode.string_length,
                 varying: mode.varying,
                 access: mode.access,
+                powerset: mode.powerset,
                 access_indexed: mode.access_indexed,
                 access_index: mode.access_index,
                 span: mode.span,
@@ -1804,6 +1819,9 @@ impl Checker {
             Expr::ArrayTuple { elements, .. } => {
                 for element in elements {
                     self.check_expr(&element.value)?;
+                    if let Some(end) = &element.range_end {
+                        self.check_expr(end)?;
+                    }
                 }
                 Ok(Type::ArrayTuple)
             }
@@ -1868,14 +1886,14 @@ impl Checker {
                     self.check_expr(right)?
                 };
                 if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
-                    if left_ty == Type::ArrayTuple {
-                        if let Type::Array(_) = right_ty {
-                            left_ty = self.check_expr_for_mode(left, right_ty)?;
-                        }
-                    } else if right_ty == Type::ArrayTuple {
-                        if let Type::Array(_) = left_ty {
-                            right_ty = self.check_expr_for_mode(right, left_ty)?;
-                        }
+                    if left_ty == Type::ArrayTuple
+                        && matches!(right_ty, Type::Array(_) | Type::PowerSet(_))
+                    {
+                        left_ty = self.check_expr_for_mode(left, right_ty)?;
+                    } else if right_ty == Type::ArrayTuple
+                        && matches!(left_ty, Type::Array(_) | Type::PowerSet(_))
+                    {
+                        right_ty = self.check_expr_for_mode(right, left_ty)?;
                     }
                 }
                 self.check_binary_types(*op, left_ty, right_ty, *span)
@@ -1913,6 +1931,7 @@ impl Checker {
                         Type::Bool | Type::Char | Type::Struct(_) | Type::Float
                     ))
                     || (is_string_type(left) && is_string_type(right))
+                    || (matches!(left, Type::PowerSet(_)) && left == right)
                     || arrays_compatible(left, right)
                 {
                     Ok(Type::Bool)
@@ -1933,6 +1952,7 @@ impl Checker {
                     Ok(Type::Bool)
                 } else if (left == Type::Char && right == Type::Char)
                     || (left == Type::Float && right == Type::Float)
+                    || (matches!(left, Type::PowerSet(_)) && left == right)
                     || (is_string_type(left) && is_string_type(right))
                 {
                     Ok(Type::Bool)
@@ -1956,6 +1976,10 @@ impl Checker {
             | BinaryOp::Pow => {
                 if left.is_int() && right.is_int() {
                     self.combine_int(left, right, span)
+                } else if matches!((left, right), (Type::PowerSet(a), Type::PowerSet(b)) if a == b)
+                    && matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+                {
+                    Ok(left)
                 } else if left == Type::Float
                     && right == Type::Float
                     && matches!(
@@ -1974,6 +1998,21 @@ impl Checker {
                         ),
                     ))
                 }
+            }
+            BinaryOp::In => {
+                let Type::PowerSet(set) = right else {
+                    return Err(Error::new(
+                        span,
+                        "the right operand of IN must be a powerset",
+                    ));
+                };
+                if !member_compatible(set.member, left) {
+                    return Err(Error::new(
+                        span,
+                        format!("{} is not a member of this powerset", left.describe()),
+                    ));
+                }
+                Ok(Type::Bool)
             }
             BinaryOp::Concat => {
                 if is_string_type(left) && is_string_type(right) {
@@ -2634,6 +2673,28 @@ impl Checker {
         let Expr::ArrayTuple { elements, span } = value else {
             return self.check_expr(value);
         };
+        if let Type::PowerSet(set) = target {
+            let member = powerset_member_type(set.member);
+            for item in elements {
+                if item.labels.is_some() {
+                    return Err(Error::new(*span, "powerset tuples do not accept labels"));
+                }
+                let ty = self.check_expr(&item.value)?;
+                self.ensure_assignable(member, ty, item.value.span())?;
+                if let Some(end) = &item.range_end {
+                    let end_ty = self.check_expr(end)?;
+                    self.ensure_assignable(member, end_ty, end.span())?;
+                }
+            }
+            self.types.insert(*span, target);
+            return Ok(target);
+        }
+        if elements.iter().any(|item| item.range_end.is_some()) {
+            return Err(Error::new(
+                *span,
+                "ranges are only allowed in powerset tuples",
+            ));
+        }
         let Type::Array(array) = target else {
             return Err(Error::new(
                 *span,
@@ -2773,6 +2834,7 @@ impl Checker {
             Type::Struct(id) => value == Type::Struct(id),
             Type::Association => value == Type::Association,
             Type::Access(access) => value == Type::Access(access),
+            Type::PowerSet(set) => value == Type::PowerSet(set),
             Type::Array(array) => match value {
                 Type::Array(value_array) => value_array == array,
                 Type::DynamicArray { low, element } => low == array.low && element == array.element,
@@ -2871,6 +2933,22 @@ fn binary_for_assign(op: AssignOp) -> BinaryOp {
         AssignOp::Mul => BinaryOp::Mul,
         AssignOp::Div => BinaryOp::Div,
         AssignOp::Concat => BinaryOp::Concat,
+    }
+}
+
+fn powerset_member_type(member: crate::types::PowerSetMember) -> Type {
+    match member {
+        crate::types::PowerSetMember::Int(kind) => Type::Int(kind),
+        crate::types::PowerSetMember::Bool => Type::Bool,
+        crate::types::PowerSetMember::Char => Type::Char,
+    }
+}
+
+fn member_compatible(member: crate::types::PowerSetMember, ty: Type) -> bool {
+    match member {
+        crate::types::PowerSetMember::Int(_) => ty.is_int(),
+        crate::types::PowerSetMember::Bool => ty == Type::Bool,
+        crate::types::PowerSetMember::Char => ty == Type::Char,
     }
 }
 

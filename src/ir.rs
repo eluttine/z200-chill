@@ -131,6 +131,11 @@ pub enum Expr {
         array: crate::types::ArrayType,
         span: Span,
     },
+    PowerSetLiteral {
+        entries: Vec<(Node, Option<Node>)>,
+        ty: Type,
+        span: Span,
+    },
     Association {
         op: crate::builtins::AssociationOp,
         first: String,
@@ -164,6 +169,7 @@ impl Expr {
             | Self::ArraySlice { span, .. }
             | Self::ArraySliceDynamic { span, .. }
             | Self::LabelledArrayLiteral { span, .. }
+            | Self::PowerSetLiteral { span, .. }
             | Self::Association { span, .. } => *span,
         }
     }
@@ -189,6 +195,7 @@ impl Expr {
                 low: *low,
                 element: *element,
             }),
+            Self::PowerSetLiteral { ty, .. } => Some(*ty),
             Self::Call { ty, .. } | Self::Builtin { ty, .. } | Self::Association { ty, .. } => *ty,
             Self::TextIo { .. } => None,
         }
@@ -1090,13 +1097,32 @@ impl Lowerer<'_> {
                 span,
             }),
             AstExpr::ArrayTuple { elements, .. } => {
-                let Type::Array(array) = self
+                let checked = self
                     .check
                     .types
                     .get(&span)
                     .copied()
-                    .unwrap_or(Type::ArrayTuple)
-                else {
+                    .unwrap_or(Type::ArrayTuple);
+                if matches!(checked, Type::PowerSet(_)) {
+                    let entries = elements
+                        .iter()
+                        .map(|element| {
+                            Ok((
+                                self.lower_expr(&element.value)?,
+                                match &element.range_end {
+                                    Some(end) => Some(self.lower_expr(end)?),
+                                    None => None,
+                                },
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, Error>>()?;
+                    return Ok(Rc::new(Expr::PowerSetLiteral {
+                        entries,
+                        ty: checked,
+                        span,
+                    }));
+                }
+                let Type::Array(array) = checked else {
                     return Err(Error::new(
                         span,
                         "array literal requires a one-dimensional array target mode",

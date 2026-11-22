@@ -321,6 +321,17 @@ fn parse_external_type(
             }),
         };
     }
+    if let Some(member) = name.strip_prefix("POWERSET ") {
+        let member = match types::resolve_mode(member.trim()) {
+            Some(Type::Int(kind)) => types::PowerSetMember::Int(kind),
+            Some(Type::Bool) => types::PowerSetMember::Bool,
+            Some(Type::Char) => types::PowerSetMember::Char,
+            _ => return Err(format!("invalid POWERSET member mode in `{name}`")),
+        };
+        return Ok(program::ExternalType::Builtin(Type::PowerSet(
+            types::PowerSetType { member },
+        )));
+    }
     if name == "ACCESS CHARS" {
         return Ok(program::ExternalType::Builtin(Type::Access(
             types::AccessType {
@@ -447,6 +458,14 @@ fn type_name(ty: Type) -> String {
             format!("ARRAY({bounds}) {}", type_name(array.element.ty()))
         }
         Type::Association => "ASSOCIATION".to_owned(),
+        Type::PowerSet(set) => format!(
+            "POWERSET {}",
+            match set.member {
+                types::PowerSetMember::Int(kind) => kind.name(),
+                types::PowerSetMember::Bool => "BOOL",
+                types::PowerSetMember::Char => "CHAR",
+            }
+        ),
         Type::Access(access) => {
             if !access.indexed {
                 "ACCESS CHARS".to_owned()
@@ -727,6 +746,22 @@ END M;
                 ))),
             }
         );
+    }
+
+    #[test]
+    fn powerset_types_round_trip() {
+        for member in [
+            types::PowerSetMember::Int(types::IntKind::Int),
+            types::PowerSetMember::Bool,
+            types::PowerSetMember::Char,
+        ] {
+            let ty = Type::PowerSet(types::PowerSetType { member });
+            let text = type_name(ty);
+            assert_eq!(
+                parse_external_type(&text, &std::collections::HashMap::new()).unwrap(),
+                program::ExternalType::Builtin(ty)
+            );
+        }
     }
 
     #[test]
