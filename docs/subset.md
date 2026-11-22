@@ -612,13 +612,18 @@ IdentityInt: PROC = NEW Identity (INT) END;
 - `GENERIC MODE T;` declares formal mode parameters.
 - `GENERIC SYN N = 1;` declares a value parameter substituted into template
   expressions.
+- `GENERIC PROC F (params) RETURNS (...);` declares a procedure parameter. Actuals
+  use `PROC F = ProcedureName;` and calls to `F` are rewritten to the actual
+  procedure.
 - Template bodies are checked after each instantiation, with formal modes substituted.
 - Local declarations, parameters, results, and nested procedure signatures are substituted.
 - Instantiation syntax is `name: PROC = NEW template (actuals) END;`.
 - Actual parameters are matched positionally to formal `MODE`/`SYN` clauses. SYN
   actuals currently need literal or parenthesized value expressions so the parser can
   distinguish them from mode names.
-- Generic `PROC` parameters are not implemented yet.
+- Actual procedure parameters are substituted by name; the actual procedure must be
+  visible where the instance is declared and signature-compatible with its uses in the
+  template.
 
 Generic module templates use the same mechanism:
 

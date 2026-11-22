@@ -132,13 +132,23 @@ pub enum Declaration {
 #[derive(Debug, Clone)]
 pub enum GenericFormal {
     Mode(String),
-    Syn { name: String, default: Expr },
+    Syn {
+        name: String,
+        default: Expr,
+    },
+    Proc {
+        name: String,
+        params: Vec<Param>,
+        result: Option<ModeRef>,
+        exceptions: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum GenericActual {
     Mode(ModeRef),
     Value(Expr),
+    Proc { name: String, target: String },
 }
 
 #[derive(Debug, Clone)]

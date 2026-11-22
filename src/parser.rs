@@ -334,6 +334,22 @@ impl<'a> Parser<'a> {
                         default: default.clone(),
                     });
                 }
+            } else if self.at_keyword(Keyword::Proc)
+                && self
+                    .kind_at(1)
+                    .is_some_and(|kind| matches!(kind, TokenKind::Identifier(_)))
+            {
+                self.advance();
+                let (name, _) = self.expect_identifier()?;
+                let params = self.parse_formal_params()?;
+                let (result, exceptions) = self.parse_result_and_exceptions()?;
+                self.expect_semicolon()?;
+                formals.push(GenericFormal::Proc {
+                    name,
+                    params,
+                    result,
+                    exceptions,
+                });
             } else {
                 break;
             }
@@ -346,7 +362,14 @@ impl<'a> Parser<'a> {
         let mut actuals = Vec::new();
         if !self.at_rparen() {
             loop {
-                if self.actual_starts_value() {
+                if self.at_keyword(Keyword::Proc) {
+                    self.advance();
+                    let (name, _) = self.expect_identifier()?;
+                    self.expect_equal()?;
+                    let (target, _) = self.expect_identifier()?;
+                    self.expect_semicolon()?;
+                    actuals.push(GenericActual::Proc { name, target });
+                } else if self.actual_starts_value() {
                     actuals.push(GenericActual::Value(self.parse_expr()?));
                 } else {
                     actuals.push(GenericActual::Mode(self.parse_mode_ref()?));

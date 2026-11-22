@@ -221,7 +221,7 @@ fn expand_generic_modules(program: &mut Program) -> Result<(), Error> {
                 format!("unknown generic module template `{}`", instance.template),
             ));
         };
-        let (substitutions, syn_substitutions) = generic_substitutions(
+        let (substitutions, syn_substitutions, proc_substitutions) = generic_substitutions(
             &template.formal_params,
             &instance.actuals,
             instance.span,
@@ -231,7 +231,7 @@ fn expand_generic_modules(program: &mut Program) -> Result<(), Error> {
         module.name = Some(instance.name.clone());
         module.span = instance.span;
         substitute_module_modes(&mut module, &substitutions)?;
-        substitute_module_syns(&mut module, &syn_substitutions);
+        substitute_module_syns(&mut module, &syn_substitutions, &proc_substitutions);
         program.modules.push(module);
     }
     program.generic_modules.clear();
@@ -341,7 +341,7 @@ fn expand_module_generics(module: &mut Module) -> Result<(), Error> {
                         format!("unknown generic template `{}`", instance.template),
                     ));
                 };
-                let (substitutions, syn_substitutions) = generic_substitutions(
+                let (substitutions, syn_substitutions, proc_substitutions) = generic_substitutions(
                     &template.formal_params,
                     &instance.actuals,
                     instance.span,
@@ -351,7 +351,7 @@ fn expand_module_generics(module: &mut Module) -> Result<(), Error> {
                 proc_def.name = instance.name.clone();
                 proc_def.span = instance.span;
                 substitute_proc_modes(&mut proc_def, &substitutions)?;
-                substitute_proc_syns(&mut proc_def, &syn_substitutions);
+                substitute_proc_syns(&mut proc_def, &syn_substitutions, &proc_substitutions);
                 declarations.push(Declaration::Proc(proc_def));
             }
             other => declarations.push(other),
@@ -363,6 +363,7 @@ fn expand_module_generics(module: &mut Module) -> Result<(), Error> {
 
 type GenericModeSubstitutions<'a, 'b> = HashMap<&'a str, &'b ModeRef>;
 type GenericSynSubstitutions<'a, 'b> = HashMap<&'a str, &'b Expr>;
+type GenericProcSubstitutions<'a, 'b> = HashMap<&'a str, &'b str>;
 
 fn generic_substitutions<'a, 'b>(
     formals: &'a [crate::ast::GenericFormal],
@@ -373,6 +374,7 @@ fn generic_substitutions<'a, 'b>(
     (
         GenericModeSubstitutions<'a, 'b>,
         GenericSynSubstitutions<'a, 'b>,
+        GenericProcSubstitutions<'a, 'b>,
     ),
     Error,
 > {
@@ -388,6 +390,7 @@ fn generic_substitutions<'a, 'b>(
     }
     let mut modes = HashMap::new();
     let mut syns = HashMap::new();
+    let mut procs = HashMap::new();
     for (formal, actual) in formals.iter().zip(actuals) {
         match (formal, actual) {
             (crate::ast::GenericFormal::Mode(name), crate::ast::GenericActual::Mode(mode)) => {
@@ -398,6 +401,12 @@ fn generic_substitutions<'a, 'b>(
                 crate::ast::GenericActual::Value(value),
             ) => {
                 syns.insert(name.as_str(), value);
+            }
+            (
+                crate::ast::GenericFormal::Proc { name, .. },
+                crate::ast::GenericActual::Proc { target, .. },
+            ) => {
+                procs.insert(name.as_str(), target.as_str());
             }
             (crate::ast::GenericFormal::Mode(name), crate::ast::GenericActual::Value(_)) => {
                 return Err(Error::new(
@@ -411,28 +420,68 @@ fn generic_substitutions<'a, 'b>(
                     format!("generic SYN parameter `{name}` requires a value actual"),
                 ));
             }
+            (crate::ast::GenericFormal::Proc { name, .. }, crate::ast::GenericActual::Mode(_)) => {
+                return Err(Error::new(
+                    span,
+                    format!("generic PROC parameter `{name}` requires a PROC actual"),
+                ));
+            }
+            (crate::ast::GenericFormal::Proc { name, .. }, crate::ast::GenericActual::Value(_)) => {
+                return Err(Error::new(
+                    span,
+                    format!("generic PROC parameter `{name}` requires a PROC actual"),
+                ));
+            }
+            (crate::ast::GenericFormal::Mode(name), crate::ast::GenericActual::Proc { .. }) => {
+                return Err(Error::new(
+                    span,
+                    format!("generic mode parameter `{name}` requires a mode actual"),
+                ));
+            }
+            (
+                crate::ast::GenericFormal::Syn { name, .. },
+                crate::ast::GenericActual::Proc { .. },
+            ) => {
+                return Err(Error::new(
+                    span,
+                    format!("generic SYN parameter `{name}` requires a value actual"),
+                ));
+            }
         }
     }
-    Ok((modes, syns))
+    Ok((modes, syns, procs))
 }
 
-fn substitute_expr_syns(expr: &Expr, syns: &HashMap<&str, &Expr>) -> Expr {
+fn substitute_expr_syns(
+    expr: &Expr,
+    syns: &HashMap<&str, &Expr>,
+    procs: &HashMap<&str, &str>,
+) -> Expr {
     match expr {
-        Expr::Name { name, .. } => syns
+        Expr::Name { name, span } => syns
             .get(name.as_str())
             .map(|value| (*value).clone())
+            .or_else(|| {
+                procs.get(name.as_str()).map(|target| Expr::Name {
+                    name: (*target).to_owned(),
+                    span: *span,
+                })
+            })
             .unwrap_or_else(|| expr.clone()),
         Expr::Apply { name, args, span } => Expr::Apply {
-            name: name.clone(),
+            name: procs
+                .get(name.as_str())
+                .map(|target| (*target).to_owned())
+                .unwrap_or_else(|| name.clone()),
             args: args
                 .iter()
-                .map(|arg| substitute_expr_syns(arg, syns))
+                .map(|arg| substitute_expr_syns(arg, syns, procs))
                 .collect(),
             span: *span,
         },
         Expr::Unary { op, operand, span } => Expr::Unary {
             op: *op,
-            operand: Box::new(substitute_expr_syns(operand, syns)),
+            operand: Box::new(substitute_expr_syns(operand, syns, procs)),
             span: *span,
         },
         Expr::Binary {
@@ -442,12 +491,12 @@ fn substitute_expr_syns(expr: &Expr, syns: &HashMap<&str, &Expr>) -> Expr {
             span,
         } => Expr::Binary {
             op: *op,
-            left: Box::new(substitute_expr_syns(left, syns)),
-            right: Box::new(substitute_expr_syns(right, syns)),
+            left: Box::new(substitute_expr_syns(left, syns, procs)),
+            right: Box::new(substitute_expr_syns(right, syns, procs)),
             span: *span,
         },
         Expr::Field { base, field, span } => Expr::Field {
-            base: Box::new(substitute_expr_syns(base, syns)),
+            base: Box::new(substitute_expr_syns(base, syns, procs)),
             field: field.clone(),
             span: *span,
         },
@@ -456,11 +505,11 @@ fn substitute_expr_syns(expr: &Expr, syns: &HashMap<&str, &Expr>) -> Expr {
                 .iter()
                 .map(|element| crate::ast::ArrayTupleElement {
                     labels: element.labels.clone(),
-                    value: substitute_expr_syns(&element.value, syns),
+                    value: substitute_expr_syns(&element.value, syns, procs),
                     range_end: element
                         .range_end
                         .as_ref()
-                        .map(|end| Box::new(substitute_expr_syns(end, syns))),
+                        .map(|end| Box::new(substitute_expr_syns(end, syns, procs))),
                     span: element.span,
                 })
                 .collect(),
@@ -474,8 +523,8 @@ fn substitute_expr_syns(expr: &Expr, syns: &HashMap<&str, &Expr>) -> Expr {
             span,
         } => Expr::ArraySlice {
             name: name.clone(),
-            first: Box::new(substitute_expr_syns(first, syns)),
-            last: Box::new(substitute_expr_syns(last, syns)),
+            first: Box::new(substitute_expr_syns(first, syns, procs)),
+            last: Box::new(substitute_expr_syns(last, syns, procs)),
             up: *up,
             span: *span,
         },
@@ -485,11 +534,11 @@ fn substitute_expr_syns(expr: &Expr, syns: &HashMap<&str, &Expr>) -> Expr {
             args,
             span,
         } => Expr::MethodCall {
-            base: Box::new(substitute_expr_syns(base, syns)),
+            base: Box::new(substitute_expr_syns(base, syns, procs)),
             method: method.clone(),
             args: args
                 .iter()
-                .map(|arg| substitute_expr_syns(arg, syns))
+                .map(|arg| substitute_expr_syns(arg, syns, procs))
                 .collect(),
             span: *span,
         },
@@ -497,26 +546,30 @@ fn substitute_expr_syns(expr: &Expr, syns: &HashMap<&str, &Expr>) -> Expr {
     }
 }
 
-fn substitute_actions_syns(actions: &mut [Action], syns: &HashMap<&str, &Expr>) {
+fn substitute_actions_syns(
+    actions: &mut [Action],
+    syns: &HashMap<&str, &Expr>,
+    procs: &HashMap<&str, &str>,
+) {
     for action in actions {
         match action {
             Action::Assign { target, value, .. } => {
-                *target = substitute_expr_syns(target, syns);
-                *value = substitute_expr_syns(value, syns);
+                *target = substitute_expr_syns(target, syns, procs);
+                *value = substitute_expr_syns(value, syns, procs);
             }
             Action::Assert { condition, .. } => {
-                *condition = substitute_expr_syns(condition, syns);
+                *condition = substitute_expr_syns(condition, syns, procs);
             }
             Action::Call { callee, .. } => {
-                *callee = substitute_expr_syns(callee, syns);
+                *callee = substitute_expr_syns(callee, syns, procs);
             }
             Action::Return {
                 value: Some(value), ..
             } => {
-                *value = substitute_expr_syns(value, syns);
+                *value = substitute_expr_syns(value, syns, procs);
             }
             Action::Result { value, .. } => {
-                *value = substitute_expr_syns(value, syns);
+                *value = substitute_expr_syns(value, syns, procs);
             }
             Action::If {
                 branches,
@@ -524,30 +577,30 @@ fn substitute_actions_syns(actions: &mut [Action], syns: &HashMap<&str, &Expr>) 
                 ..
             } => {
                 for branch in branches {
-                    branch.condition = substitute_expr_syns(&branch.condition, syns);
-                    substitute_actions_syns(&mut branch.body, syns);
+                    branch.condition = substitute_expr_syns(&branch.condition, syns, procs);
+                    substitute_actions_syns(&mut branch.body, syns, procs);
                 }
                 if let Some(actions) = else_actions {
-                    substitute_actions_syns(actions, syns);
+                    substitute_actions_syns(actions, syns, procs);
                 }
             }
             Action::Do { control, body, .. } => {
                 match control {
                     crate::ast::DoControl::While(condition) => {
-                        *condition = substitute_expr_syns(condition, syns);
+                        *condition = substitute_expr_syns(condition, syns, procs);
                     }
                     crate::ast::DoControl::For {
                         start, end, step, ..
                     } => {
-                        *start = substitute_expr_syns(start, syns);
-                        *end = substitute_expr_syns(end, syns);
+                        *start = substitute_expr_syns(start, syns, procs);
+                        *end = substitute_expr_syns(end, syns, procs);
                         if let Some(step) = step {
-                            *step = substitute_expr_syns(step, syns);
+                            *step = substitute_expr_syns(step, syns, procs);
                         }
                     }
                     _ => {}
                 }
-                substitute_actions_syns(body, syns);
+                substitute_actions_syns(body, syns, procs);
             }
             Action::Case {
                 selector,
@@ -555,61 +608,69 @@ fn substitute_actions_syns(actions: &mut [Action], syns: &HashMap<&str, &Expr>) 
                 else_actions,
                 ..
             } => {
-                *selector = substitute_expr_syns(selector, syns);
+                *selector = substitute_expr_syns(selector, syns, procs);
                 for alternative in alternatives {
-                    substitute_actions_syns(&mut alternative.body, syns);
+                    substitute_actions_syns(&mut alternative.body, syns, procs);
                 }
                 if let Some(actions) = else_actions {
-                    substitute_actions_syns(actions, syns);
+                    substitute_actions_syns(actions, syns, procs);
                 }
             }
             Action::Labelled { action, .. } => {
-                substitute_actions_syns(std::slice::from_mut(action.as_mut()), syns);
+                substitute_actions_syns(std::slice::from_mut(action.as_mut()), syns, procs);
             }
             Action::Begin {
                 declarations,
                 actions,
                 ..
             } => {
-                substitute_declarations_syns(declarations, syns);
-                substitute_actions_syns(actions, syns);
+                substitute_declarations_syns(declarations, syns, procs);
+                substitute_actions_syns(actions, syns, procs);
             }
             Action::Handled {
                 action, handler, ..
             } => {
-                substitute_actions_syns(std::slice::from_mut(action.as_mut()), syns);
-                substitute_handler_syns(handler, syns);
+                substitute_actions_syns(std::slice::from_mut(action.as_mut()), syns, procs);
+                substitute_handler_syns(handler, syns, procs);
             }
-            Action::Module(module) => substitute_module_syns(module, syns),
+            Action::Module(module) => substitute_module_syns(module, syns, procs),
             _ => {}
         }
     }
 }
 
-fn substitute_handler_syns(handler: &mut crate::ast::Handler, syns: &HashMap<&str, &Expr>) {
+fn substitute_handler_syns(
+    handler: &mut crate::ast::Handler,
+    syns: &HashMap<&str, &Expr>,
+    procs: &HashMap<&str, &str>,
+) {
     for alternative in &mut handler.alternatives {
-        substitute_actions_syns(&mut alternative.actions, syns);
+        substitute_actions_syns(&mut alternative.actions, syns, procs);
     }
     if let Some(actions) = &mut handler.else_actions {
-        substitute_actions_syns(actions, syns);
+        substitute_actions_syns(actions, syns, procs);
     }
 }
 
-fn substitute_declarations_syns(declarations: &mut [Declaration], syns: &HashMap<&str, &Expr>) {
+fn substitute_declarations_syns(
+    declarations: &mut [Declaration],
+    syns: &HashMap<&str, &Expr>,
+    procs: &HashMap<&str, &str>,
+) {
     for declaration in declarations {
         match declaration {
             Declaration::Var(vars) => {
                 for var in vars {
                     if let Some(init) = &mut var.init {
-                        init.value = substitute_expr_syns(&init.value, syns);
+                        init.value = substitute_expr_syns(&init.value, syns, procs);
                     }
                 }
             }
             Declaration::Proc(proc_def) => {
-                substitute_declarations_syns(&mut proc_def.declarations, syns);
-                substitute_actions_syns(&mut proc_def.actions, syns);
+                substitute_declarations_syns(&mut proc_def.declarations, syns, procs);
+                substitute_actions_syns(&mut proc_def.actions, syns, procs);
                 if let Some(handler) = &mut proc_def.handler {
-                    substitute_handler_syns(handler, syns);
+                    substitute_handler_syns(handler, syns, procs);
                 }
             }
             Declaration::Mode(mode_def) => {
@@ -619,34 +680,42 @@ fn substitute_declarations_syns(declarations: &mut [Declaration], syns: &HashMap
                     ..
                 } = &mut mode_def.body
                 {
-                    substitute_declarations_syns(declarations, syns);
+                    substitute_declarations_syns(declarations, syns, procs);
                     if let Some(invariant) = invariant {
-                        *invariant = substitute_expr_syns(invariant, syns);
+                        *invariant = substitute_expr_syns(invariant, syns, procs);
                     }
                 }
             }
-            Declaration::SpecModule(module) => substitute_module_syns(module, syns),
+            Declaration::SpecModule(module) => substitute_module_syns(module, syns, procs),
             _ => {}
         }
     }
 }
 
-fn substitute_module_syns(module: &mut Module, syns: &HashMap<&str, &Expr>) {
-    substitute_declarations_syns(&mut module.declarations, syns);
+fn substitute_module_syns(
+    module: &mut Module,
+    syns: &HashMap<&str, &Expr>,
+    procs: &HashMap<&str, &str>,
+) {
+    substitute_declarations_syns(&mut module.declarations, syns, procs);
     for context in &mut module.contexts {
-        substitute_declarations_syns(&mut context.declarations, syns);
+        substitute_declarations_syns(&mut context.declarations, syns, procs);
     }
-    substitute_actions_syns(&mut module.actions, syns);
+    substitute_actions_syns(&mut module.actions, syns, procs);
     if let Some(handler) = &mut module.handler {
-        substitute_handler_syns(handler, syns);
+        substitute_handler_syns(handler, syns, procs);
     }
 }
 
-fn substitute_proc_syns(proc_def: &mut crate::ast::ProcDef, syns: &HashMap<&str, &Expr>) {
-    substitute_declarations_syns(&mut proc_def.declarations, syns);
-    substitute_actions_syns(&mut proc_def.actions, syns);
+fn substitute_proc_syns(
+    proc_def: &mut crate::ast::ProcDef,
+    syns: &HashMap<&str, &Expr>,
+    procs: &HashMap<&str, &str>,
+) {
+    substitute_declarations_syns(&mut proc_def.declarations, syns, procs);
+    substitute_actions_syns(&mut proc_def.actions, syns, procs);
     if let Some(handler) = &mut proc_def.handler {
-        substitute_handler_syns(handler, syns);
+        substitute_handler_syns(handler, syns, procs);
     }
 }
 
