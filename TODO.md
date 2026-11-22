@@ -126,7 +126,8 @@ all existing tests pass with no new special cases.
 - [ ] Processes, signals, and timers.
 - [x] `POWERSET` of `INT` / `BOOL` / `CHAR` with literals, ranges, union,
       intersection, difference, equality/ordering, and `IN`.
-- [ ] Named `SET (...)` modes, moreta modes, and templates.
+- [x] Named `SET (...)` modes with unnumbered and numbered elements.
+- [ ] Moreta modes and templates.
 - [ ] Processes/signals/timers: deferred pending a resumable/concurrent runtime.
 
 ## 8. Cleanup

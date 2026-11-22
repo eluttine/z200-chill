@@ -95,6 +95,10 @@ pub enum ApplyResolution {
         index: bool,
         target: bool,
     },
+    SetElement {
+        ty: Type,
+        value: i128,
+    },
 }
 
 /// The checker's result: diagnostics plus expression annotations that the
@@ -266,6 +270,7 @@ struct Scope {
     vars: HashMap<String, Type>,
     procs: HashMap<String, ProcType>,
     modes: HashMap<String, Type>,
+    set_values: HashMap<String, (Type, i128)>,
     /// Names granted into this reach by directly enclosed modules.
     exports: HashMap<String, Vec<ReachBinding>>,
     readonly: HashSet<String>,
@@ -994,7 +999,54 @@ impl Checker {
                     )?;
                     self.declare_proc(&signature.name, proc_sig, signature.span)?;
                 }
-                Declaration::Mode(_) => {}
+                Declaration::Mode(mode_def) => {
+                    let ModeDefinitionBody::Set(elements) = &mode_def.body else {
+                        continue;
+                    };
+                    let mode_ref = ModeRef {
+                        name: mode_def.name.clone(),
+                        arrays: Vec::new(),
+                        string_length: None,
+                        varying: false,
+                        access: false,
+                        powerset: false,
+                        access_indexed: false,
+                        access_index: None,
+                        span: mode_def.span,
+                    };
+                    let ty = self.resolve_mode(&mode_ref)?;
+                    let Type::Set(id) = ty else {
+                        return Err(Error::new(
+                            mode_def.span,
+                            "internal: set mode has wrong type",
+                        ));
+                    };
+                    for element in elements {
+                        let value = self
+                            .modes
+                            .get_set(id)
+                            .elements
+                            .iter()
+                            .find(|(name, _)| name == &element.name)
+                            .map(|(_, value)| *value)
+                            .ok_or_else(|| {
+                                Error::new(element.span, "internal: missing set element")
+                            })?;
+                        let scope = self.scopes.last_mut().expect("scope stack is never empty");
+                        if scope.vars.contains_key(&element.name)
+                            || scope.procs.contains_key(&element.name)
+                            || scope
+                                .set_values
+                                .insert(element.name.clone(), (ty, value))
+                                .is_some()
+                        {
+                            return Err(Error::new(
+                                element.span,
+                                format!("duplicate declaration of `{}`", element.name),
+                            ));
+                        }
+                    }
+                }
                 Declaration::Visibility(_) | Declaration::SpecModule(_) => {}
             }
         }
@@ -1117,7 +1169,10 @@ impl Checker {
 
     fn declare_var(&mut self, name: &str, ty: Type, span: Span) -> Result<(), Error> {
         let scope = self.scopes.last_mut().expect("scope stack is never empty");
-        if scope.vars.contains_key(name) || scope.procs.contains_key(name) {
+        if scope.vars.contains_key(name)
+            || scope.procs.contains_key(name)
+            || scope.set_values.contains_key(name)
+        {
             return Err(Error::new(
                 span,
                 format!("duplicate declaration of `{name}`"),
@@ -1129,7 +1184,10 @@ impl Checker {
 
     fn declare_proc(&mut self, name: &str, signature: ProcType, span: Span) -> Result<(), Error> {
         let scope = self.scopes.last_mut().expect("scope stack is never empty");
-        if scope.vars.contains_key(name) || scope.procs.contains_key(name) {
+        if scope.vars.contains_key(name)
+            || scope.procs.contains_key(name)
+            || scope.set_values.contains_key(name)
+        {
             return Err(Error::new(
                 span,
                 format!("duplicate declaration of `{name}`"),
@@ -1271,6 +1329,15 @@ impl Checker {
             }
         }
         program::resolve_mode(mode).map_err(map_program_error)
+    }
+
+    fn lookup_set_value(&self, name: &str) -> Option<(Type, i128)> {
+        for scope in self.scopes[self.module_floor..].iter().rev() {
+            if let Some(value) = scope.set_values.get(name) {
+                return Some(*value);
+            }
+        }
+        None
     }
 
     fn lookup_var(&self, name: &str) -> Option<Type> {
@@ -1826,7 +1893,11 @@ impl Checker {
                 Ok(Type::ArrayTuple)
             }
             Expr::Name { name, span } => {
-                if let Some(ty) = self.lookup_var(name) {
+                if let Some((ty, value)) = self.lookup_set_value(name) {
+                    self.resolutions
+                        .insert(*span, ApplyResolution::SetElement { ty, value });
+                    Ok(ty)
+                } else if let Some(ty) = self.lookup_var(name) {
                     Ok(ty)
                 } else if self.lookup_proc(name).is_some() {
                     Err(Error::new(
@@ -1928,7 +1999,7 @@ impl Checker {
                 } else if (left == right
                     && matches!(
                         left,
-                        Type::Bool | Type::Char | Type::Struct(_) | Type::Float
+                        Type::Bool | Type::Char | Type::Struct(_) | Type::Set(_) | Type::Float
                     ))
                     || (is_string_type(left) && is_string_type(right))
                     || (matches!(left, Type::PowerSet(_)) && left == right)
@@ -2832,6 +2903,7 @@ impl Checker {
             Type::String => is_string_type(value),
             Type::BoundedString { .. } => is_string_type(value),
             Type::Struct(id) => value == Type::Struct(id),
+            Type::Set(id) => value == Type::Set(id),
             Type::Association => value == Type::Association,
             Type::Access(access) => value == Type::Access(access),
             Type::PowerSet(set) => value == Type::PowerSet(set),

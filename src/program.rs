@@ -843,6 +843,37 @@ fn process_module_modes(
                 });
                 Type::Struct(id)
             }
+            crate::ast::ModeDefinitionBody::Set(elements) => {
+                let mut names = HashSet::new();
+                let mut values = HashSet::new();
+                let mut infos = Vec::with_capacity(elements.len());
+                for (index, element) in elements.iter().enumerate() {
+                    if !names.insert(element.name.clone()) {
+                        return Err(Error::new(
+                            element.span,
+                            format!("duplicate set element `{}`", element.name),
+                        ));
+                    }
+                    let value = element.value.unwrap_or(index as i128);
+                    if !values.insert(value) {
+                        return Err(Error::new(
+                            element.span,
+                            format!("duplicate set representation value `{value}`"),
+                        ));
+                    }
+                    infos.push((element.name.clone(), value));
+                }
+                let id = crate::types::SetId(table.sets.len());
+                table.sets.push(crate::modes::SetMode {
+                    name: mode_def.name.clone(),
+                    package: top_package,
+                    module: top,
+                    package_name: top_package_name.clone(),
+                    module_name: module.name.clone(),
+                    elements: infos,
+                });
+                Type::Set(id)
+            }
             crate::ast::ModeDefinitionBody::Alias(mode) => resolve_mode_with(mode, resolution)?,
         };
 

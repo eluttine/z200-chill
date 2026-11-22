@@ -117,7 +117,15 @@ pub struct ModeDefinition {
 #[derive(Debug, Clone)]
 pub enum ModeDefinitionBody {
     Struct(Vec<FieldDef>),
+    Set(Vec<SetElement>),
     Alias(ModeRef),
+}
+
+#[derive(Debug, Clone)]
+pub struct SetElement {
+    pub name: String,
+    pub value: Option<i128>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

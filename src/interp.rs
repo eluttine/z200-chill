@@ -253,6 +253,7 @@ enum Value {
     String(String),
     Struct(Vec<(String, Value)>),
     Array { low: i128, values: Vec<Value> },
+    Set(i128),
     PowerSet(std::collections::BTreeSet<i128>),
     Association(Option<Rc<RefCell<AssociationState>>>),
     Access(Option<Rc<RefCell<AccessState>>>),
@@ -1829,6 +1830,7 @@ impl<'a> Interpreter<'a> {
                 value, ty, span, ..
             } => self.make_int(*value, type_kind(*ty), *span),
             ir::Expr::Float { value, .. } => Ok(Value::Float(*value)),
+            ir::Expr::SetValue { value, .. } => Ok(Value::Set(*value)),
             ir::Expr::FloatConversion { arg, span, .. } => {
                 let value = self.eval_ir(arg)?;
                 match value {
@@ -2481,6 +2483,7 @@ impl<'a> Interpreter<'a> {
             (Value::Char(left), Value::Char(right)) => Ok(left == right),
             (Value::String(left), Value::String(right)) => Ok(left == right),
             (Value::PowerSet(left), Value::PowerSet(right)) => Ok(left == right),
+            (Value::Set(left), Value::Set(right)) => Ok(left == right),
             (
                 Value::Array {
                     low: left_low,
@@ -2635,6 +2638,10 @@ impl<'a> Interpreter<'a> {
             Type::Struct(_) => match value {
                 Value::Struct(_) => Ok(value),
                 _ => Err(Error::new(span, "expected a structure value")),
+            },
+            Type::Set(_) => match value {
+                Value::Set(_) => Ok(value),
+                _ => Err(Error::new(span, "expected a set value")),
             },
             Type::Array(array) => match value {
                 Value::Array { low, values }
@@ -3910,6 +3917,7 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
         Type::Association => Value::Association(None),
         Type::Access(_) => Value::Access(None),
         Type::PowerSet(_) => Value::PowerSet(std::collections::BTreeSet::new()),
+        Type::Set(_) => Value::Undefined,
         Type::MultiArray(array) => {
             let element = array.element.ty();
             let value = if matches!(element, Type::Struct(_)) {

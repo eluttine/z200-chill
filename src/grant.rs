@@ -440,6 +440,7 @@ fn type_name(ty: Type) -> String {
         // Structure modes must be referenced symbolically; this branch should
         // not be reached because portable types use `ExternalType::Mode`.
         Type::Struct(_) => "STRUCT".to_owned(),
+        Type::Set(_) => "SET".to_owned(),
         Type::Array(array) => format!(
             "ARRAY({}:{}) {}",
             array.low,

@@ -628,6 +628,41 @@ impl<'a> Parser<'a> {
             }
             self.expect_rparen()?;
             ModeDefinitionBody::Struct(fields)
+        } else if self.at_keyword(Keyword::Set) {
+            self.advance();
+            self.expect_lparen()?;
+            let mut elements = Vec::new();
+            if !self.at_rparen() {
+                loop {
+                    let (element_name, element_span) = self.expect_identifier()?;
+                    let value = if matches!(self.kind(), Some(TokenKind::Eq)) {
+                        self.advance();
+                        let value = self.parse_mode_integer()?;
+                        if value < 0 {
+                            return Err(Error::coded(
+                                "E0205",
+                                element_span,
+                                "set element representation must be non-negative",
+                            ));
+                        }
+                        Some(value)
+                    } else {
+                        None
+                    };
+                    elements.push(SetElement {
+                        name: element_name,
+                        value,
+                        span: element_span,
+                    });
+                    if self.at_comma() {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.expect_rparen()?;
+            ModeDefinitionBody::Set(elements)
         } else {
             ModeDefinitionBody::Alias(self.parse_mode_ref()?)
         };

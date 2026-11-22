@@ -53,6 +53,11 @@ pub enum Expr {
         ty: Type,
         span: Span,
     },
+    SetValue {
+        value: i128,
+        ty: Type,
+        span: Span,
+    },
     Conversion {
         kind: IntKind,
         arg: Node,
@@ -157,6 +162,7 @@ impl Expr {
             | Self::Char { span, .. }
             | Self::String { span, .. }
             | Self::Name { span, .. }
+            | Self::SetValue { span, .. }
             | Self::Conversion { span, .. }
             | Self::Call { span, .. }
             | Self::Unary { span, .. }
@@ -183,6 +189,7 @@ impl Expr {
             | Self::Char { ty, .. }
             | Self::String { ty, .. }
             | Self::Name { ty, .. }
+            | Self::SetValue { ty, .. }
             | Self::Conversion { ty, .. }
             | Self::Unary { ty, .. }
             | Self::Binary { ty, .. }
@@ -968,6 +975,9 @@ impl Lowerer<'_> {
                         span,
                     })
                 }
+                Some(ApplyResolution::SetElement { .. }) => {
+                    return Err(Error::new(span, "internal: set element used as a call"));
+                }
                 None => {
                     return Err(Error::new(span, "internal: call/apply has no resolution"));
                 }
@@ -1011,11 +1021,23 @@ impl Lowerer<'_> {
                 ty,
                 span,
             }),
-            AstExpr::Name { name, .. } => Rc::new(Expr::Name {
-                name: name.clone(),
-                ty,
-                span,
-            }),
+            AstExpr::Name { name, .. } => {
+                if let Some(ApplyResolution::SetElement { ty, value }) =
+                    self.check.resolutions.get(&span)
+                {
+                    Rc::new(Expr::SetValue {
+                        value: *value,
+                        ty: *ty,
+                        span,
+                    })
+                } else {
+                    Rc::new(Expr::Name {
+                        name: name.clone(),
+                        ty,
+                        span,
+                    })
+                }
+            }
             AstExpr::Unary { op, operand, .. } => {
                 let operand = self.lower_expr(operand)?;
                 Rc::new(Expr::Unary {

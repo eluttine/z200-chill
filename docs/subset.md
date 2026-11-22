@@ -284,7 +284,18 @@ Floating-point values may be array elements and procedure parameters/results.
 - `=`, `/=`, `<=`, `>=`, `<`, and `>` compare powersets by value/subset ordering.
 - Powerset literals take their member mode from context, like array tuples.
 
-Named `SET (...)` modes are not implemented yet.
+Named set modes are declared through `NEWMODE`/`SYNMODE`:
+
+```chill
+NEWMODE status = SET(occupied, free);
+NEWMODE code = SET(one = 1, three = 3);
+```
+
+Unnumbered elements receive representation values 0, 1, ...; numbered elements use the
+explicit non-negative values. Set element names are visible in the defining reach and
+may be assigned and compared. Named set modes are module-local for now: they are not
+included in grant interfaces, and powersets currently accept only `INT`/`BOOL`/`CHAR`
+members.
 
 ### 4.4 Runtime checks
 
