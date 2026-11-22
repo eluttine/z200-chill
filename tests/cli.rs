@@ -1,5 +1,7 @@
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 fn example_grant_lock() -> &'static Mutex<()> {
@@ -9,6 +11,46 @@ fn example_grant_lock() -> &'static Mutex<()> {
 
 fn z200c() -> Command {
     Command::new(env!("CARGO_BIN_EXE_z200c"))
+}
+
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new(prefix: &str) -> Self {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(path.join("src")).unwrap();
+        Self { path }
+    }
+
+    fn join(&self, path: impl AsRef<Path>) -> PathBuf {
+        self.path.join(path)
+    }
+}
+
+impl AsRef<Path> for TempDir {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<std::ffi::OsStr> for TempDir {
+    fn as_ref(&self) -> &std::ffi::OsStr {
+        self.path.as_os_str()
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
 }
 
 fn example(name: &str) -> String {
@@ -30,15 +72,7 @@ fn check_hello_succeeds() {
 
 #[test]
 fn run_text_output_matches_golden() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let directory = std::env::temp_dir().join(format!(
-        "z200c-golden-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(directory.join("src")).unwrap();
+    let directory = TempDir::new("z200c-golden");
     std::fs::write(
         directory.join("Chill.toml"),
         r#"
@@ -63,7 +97,6 @@ END M;
     .unwrap();
 
     let output = z200c().arg("run").arg(&directory).output().unwrap();
-    let _ = std::fs::remove_dir_all(&directory);
 
     assert!(
         output.status.success(),
@@ -187,8 +220,7 @@ fn grant_writes_grant_file() {
 
 #[test]
 fn checks_against_dependency_grant_file() {
-    let dir = std::env::temp_dir().join(format!("z200c-dep-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200c-dep");
     std::fs::create_dir_all(dir.join("src")).unwrap();
 
     std::fs::write(
@@ -248,14 +280,11 @@ END Client;
     let run = z200c().arg("run").arg(&dir).output().unwrap();
     assert_eq!(run.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&run.stderr).contains("not linked"));
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn run_allows_unused_dependency() {
-    let dir = std::env::temp_dir().join(format!("z200c-unused-dep-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200c-unused-dep");
     std::fs::create_dir_all(dir.join("src")).unwrap();
 
     std::fs::write(
@@ -304,14 +333,11 @@ END Client;
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn check_reports_multiple_semantic_errors() {
-    let dir = std::env::temp_dir().join(format!("z200c-multi-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200c-multi");
     std::fs::create_dir_all(dir.join("src")).unwrap();
 
     std::fs::write(
@@ -343,8 +369,6 @@ END M;
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(stderr.matches("error[E0404]").count(), 2);
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -366,8 +390,7 @@ fn run_links_grant_file_with_source_metadata() {
         env!("CARGO_MANIFEST_DIR")
     );
 
-    let dir = std::env::temp_dir().join(format!("z200c-grant-run-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200c-grant-run");
     std::fs::create_dir_all(dir.join("src")).unwrap();
 
     std::fs::write(
@@ -405,8 +428,6 @@ END Client;
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -429,8 +450,7 @@ fn check_resolves_qualified_grant_exports() {
         env!("CARGO_MANIFEST_DIR")
     );
 
-    let dir = std::env::temp_dir().join(format!("z200c-grant-qualified-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200c-grant-qualified");
     std::fs::create_dir_all(dir.join("src")).unwrap();
 
     std::fs::write(
@@ -468,14 +488,11 @@ END Client;
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn duplicate_module_names_across_packages_are_allowed() {
-    let base = std::env::temp_dir().join(format!("z200c-packages-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
+    let base = TempDir::new("z200c-packages");
 
     for (name, variable, value) in [("one", "a", 1), ("two", "b", 2)] {
         let dir = base.join(name);
@@ -543,14 +560,11 @@ END Client;
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&base).unwrap();
 }
 
 #[test]
 fn runs_with_structure_mode_from_grant_file() {
-    let base = std::env::temp_dir().join(format!("z200c-struct-grant-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
+    let base = TempDir::new("z200c-struct-grant");
     let lib = base.join("libstruct");
     std::fs::create_dir_all(lib.join("src")).unwrap();
 
@@ -644,14 +658,11 @@ END Client;
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("FORBIDden"), "stderr: {stderr}");
-
-    std::fs::remove_dir_all(&base).unwrap();
 }
 
 #[test]
 fn write_and_writeline_text_io() {
-    let dir = std::env::temp_dir().join(format!("z200-text-out-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-text-out");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("Chill.toml"), "").unwrap();
     std::fs::write(
@@ -670,14 +681,11 @@ END M;
     let output = z200c().arg("run").arg(&dir).output().unwrap();
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "abc\n\n");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn readline_text_io() {
-    let dir = std::env::temp_dir().join(format!("z200-text-in-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-text-in");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("Chill.toml"), "").unwrap();
     std::fs::write(
@@ -707,14 +715,11 @@ END M;
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn minimal_manifest_defaults_name_entry_and_sources() {
-    let dir = std::env::temp_dir().join(format!("z200-minimal-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-minimal");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("Chill.toml"), "").unwrap();
     std::fs::write(
@@ -735,14 +740,11 @@ fn minimal_manifest_defaults_name_entry_and_sources() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn remote_piece_must_exist() {
-    let dir = std::env::temp_dir().join(format!("z200-piece-missing-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-piece-missing");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("Chill.toml"),
@@ -762,14 +764,11 @@ entry = "src/main.ch"
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("E0700"), "stderr: {stderr}");
     assert!(stderr.contains("piece file not found"), "stderr: {stderr}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn remote_piece_is_expanded() {
-    let dir = std::env::temp_dir().join(format!("z200-piece-present-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-piece-present");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::create_dir_all(dir.join("pieces")).unwrap();
     std::fs::write(dir.join("pieces/counter.ch"), "M: MODULE END M;\n").unwrap();
@@ -796,14 +795,11 @@ counter = "pieces/counter.ch"
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn named_remote_module_expands_and_runs() {
-    let dir = std::env::temp_dir().join(format!("z200-piece-run-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-piece-run");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::create_dir_all(dir.join("pieces")).unwrap();
     std::fs::write(
@@ -838,14 +834,11 @@ helper = "pieces/helper.ch"
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn remote_spec_module_expands() {
-    let dir = std::env::temp_dir().join(format!("z200-piece-spec-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-piece-spec");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::create_dir_all(dir.join("pieces")).unwrap();
     std::fs::write(
@@ -888,14 +881,11 @@ END Counter;
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn nested_spec_grants_become_virtual_grants() {
-    let dir = std::env::temp_dir().join(format!("z200-nested-spec-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-nested-spec");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("Chill.toml"),
@@ -935,14 +925,11 @@ END Outer;
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn spec_region_pairs_with_a_region_body() {
-    let dir = std::env::temp_dir().join(format!("z200-region-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-region");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("Chill.toml"),
@@ -982,14 +969,11 @@ END Client;
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn remote_region_expands() {
-    let dir = std::env::temp_dir().join(format!("z200-region-remote-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-region-remote");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::create_dir_all(dir.join("pieces")).unwrap();
     std::fs::write(
@@ -1021,14 +1005,11 @@ entry = "src/main.ch"
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn nested_spec_in_a_context_pairs_with_the_body_module() {
-    let dir = std::env::temp_dir().join(format!("z200-ctx-spec-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-ctx-spec");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("Chill.toml"),
@@ -1067,14 +1048,11 @@ END Outer;
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn nested_specs_are_checked_recursively() {
-    let dir = std::env::temp_dir().join(format!("z200-deep-spec-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-deep-spec");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("Chill.toml"),
@@ -1119,14 +1097,11 @@ END Outer;
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn nested_spec_interface_must_match_its_body() {
-    let dir = std::env::temp_dir().join(format!("z200-nested-spec-bad-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-nested-spec-bad");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("Chill.toml"),
@@ -1161,14 +1136,11 @@ END Outer;
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("mode"), "stderr: {stderr}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn remote_context_is_merged_after_the_last_context_body() {
-    let dir = std::env::temp_dir().join(format!("z200-piece-ctx-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-piece-ctx");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::create_dir_all(dir.join("pieces")).unwrap();
     std::fs::write(
@@ -1219,14 +1191,11 @@ END M;
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn context_module_remote_is_desugared() {
-    let dir = std::env::temp_dir().join(format!("z200-piece-ctxmod-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-piece-ctxmod");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::create_dir_all(dir.join("pieces")).unwrap();
     std::fs::write(
@@ -1269,14 +1238,11 @@ CONTEXT MODULE REMOTE "pieces/ctx.ch";
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn remote_context_target_must_be_a_context_list() {
-    let dir = std::env::temp_dir().join(format!("z200-piece-ctxkind-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-piece-ctxkind");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::create_dir_all(dir.join("pieces")).unwrap();
     std::fs::write(dir.join("pieces/module.ch"), "M: MODULE END M;\n").unwrap();
@@ -1305,14 +1271,11 @@ END M;
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("E0700"), "stderr: {stderr}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn remote_piece_kind_mismatch_is_reported() {
-    let dir = std::env::temp_dir().join(format!("z200-piece-kind-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("z200-piece-kind");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::create_dir_all(dir.join("pieces")).unwrap();
     std::fs::write(
@@ -1342,8 +1305,6 @@ entry = "src/main.ch"
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("E0700"), "stderr: {stderr}");
     assert!(stderr.contains("not a module"), "stderr: {stderr}");
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

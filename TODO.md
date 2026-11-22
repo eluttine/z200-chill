@@ -159,5 +159,6 @@ deferred.
 
 - [x] Replace message-based error classification with explicit codes at checker and
       interpreter error-construction sites.
-- [ ] Reduce repeated temp-dir setup in CLI tests.
+- [x] Reduce repeated temp-dir setup in CLI tests with a `TempDir` fixture that
+      creates sources and cleans up on drop.
 - [ ] Reconcile docs status matrices with the implementation.
