@@ -91,6 +91,7 @@ impl ArrayElement {
             | Type::Event { .. }
             | Type::Buffer { .. }
             | Type::Duration
+            | Type::Instance
             | Type::Ref(_)
             | Type::Ptr
             | Type::Row(_)
@@ -236,6 +237,7 @@ impl RefTarget {
             | Type::Event { .. }
             | Type::Buffer { .. }
             | Type::Duration
+            | Type::Instance
             | Type::Null
             | Type::Ref(_)
             | Type::Ptr
@@ -321,6 +323,8 @@ pub enum Type {
     },
     /// A duration value, represented in milliseconds.
     Duration,
+    /// A process instance value.
+    Instance,
     /// A bound reference mode `REF M`.
     Ref(RefTarget),
     /// The free reference mode `PTR`.
@@ -397,6 +401,7 @@ impl Type {
             | Self::Event { .. }
             | Self::Buffer { .. }
             | Self::Duration
+            | Self::Instance
             | Self::Ref(_)
             | Self::Ptr
             | Self::Row(_)
@@ -442,6 +447,7 @@ impl Type {
             Self::Event { .. } => "event",
             Self::Buffer { .. } => "buffer",
             Self::Duration => "duration",
+            Self::Instance => "INSTANCE",
             Self::Ref(target) => match target {
                 RefTarget::Struct(_) => "bound reference",
                 _ => "bound reference",
@@ -480,6 +486,7 @@ pub fn resolve_mode(name: &str) -> Option<Type> {
         "WTEXT" => Some(Type::WString),
         "EVENT" => Some(Type::Event { length: None }),
         "DURATION" => Some(Type::Duration),
+        "INSTANCE" => Some(Type::Instance),
         "PTR" => Some(Type::Ptr),
         "ASSOCIATION" => Some(Type::Association),
         _ => None,

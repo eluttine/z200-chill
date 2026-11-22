@@ -1967,12 +1967,12 @@ impl<'a> Parser<'a> {
                     }
                     self.expect_rparen()?;
                 }
-                if self.at_keyword(Keyword::To) {
-                    return Err(self.error_here_code(
-                        "E0205",
-                        "SEND TO process targeting is not implemented yet",
-                    ));
-                }
+                let target = if self.at_keyword(Keyword::To) {
+                    self.advance();
+                    Some(self.parse_expr()?)
+                } else {
+                    None
+                };
                 if self.at_keyword(Keyword::Priority) {
                     self.advance();
                     self.parse_expr()?;
@@ -1981,6 +1981,7 @@ impl<'a> Parser<'a> {
                 Ok(Action::Send {
                     signal,
                     values,
+                    target,
                     span: Span::new(self.source, start.start, end.end),
                 })
             }
@@ -2716,6 +2717,32 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(Keyword::SelfKw) => {
                 self.advance();
                 Ok(Expr::SelfRef { span })
+            }
+            TokenKind::Keyword(Keyword::This) => {
+                self.advance();
+                Ok(Expr::This { span })
+            }
+            TokenKind::Keyword(Keyword::Start) => {
+                self.advance();
+                let (process, _) = self.expect_identifier()?;
+                self.expect_lparen()?;
+                let mut args = Vec::new();
+                if !self.at_rparen() {
+                    loop {
+                        args.push(self.parse_expr()?);
+                        if self.at_comma() {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                let end = self.expect_rparen()?;
+                Ok(Expr::Start {
+                    process,
+                    args,
+                    span: Span::new(self.source, span.start, end.end),
+                })
             }
             TokenKind::Identifier(_) => {
                 let (name, name_span) = self.expect_identifier()?;

@@ -171,7 +171,8 @@ processes, yielding at action boundaries:
 - `PROCESS`, `START`, and `STOP` are executed cooperatively;
 - events, `DELAY`, `CONTINUE`, signals, and region-call mutual exclusion are
   executed by the cooperative scheduler;
-- relative timing actions and duration values are executed;
+- relative timing actions, duration values, process instances, `THIS`, and targeted
+  signal sends are executed;
 - absolute/cyclic timing actions, buffers, and region object/task modes are not yet
   executed faithfully;
 - no resumable continuation or scheduler is required for the first release.

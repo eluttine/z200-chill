@@ -188,9 +188,11 @@ deferred.
 - [x] `BUFFER [(length)] element-mode` locations, buffered send/receive, capacity
       blocking, delayed senders, buffer receive timeouts, and grant encoding for scalar
       buffer elements.
-- [ ] Absolute/cyclic timing actions, signal `TO` targeting, receive `SET` instance
-      locations, buffer priorities, region/task object modes, process
-      handlers/instances, and process `LOC`/`OUT`/`INOUT` parameters.
+- [x] `INSTANCE` values, `THIS`, `START` as an expression, and targeted
+      `SEND ... TO instance` delivery with pending targeted signals.
+- [ ] Absolute/cyclic timing actions, receive `SET` instance locations, signal
+      `TO process-name` restrictions, buffer priorities, region/task object modes,
+      process handlers, and process `LOC`/`OUT`/`INOUT` parameters.
 
 ## 8. Cleanup
 

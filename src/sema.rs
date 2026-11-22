@@ -175,6 +175,7 @@ pub fn analyze_with_externals(
         current_module: 0,
         current_package: 0,
         current_moreta: None,
+        in_process: false,
         current_package_name: None,
         current_module_name: None,
         labels: Vec::new(),
@@ -261,6 +262,7 @@ struct Checker {
     current_module: usize,
     current_package: usize,
     current_moreta: Option<types::MoretaId>,
+    in_process: bool,
     current_package_name: Option<String>,
     current_module_name: Option<String>,
     labels: Vec<String>,
@@ -1238,6 +1240,8 @@ impl Checker {
     }
 
     fn check_process(&mut self, process_def: &ProcessDef) -> Result<(), Error> {
+        let previous_in_process = self.in_process;
+        self.in_process = true;
         self.scopes.push(Scope::default());
         let result = (|| {
             let mut seen = HashSet::new();
@@ -1276,6 +1280,7 @@ impl Checker {
             Ok(())
         })();
         self.scopes.pop();
+        self.in_process = previous_in_process;
         result
     }
 
@@ -2041,8 +2046,19 @@ impl Checker {
             Action::Send {
                 signal,
                 values,
+                target,
                 span,
             } => {
+                if let Some(target) = target {
+                    let ty = self.check_expr(target)?;
+                    if ty != Type::Instance {
+                        return Err(Error::coded(
+                            "E0404",
+                            target.span(),
+                            format!("SEND TO requires an INSTANCE, found {}", ty.describe()),
+                        ));
+                    }
+                }
                 if let Some(modes) = self.lookup_signal(signal) {
                     if modes.len() != values.len() {
                         return Err(Error::coded(
@@ -2706,6 +2722,55 @@ impl Checker {
             }
             Expr::Bits { .. } => Ok(Type::Bits),
             Expr::Null { .. } => Ok(Type::Null),
+            Expr::This { span } => {
+                if !self.in_process {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        "THIS is only valid inside a process",
+                    ));
+                }
+                Ok(Type::Instance)
+            }
+            Expr::Start {
+                process,
+                args,
+                span,
+            } => {
+                let Some(signature) = self.lookup_process(process) else {
+                    return Err(Error::coded(
+                        "E0403",
+                        *span,
+                        format!("unknown process `{process}`"),
+                    ));
+                };
+                if signature.params.len() != args.len() {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        format!(
+                            "process `{process}` expects {} argument(s), found {}",
+                            signature.params.len(),
+                            args.len()
+                        ),
+                    ));
+                }
+                for (arg, (param_ty, passing)) in args
+                    .iter()
+                    .zip(signature.params.iter().zip(&signature.passing))
+                {
+                    if *passing != Passing::In {
+                        return Err(Error::coded(
+                            "E0409",
+                            arg.span(),
+                            "process arguments currently require IN passing",
+                        ));
+                    }
+                    let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
+                    self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
+                }
+                Ok(Type::Instance)
+            }
             Expr::SelfRef { span } => {
                 let Some(id) = self.current_moreta else {
                     return Err(Error::coded(
@@ -4075,6 +4140,7 @@ impl Checker {
             Type::Text { wide: false, .. } => is_narrow_string_type(value),
             Type::Event { .. } | Type::Buffer { .. } => false,
             Type::Duration => value == Type::Duration,
+            Type::Instance => value == Type::Instance,
             Type::Bits => is_bits_type(value),
             Type::BoundedBits { .. } => is_bits_type(value),
             Type::Ref(target) => {

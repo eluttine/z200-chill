@@ -421,6 +421,7 @@ pub enum Action {
     Send {
         signal: String,
         values: Vec<Expr>,
+        target: Option<Expr>,
         span: Span,
     },
     ReceiveCase {
@@ -594,6 +595,14 @@ pub enum Expr {
     SelfRef {
         span: Span,
     },
+    This {
+        span: Span,
+    },
+    Start {
+        process: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
     /// `-> location`, creating a reference to a location.
     AddressOf {
         target: Box<Expr>,
@@ -675,6 +684,8 @@ impl Expr {
             | Self::Bits { span, .. }
             | Self::Null { span }
             | Self::SelfRef { span }
+            | Self::This { span }
+            | Self::Start { span, .. }
             | Self::AddressOf { span, .. }
             | Self::Deref { span, .. }
             | Self::Allocate { span, .. }

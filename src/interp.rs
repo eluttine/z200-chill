@@ -366,6 +366,10 @@ pub fn run_checked(
             }
             corosensei::CoroutineResult::Return(result) => {
                 CURRENT_YIELDER.with(|slot| slot.set(std::ptr::null()));
+                scheduler
+                    .borrow_mut()
+                    .live_processes
+                    .remove(&runnable.entry.id);
                 result?;
             }
         }
@@ -425,6 +429,7 @@ enum Value {
     String(String),
     Bits(String),
     Duration(i128),
+    Instance(usize),
     Ref(Option<usize>),
     Struct(Vec<(String, Value)>),
     Moreta(Vec<(String, Value)>),
@@ -554,6 +559,11 @@ struct EventWaiter {
     slot: ReceiverSlot,
 }
 
+struct SignalMessage {
+    target: Option<usize>,
+    values: Vec<Value>,
+}
+
 struct BufferMessage {
     priority: i128,
     values: Vec<Value>,
@@ -595,8 +605,9 @@ struct Runnable {
 struct ScheduleState {
     next_process_id: usize,
     ready: VecDeque<Runnable>,
+    live_processes: HashSet<usize>,
     event_waiters: HashMap<usize, Vec<EventWaiter>>,
-    signals: HashMap<String, VecDeque<Vec<Value>>>,
+    signals: HashMap<String, VecDeque<SignalMessage>>,
     receivers: HashMap<String, Vec<(usize, ReceiverSlot, Option<Instant>)>>,
     buffers: HashMap<usize, BufferState>,
     region_owner: HashMap<usize, usize>,
@@ -1763,6 +1774,7 @@ impl<'a> Interpreter<'a> {
                 ir::Stmt::Send {
                     signal,
                     values,
+                    target,
                     span,
                 } => {
                     if self.lookup_signal_modes(signal).is_none() {
@@ -1853,11 +1865,36 @@ impl<'a> Interpreter<'a> {
                         let value = self.eval_ir(value)?;
                         lowered.push(self.convert(value, mode, *span)?);
                     }
+                    let target = match target {
+                        Some(target) => match self.eval_ir(target)? {
+                            Value::Instance(id) => Some(id),
+                            _ => {
+                                return Err(Error::coded(
+                                    "E0507",
+                                    *span,
+                                    "SEND TO requires an INSTANCE value",
+                                ))
+                            }
+                        },
+                        None => None,
+                    };
+                    if let Some(target) = target {
+                        if !self.scheduler.borrow().live_processes.contains(&target) {
+                            return Err(Error::exception(
+                                "EMPTY",
+                                *span,
+                                "EMPTY: SEND TO a process whose lifetime has ended",
+                            ));
+                        }
+                    }
                     let mut scheduler = self.scheduler.borrow_mut();
                     let receiver = scheduler.receivers.get(signal).and_then(|receivers| {
                         receivers
                             .iter()
-                            .find(|(_, slot, _)| slot.borrow().is_some())
+                            .find(|(id, slot, _)| {
+                                slot.borrow().is_some()
+                                    && target.map(|target| target == *id).unwrap_or(true)
+                            })
                             .map(|(id, slot, _)| (*id, Rc::clone(slot)))
                     });
                     if let Some((id, slot)) = receiver {
@@ -1879,7 +1916,10 @@ impl<'a> Interpreter<'a> {
                             .signals
                             .entry(signal.clone())
                             .or_default()
-                            .push_back(lowered);
+                            .push_back(SignalMessage {
+                                target,
+                                values: lowered,
+                            });
                     }
                 }
                 ir::Stmt::ReceiveCase {
@@ -1892,8 +1932,12 @@ impl<'a> Interpreter<'a> {
                         {
                             let mut scheduler = self.scheduler.borrow_mut();
                             if let Some(queue) = scheduler.signals.get_mut(&alternative.signal) {
-                                if let Some(values) = queue.pop_front() {
-                                    pending = Some((alternative.signal.clone(), values));
+                                if let Some(index) = queue.iter().position(|message| {
+                                    message.target.is_none()
+                                        || message.target == Some(self.process_id)
+                                }) {
+                                    let message = queue.remove(index).expect("signal message");
+                                    pending = Some((alternative.signal.clone(), message.values));
                                     break;
                                 }
                             }
@@ -1984,52 +2028,7 @@ impl<'a> Interpreter<'a> {
                     for arg in args {
                         values.push(self.eval_ir(arg)?);
                     }
-                    if values.len() != process_ref.def.params.len() {
-                        return Err(Error::coded(
-                            "E0506",
-                            *span,
-                            format!(
-                                "process `{process}` expects {} argument(s), found {}",
-                                process_ref.def.params.len(),
-                                values.len()
-                            ),
-                        ));
-                    }
-                    let id = {
-                        let mut scheduler = self.scheduler.borrow_mut();
-                        let id = scheduler.next_process_id;
-                        scheduler.next_process_id += 1;
-                        id
-                    };
-                    let mut child =
-                        self.fork_for_process(process_ref.module, process_ref.scope_key);
-                    child.process_id = id;
-                    let yielder = Rc::new(Cell::new(std::ptr::null()));
-                    let yielder_slot = Rc::clone(&yielder);
-                    let def = process_ref.def;
-                    // Safety: the coroutine is owned by the scheduler and is dropped
-                    // before the borrowed program/check data leaves `run_checked`.
-                    let coroutine = unsafe {
-                        Coroutine::with_stack_unchecked(
-                            DefaultStack::default(),
-                            move |current: &Yielder<ProcessInput, ProcessYield>,
-                                  input: ProcessInput| {
-                                let _ = input;
-                                yielder_slot.set(current as *const _);
-                                CURRENT_YIELDER.with(|slot| slot.set(current as *const _));
-                                child.run_process(def, values)
-                            },
-                        )
-                    };
-                    let mut scheduler = self.scheduler.borrow_mut();
-                    scheduler.ready.push_back(Runnable {
-                        input: ProcessInput::None,
-                        entry: ProcessEntry {
-                            id,
-                            coroutine,
-                            yielder,
-                        },
-                    });
+                    self.spawn_process(process_ref, values, *span)?;
                 }
                 ir::Stmt::Return { value, span } => {
                     if let Some(value) = value {
@@ -3101,6 +3100,36 @@ impl<'a> Interpreter<'a> {
             ir::Expr::String { value, .. } => Ok(Value::String(value.clone())),
             ir::Expr::Bits { value, .. } => Ok(Value::Bits(value.clone())),
             ir::Expr::Null { .. } => Ok(Value::Ref(None)),
+            ir::Expr::This { span, .. } => {
+                if self.process_id == usize::MAX {
+                    return Err(Error::coded(
+                        "E0500",
+                        *span,
+                        "THIS is only valid inside a process",
+                    ));
+                }
+                Ok(Value::Instance(self.process_id))
+            }
+            ir::Expr::Start {
+                process,
+                args,
+                span,
+                ..
+            } => {
+                let Some(process_ref) = self.lookup_process(process) else {
+                    return Err(Error::coded(
+                        "E0505",
+                        *span,
+                        format!("unknown process `{process}`"),
+                    ));
+                };
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval_ir(arg)?);
+                }
+                self.spawn_process(process_ref, values, *span)
+                    .map(Value::Instance)
+            }
             ir::Expr::SelfValue { span, .. } => {
                 let Some(id) = self.self_modes.last().copied() else {
                     return Err(Error::coded(
@@ -4486,6 +4515,10 @@ impl<'a> Interpreter<'a> {
                 span,
                 "synchronization locations do not have values",
             )),
+            Type::Instance => match value {
+                Value::Instance(value) => Ok(Value::Instance(value)),
+                _ => Err(Error::coded("E0507", span, "expected an INSTANCE value")),
+            },
             Type::Duration => match value {
                 Value::Duration(value) => Ok(Value::Duration(value)),
                 _ => Err(Error::coded("E0507", span, "expected a DURATION value")),
@@ -5485,6 +5518,61 @@ impl<'a> Interpreter<'a> {
             self_cells: Vec::new(),
             self_modes: Vec::new(),
         }
+    }
+
+    fn spawn_process(
+        &mut self,
+        process_ref: ProcessRef<'a>,
+        values: Vec<Value>,
+        span: Span,
+    ) -> Result<usize, Error> {
+        if values.len() != process_ref.def.params.len() {
+            return Err(Error::coded(
+                "E0506",
+                span,
+                format!(
+                    "process `{}` expects {} argument(s), found {}",
+                    process_ref.def.name,
+                    process_ref.def.params.len(),
+                    values.len()
+                ),
+            ));
+        }
+        let id = {
+            let mut scheduler = self.scheduler.borrow_mut();
+            let id = scheduler.next_process_id;
+            scheduler.next_process_id += 1;
+            id
+        };
+        let mut child = self.fork_for_process(process_ref.module, process_ref.scope_key);
+        child.process_id = id;
+        let yielder = Rc::new(Cell::new(std::ptr::null()));
+        let yielder_slot = Rc::clone(&yielder);
+        let def = process_ref.def;
+        // Safety: the coroutine is owned by the scheduler and is dropped
+        // before the borrowed program/check data leaves `run_checked`.
+        let coroutine = unsafe {
+            Coroutine::with_stack_unchecked(
+                DefaultStack::default(),
+                move |current: &Yielder<ProcessInput, ProcessYield>, input: ProcessInput| {
+                    let _ = input;
+                    yielder_slot.set(current as *const _);
+                    CURRENT_YIELDER.with(|slot| slot.set(current as *const _));
+                    child.run_process(def, values)
+                },
+            )
+        };
+        let mut scheduler = self.scheduler.borrow_mut();
+        scheduler.live_processes.insert(id);
+        scheduler.ready.push_back(Runnable {
+            input: ProcessInput::None,
+            entry: ProcessEntry {
+                id,
+                coroutine,
+                yielder,
+            },
+        });
+        Ok(id)
     }
 
     fn run_process(&mut self, def: &'a ProcessDef, args: Vec<Value>) -> Result<(), Error> {

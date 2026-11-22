@@ -57,6 +57,16 @@ pub enum Expr {
         ty: Type,
         span: Span,
     },
+    This {
+        ty: Type,
+        span: Span,
+    },
+    Start {
+        process: String,
+        args: Vec<Node>,
+        ty: Type,
+        span: Span,
+    },
     SelfValue {
         ty: Type,
         span: Span,
@@ -211,6 +221,8 @@ impl Expr {
             | Self::String { span, .. }
             | Self::Bits { span, .. }
             | Self::Null { span, .. }
+            | Self::This { span, .. }
+            | Self::Start { span, .. }
             | Self::SelfValue { span, .. }
             | Self::SelfField { span, .. }
             | Self::AddressOf { span, .. }
@@ -246,6 +258,8 @@ impl Expr {
             | Self::String { ty, .. }
             | Self::Bits { ty, .. }
             | Self::Null { ty, .. }
+            | Self::This { ty, .. }
+            | Self::Start { ty, .. }
             | Self::SelfValue { ty, .. }
             | Self::SelfField { ty, .. }
             | Self::AddressOf { ty, .. }
@@ -352,6 +366,7 @@ pub enum Stmt {
     Send {
         signal: String,
         values: Vec<Node>,
+        target: Option<Node>,
         span: Span,
     },
     ReceiveCase {
@@ -700,6 +715,7 @@ impl Lowerer<'_> {
             Action::Send {
                 signal,
                 values,
+                target,
                 span,
             } => Ok(Stmt::Send {
                 signal: signal.clone(),
@@ -707,6 +723,10 @@ impl Lowerer<'_> {
                     .iter()
                     .map(|value| self.lower_expr(value))
                     .collect::<Result<Vec<_>, _>>()?,
+                target: target
+                    .as_ref()
+                    .map(|target| self.lower_expr(target))
+                    .transpose()?,
                 span: *span,
             }),
             Action::DelayCase {
@@ -1335,6 +1355,16 @@ impl Lowerer<'_> {
                 span,
             }),
             AstExpr::Null { .. } => Rc::new(Expr::Null { ty, span }),
+            AstExpr::This { .. } => Rc::new(Expr::This { ty, span }),
+            AstExpr::Start { process, args, .. } => Rc::new(Expr::Start {
+                process: process.clone(),
+                args: args
+                    .iter()
+                    .map(|arg| self.lower_expr(arg))
+                    .collect::<Result<Vec<_>, _>>()?,
+                ty,
+                span,
+            }),
             AstExpr::SelfRef { .. } => Rc::new(Expr::SelfValue { ty, span }),
             AstExpr::AddressOf { target, span } => {
                 let AstExpr::Name { name, .. } = target.as_ref() else {
