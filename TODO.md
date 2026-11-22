@@ -76,10 +76,15 @@ all existing tests pass with no new special cases.
 - [ ] Decide whether to declare and test an MSRV; current policy is stable-only.
 - [ ] Optionally add a stable/nightly matrix once there is a reason.
 
-## 6. Region concurrency
+## 6. Concurrency (post-first-release)
 
+First release policy: **language coverage, not faithful concurrency**. Regions and
+processes are single-threaded/non-preemptive for now; faithful CHILL concurrency is
+deferred.
+
+- [x] Decide first-release policy: keep execution single-threaded.
 - [ ] Design region mutual exclusion and intra-regional lifetimes.
-- [ ] Implement the runtime semantics or explicitly keep regions single-threaded.
+- [ ] Implement a resumable scheduler/VM for processes, signals, and timers.
 - [ ] Support nested regions inside module bodies.
 
 ## 7. Core language coverage
@@ -125,7 +130,7 @@ all existing tests pass with no new special cases.
 - [x] Association `MODIFY` (no parameters) and indexed `ACCESS (range) CHARS`,
       indexed `CONNECT`/`READRECORD`/`WRITERECORD`, record-range checks, and
       `INDEXABLE` reporting.
-- [ ] Processes, signals, and timers.
+- [-] Processes, signals, and timers: deferred to post-first-release concurrency work.
 - [x] `POWERSET` of `INT` / `BOOL` / `CHAR` with literals, ranges, union,
       intersection, difference, equality/ordering, and `IN`.
 - [x] Named `SET (...)` modes with unnumbered and numbered elements.
@@ -143,7 +148,8 @@ all existing tests pass with no new special cases.
       mode ID.
 - [ ] Moreta constructors/destructors, `SELF`, task/region object modes; generic
       `SYN`/`PROC` parameters and region/process templates.
-- [ ] Processes/signals/timers: deferred pending a resumable/concurrent runtime.
+- [ ] Faithful processes/signals/timers and region mutual exclusion: deferred pending
+      a resumable/concurrent runtime (post-first-release).
 
 ## 8. Cleanup
 

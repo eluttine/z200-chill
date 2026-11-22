@@ -156,3 +156,16 @@ nested spec modules/regions.
 See [contexts.md](contexts.md).
 
 ---
+
+## 10.16 First-release concurrency policy (resolved)
+
+The first release targets **language coverage and static semantics**, not faithful
+concurrent execution. `z200c` remains a single-threaded, non-preemptive interpreter:
+
+- regions do not implement mutual exclusion or waiting queues;
+- processes, signals, events, delays, and timers are not executed faithfully;
+- no resumable continuation or scheduler is required for the first release.
+
+Faithful CHILL concurrency needs an explicit execution-state machine or async runtime
+and is deferred to a post-first-release milestone. This also defers moreta task/region
+object modes.

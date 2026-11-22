@@ -101,7 +101,8 @@ Not implemented yet (rejected or deferred with a diagnostic):
 - standard `READTEXT`/`WRITETEXT` and associations (z200c instead provides the
   implementation-defined `WRITE`, `WRITELINE`, and `READLINE` below);
 - region concurrency/mutual exclusion;
-- processes, timers, powersets, references, and generics.
+- faithful processes/signals/timers (first release is single-threaded);
+- references and generics beyond the supported generic procedure/module templates.
 
 The interpreter is a bootstrap for validating semantics; native code generation is a
 later milestone.
