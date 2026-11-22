@@ -1885,7 +1885,7 @@ impl<'a> Parser<'a> {
 
         let span = target.span();
         let callee = match target {
-            Expr::Apply { .. } => target,
+            Expr::Apply { .. } | Expr::MethodCall { .. } => target,
             _ => return Err(Error::new(span, "expected assignment or procedure call")),
         };
         self.finish_action(Action::Call { callee, span }, span)

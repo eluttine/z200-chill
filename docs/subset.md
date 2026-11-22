@@ -628,16 +628,20 @@ ASSERT p.x = 1;
 
 - Each object has its own variable components.
 - Variable components are accessed and assigned with `.`.
-- Procedure components may be defined and called as value-returning methods:
+- Procedure components may be defined and called as methods:
   ```chill
   ASSERT counter.Inc(2) = 3;
+  counter.Reset();
   ```
+- Both value-returning and non-value method actions are supported.
 - Method bodies see the object's components; mutations are written back to the object.
+- Component `DCL ... INIT := ...` initializers run when an object is declared and may
+  reference earlier components.
 - Component modes/signatures are resolved when the module mode is defined.
 - Whole-object assignment uses value-copy semantics.
 
-Not implemented yet: module mode specifications, non-value method calls as actions,
-inheritance, invariants, component `INIT` evaluation, and object constructors.
+Not implemented yet: module mode specifications, inheritance, invariants, and
+constructors/destructors.
 
 ## 7. Modules and visibility
 

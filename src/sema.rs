@@ -1042,6 +1042,7 @@ impl Checker {
                         }
                         self.scopes.push(component_scope);
                         let result = (|| {
+                            self.check_initializers(declarations)?;
                             for declaration in declarations {
                                 if let Declaration::Proc(proc_def) = declaration {
                                     self.check_proc(proc_def)?;
@@ -1495,11 +1496,25 @@ impl Checker {
                 Ok(())
             }
             Action::Call { callee, span } => {
-                let Expr::Apply { name, args, .. } = callee else {
-                    return Err(Error::new(*span, "expected a procedure call"));
-                };
-                self.check_apply(name, args, *span, false)?;
-                Ok(())
+                if let Expr::MethodCall {
+                    base,
+                    method,
+                    args,
+                    span: call_span,
+                } = callee
+                {
+                    let result = self.check_method_call(base, method, args, *call_span, false)?;
+                    if result.is_none() {
+                        self.types.insert(*call_span, Type::Bool);
+                    }
+                    Ok(())
+                } else {
+                    let Expr::Apply { name, args, .. } = callee else {
+                        return Err(Error::new(*span, "expected a procedure call"));
+                    };
+                    self.check_apply(name, args, *span, false)?;
+                    Ok(())
+                }
             }
             Action::Return { value, span } => self.check_return(value.as_ref(), *span),
             Action::Result { value, span } => self.check_result(value, *span),
@@ -1852,6 +1867,66 @@ impl Checker {
         }))
     }
 
+    fn check_method_call(
+        &mut self,
+        base: &Expr,
+        method: &str,
+        args: &[Expr],
+        span: Span,
+        require_result: bool,
+    ) -> Result<Option<Type>, Error> {
+        let Expr::Name {
+            span: name_span, ..
+        } = base
+        else {
+            return Err(Error::new(
+                base.span(),
+                "module-mode method calls currently require a named object",
+            ));
+        };
+        let base_ty = self.check_expr(base)?;
+        let Type::Moreta(id) = base_ty else {
+            return Err(Error::new(
+                *name_span,
+                "method call requires a module-mode object",
+            ));
+        };
+        let Some((signature, proc_span)) = self.modes.moreta_proc(id, method) else {
+            return Err(Error::new(
+                span,
+                format!("unknown procedure component `{method}`"),
+            ));
+        };
+        if signature.params.len() != args.len() {
+            return Err(Error::new(
+                span,
+                format!(
+                    "procedure component `{method}` expects {} argument(s), found {}",
+                    signature.params.len(),
+                    args.len()
+                ),
+            ));
+        }
+        for (arg, param_ty) in args.iter().zip(&signature.params) {
+            let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
+            self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
+        }
+        self.resolutions.insert(
+            span,
+            ApplyResolution::Method {
+                proc_span,
+                result: signature.result,
+            },
+        );
+        if require_result && signature.result.is_none() {
+            return Err(Error::new(
+                span,
+                format!("procedure component `{method}` does not return a value"),
+            ));
+        }
+        Ok(signature.result)
+    }
+
     fn check_field(&mut self, base: &Expr, field: &str, span: Span) -> Result<Type, Error> {
         let base_ty = self.check_expr(base)?;
         if let Type::Moreta(id) = base_ty {
@@ -2044,57 +2119,9 @@ impl Checker {
                 method,
                 args,
                 span,
-            } => {
-                let Expr::Name {
-                    span: name_span, ..
-                } = base.as_ref()
-                else {
-                    return Err(Error::new(
-                        base.span(),
-                        "module-mode method calls currently require a named object",
-                    ));
-                };
-                let base_ty = self.check_expr(base)?;
-                let Type::Moreta(id) = base_ty else {
-                    return Err(Error::new(
-                        *name_span,
-                        "method call requires a module-mode object",
-                    ));
-                };
-                let Some((signature, proc_span)) = self.modes.moreta_proc(id, method) else {
-                    return Err(Error::new(
-                        *span,
-                        format!("unknown procedure component `{method}`"),
-                    ));
-                };
-                if signature.params.len() != args.len() {
-                    return Err(Error::new(
-                        *span,
-                        format!(
-                            "procedure component `{method}` expects {} argument(s), found {}",
-                            signature.params.len(),
-                            args.len()
-                        ),
-                    ));
-                }
-                for (arg, param_ty) in args.iter().zip(&signature.params) {
-                    let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
-                    self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
-                }
-                self.resolutions.insert(
-                    *span,
-                    ApplyResolution::Method {
-                        proc_span,
-                        result: signature.result,
-                    },
-                );
-                signature.result.ok_or_else(|| {
-                    Error::new(
-                        *span,
-                        format!("procedure component `{method}` does not return a value"),
-                    )
-                })
-            }
+            } => self
+                .check_method_call(base, method, args, *span, true)
+                .map(|result| result.expect("require_result method always has a type")),
             Expr::ArraySlice {
                 name,
                 first,

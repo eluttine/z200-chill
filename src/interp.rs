@@ -219,6 +219,7 @@ pub fn run_checked(
         reaches: info.reaches,
         modules_by_span: collect_modules_by_span(&program),
         proc_defs: collect_proc_defs(&program),
+        moreta_decls: collect_moreta_decls(&program),
         package_names: program
             .modules
             .iter()
@@ -365,6 +366,7 @@ struct Interpreter<'a> {
     reaches: program::ReachTree,
     modules_by_span: HashMap<Span, &'a Module>,
     proc_defs: HashMap<Span, &'a ProcDef>,
+    moreta_decls: HashMap<types::MoretaId, &'a [Declaration]>,
     package_names: Vec<Option<String>>,
     /// Scopes for nested modules declared in a module body, keyed by span.
     nested_scopes: HashMap<Span, Scope<'a>>,
@@ -694,6 +696,40 @@ impl<'a> Interpreter<'a> {
         Ok(())
     }
 
+    fn create_moreta_object(&mut self, id: types::MoretaId, span: Span) -> Result<Value, Error> {
+        let Some(declarations) = self.moreta_decls.get(&id).copied() else {
+            return Err(Error::new(
+                span,
+                "internal: missing module mode declarations",
+            ));
+        };
+        let components: Vec<Declaration> = declarations
+            .iter()
+            .filter(|declaration| matches!(declaration, Declaration::Var(_)))
+            .cloned()
+            .collect();
+        self.locals.push(Scope::default());
+        let result = (|| {
+            self.declare_local_vars(&components)?;
+            self.initialize_declarations(&components)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.locals.pop();
+            return Err(error);
+        }
+        let scope = self.locals.pop().expect("module mode scope");
+        let mut components = Vec::new();
+        for component in &self.modes.get_moreta(id).components {
+            if let crate::modes::MoretaComponent::Var { name, .. } = component {
+                if let Some(cell) = scope.vars.get(name) {
+                    components.push((name.clone(), cell.borrow().value.clone()));
+                }
+            }
+        }
+        Ok(Value::Moreta(components))
+    }
+
     fn initialize_declarations(&mut self, declarations: &[Declaration]) -> Result<(), Error> {
         for declaration in declarations {
             let Declaration::Var(vars) = declaration else {
@@ -702,6 +738,9 @@ impl<'a> Interpreter<'a> {
             for var in vars {
                 if let Some(init) = &var.init {
                     let value = self.eval_expr(&init.value)?;
+                    self.assign_var(&var.name, value, var.span)?;
+                } else if let Ok(Type::Moreta(id)) = self.resolve_mode(&var.mode) {
+                    let value = self.create_moreta_object(id, var.span)?;
                     self.assign_var(&var.name, value, var.span)?;
                 }
             }
@@ -3153,6 +3192,33 @@ fn collect_modules_by_span(program: &Program) -> HashMap<Span, &Module> {
         collect_module_span(module, &mut map);
     }
     map
+}
+
+fn collect_moreta_decls(program: &Program) -> HashMap<types::MoretaId, &[Declaration]> {
+    let mut map = HashMap::new();
+    let mut next = 0usize;
+    for module in &program.modules {
+        collect_module_moreta_decls(module, &mut next, &mut map);
+    }
+    map
+}
+
+fn collect_module_moreta_decls<'a>(
+    module: &'a Module,
+    next: &mut usize,
+    map: &mut HashMap<types::MoretaId, &'a [Declaration]>,
+) {
+    for declaration in &module.declarations {
+        if let Declaration::Mode(mode_def) = declaration {
+            if let crate::ast::ModeDefinitionBody::Moreta { declarations, .. } = &mode_def.body {
+                map.insert(types::MoretaId(*next), declarations.as_slice());
+                *next += 1;
+            }
+        }
+    }
+    walk_action_modules(&module.actions, &mut |child| {
+        collect_module_moreta_decls(child, next, map);
+    });
 }
 
 fn collect_proc_defs(program: &Program) -> HashMap<Span, &ProcDef> {
