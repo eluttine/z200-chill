@@ -308,9 +308,190 @@ pub fn normalize(program: &Program) -> Result<Program, Error> {
     apply_virtual_grants(&mut normalized.modules)?;
     for module in &mut normalized.modules {
         expand_module_generics(module)?;
+        merge_moreta_specs(module)?;
     }
     expand_generic_modules(&mut normalized)?;
     Ok(normalized)
+}
+
+fn merge_moreta_specs(module: &mut Module) -> Result<(), Error> {
+    let mut specs = HashMap::new();
+    let mut bodies = HashMap::new();
+    for (index, declaration) in module.declarations.iter().enumerate() {
+        if let Declaration::Mode(mode_def) = declaration {
+            if let crate::ast::ModeDefinitionBody::Moreta { spec, .. } = &mode_def.body {
+                if *spec {
+                    specs.insert(mode_def.name.clone(), index);
+                } else {
+                    bodies.insert(mode_def.name.clone(), index);
+                }
+            }
+        }
+    }
+    let mut remove = HashSet::new();
+    for (name, body_index) in &bodies {
+        let Some(spec_index) = specs.get(name).copied() else {
+            continue;
+        };
+        let body_mode = match module.declarations[*body_index].clone() {
+            Declaration::Mode(mode_def) => mode_def,
+            _ => unreachable!(),
+        };
+        let spec_mode = match module.declarations[spec_index].clone() {
+            Declaration::Mode(mode_def) => mode_def,
+            _ => unreachable!(),
+        };
+        let body_declarations = match body_mode.body {
+            crate::ast::ModeDefinitionBody::Moreta { declarations, .. } => declarations,
+            _ => unreachable!(),
+        };
+        let (spec_declarations, spec_bases) = match spec_mode.body {
+            crate::ast::ModeDefinitionBody::Moreta {
+                declarations,
+                bases,
+                ..
+            } => (declarations, bases),
+            _ => unreachable!(),
+        };
+        let body_proc_names: HashSet<String> = body_declarations
+            .iter()
+            .filter_map(|declaration| match declaration {
+                Declaration::Proc(proc_def) => Some(proc_def.name.clone()),
+                _ => None,
+            })
+            .collect();
+        for declaration in &spec_declarations {
+            if let Declaration::ProcSignature(signature) = declaration {
+                if !body_proc_names.contains(&signature.name) {
+                    return Err(Error::new(
+                        signature.span,
+                        format!(
+                            "module mode body `{name}` is missing procedure component `{}`",
+                            signature.name
+                        ),
+                    ));
+                }
+            }
+        }
+        let body_names: HashSet<String> = body_declarations
+            .iter()
+            .filter_map(declaration_name)
+            .collect();
+        let mut merged: Vec<Declaration> = spec_declarations
+            .into_iter()
+            .filter(|declaration| {
+                declaration_name(declaration).is_none_or(|name| !body_names.contains(&name))
+            })
+            .collect();
+        merged.extend(body_declarations);
+        if let Declaration::Mode(mode_def) = &mut module.declarations[*body_index] {
+            if let crate::ast::ModeDefinitionBody::Moreta {
+                spec,
+                bases,
+                declarations,
+                ..
+            } = &mut mode_def.body
+            {
+                *spec = false;
+                if bases.is_empty() {
+                    *bases = spec_bases;
+                }
+                *declarations = merged;
+            }
+        }
+        remove.insert(spec_index);
+    }
+    // A spec without a body remains as an abstract module mode.
+    for spec_index in specs.values() {
+        if remove.contains(spec_index) {
+            continue;
+        }
+        if let Declaration::Mode(mode_def) = &mut module.declarations[*spec_index] {
+            if let crate::ast::ModeDefinitionBody::Moreta { spec, .. } = &mut mode_def.body {
+                *spec = false;
+            }
+        }
+    }
+    let mut index = 0;
+    module.declarations.retain(|_| {
+        let keep = !remove.contains(&index);
+        index += 1;
+        keep
+    });
+    for action in &mut module.actions {
+        merge_moreta_specs_in_action(action)?;
+    }
+    Ok(())
+}
+
+fn declaration_name(declaration: &Declaration) -> Option<String> {
+    match declaration {
+        Declaration::Var(vars) => vars.first().map(|var| var.name.clone()),
+        Declaration::Proc(proc_def) => Some(proc_def.name.clone()),
+        Declaration::ProcSignature(signature) => Some(signature.name.clone()),
+        _ => None,
+    }
+}
+
+fn merge_moreta_specs_in_action(action: &mut Action) -> Result<(), Error> {
+    match action {
+        Action::Module(module) => merge_moreta_specs(module),
+        Action::Begin { actions, .. } | Action::Do { body: actions, .. } => {
+            for action in actions {
+                merge_moreta_specs_in_action(action)?;
+            }
+            Ok(())
+        }
+        Action::If {
+            branches,
+            else_actions,
+            ..
+        } => {
+            for branch in branches {
+                for action in &mut branch.body {
+                    merge_moreta_specs_in_action(action)?;
+                }
+            }
+            if let Some(actions) = else_actions {
+                for action in actions {
+                    merge_moreta_specs_in_action(action)?;
+                }
+            }
+            Ok(())
+        }
+        Action::Case {
+            alternatives,
+            else_actions,
+            ..
+        } => {
+            for alternative in alternatives {
+                for action in &mut alternative.body {
+                    merge_moreta_specs_in_action(action)?;
+                }
+            }
+            if let Some(actions) = else_actions {
+                for action in actions {
+                    merge_moreta_specs_in_action(action)?;
+                }
+            }
+            Ok(())
+        }
+        Action::Labelled { action, .. } => merge_moreta_specs_in_action(action),
+        Action::Handled { handler, .. } => {
+            for alternative in &mut handler.alternatives {
+                for action in &mut alternative.actions {
+                    merge_moreta_specs_in_action(action)?;
+                }
+            }
+            if let Some(actions) = &mut handler.else_actions {
+                for action in actions {
+                    merge_moreta_specs_in_action(action)?;
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 fn expand_generic_modules(program: &mut Program) -> Result<(), Error> {

@@ -788,16 +788,15 @@ impl<'a> Parser<'a> {
         } else if self.at_keyword(Keyword::Module) {
             let body_start = self.current_span();
             self.advance();
-            if self.at_keyword(Keyword::Spec) {
-                return Err(Error::coded(
-                    "E0206",
-                    body_start,
-                    "moreta module mode specifications are not implemented yet",
-                ));
-            }
-            if self.at_keyword(Keyword::Body) {
+            let spec = if self.at_keyword(Keyword::Spec) {
                 self.advance();
-            }
+                true
+            } else {
+                if self.at_keyword(Keyword::Body) {
+                    self.advance();
+                }
+                false
+            };
             let mut bases = Vec::new();
             if self.at_keyword(Keyword::BasedOn) {
                 self.advance();
@@ -811,7 +810,7 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            let declarations = self.parse_declarations(false, false)?;
+            let declarations = self.parse_declarations(spec, spec)?;
             self.expect_keyword(Keyword::End)?;
             if let Some(TokenKind::Identifier(trailing)) = self.kind() {
                 if trailing != &name {
@@ -823,6 +822,7 @@ impl<'a> Parser<'a> {
                 self.advance();
             }
             ModeDefinitionBody::Moreta {
+                spec,
                 bases,
                 declarations,
                 span: Span::new(self.source, body_start.start, self.current_span().start),

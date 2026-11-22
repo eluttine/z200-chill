@@ -157,6 +157,7 @@ pub enum ModeDefinitionBody {
     Struct(Vec<FieldDef>),
     Set(Vec<SetElement>),
     Moreta {
+        spec: bool,
         bases: Vec<String>,
         declarations: Vec<Declaration>,
         span: Span,

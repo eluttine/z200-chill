@@ -637,14 +637,17 @@ ASSERT p.x = 1;
 - Method bodies see the object's components; mutations are written back to the object.
 - Component `DCL ... INIT := ...` initializers run when an object is declared and may
   reference earlier components.
+- `MODULE SPEC` declares the interface components (variables and procedure
+  signatures). A matching `MODULE BODY` in the same reach supplies implementations;
+  every interface procedure must have a body component.
 - `BASED_ON Base` derives a module mode from another module mode. Base variable and
   procedure components are inherited; same-named components in the derived body
   override the base.
 - Component modes/signatures are resolved when the module mode is defined.
 - Whole-object assignment uses value-copy semantics.
 
-Not implemented yet: module mode specifications, base component initializer replay,
-invariants, and constructors/destructors.
+Not implemented yet: base component initializer replay, invariants, and
+constructors/destructors.
 
 ## 7. Modules and visibility
 
