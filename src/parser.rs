@@ -396,6 +396,7 @@ impl<'a> Parser<'a> {
                     | TokenKind::String(_)
                     | TokenKind::WideChar(_)
                     | TokenKind::WideString(_)
+                    | TokenKind::Bits(_)
                     | TokenKind::Minus
                     | TokenKind::LParen
                     | TokenKind::LParenColon
@@ -1373,8 +1374,17 @@ impl<'a> Parser<'a> {
                 span: Span::new(self.source, start.start, element.span.end),
             });
         }
-        if self.at_keyword(Keyword::Chars) || self.at_keyword(Keyword::WChars) {
-            let wide = self.at_keyword(Keyword::WChars);
+        if self.at_keyword(Keyword::Chars)
+            || self.at_keyword(Keyword::WChars)
+            || self.at_keyword(Keyword::Bools)
+        {
+            let kind = if self.at_keyword(Keyword::WChars) {
+                "WCHARS"
+            } else if self.at_keyword(Keyword::Bools) {
+                "BOOLS"
+            } else {
+                "CHARS"
+            };
             let span = self.current_span();
             self.advance();
             let length = if self.at_lparen() {
@@ -1398,10 +1408,10 @@ impl<'a> Parser<'a> {
                     return Err(Error::coded(
                         "E0205",
                         span,
-                        if wide {
-                            "VARYING requires a WCHARS(n) length"
-                        } else {
-                            "VARYING requires a CHARS(n) length"
+                        match kind {
+                            "WCHARS" => "VARYING requires a WCHARS(n) length",
+                            "BOOLS" => "VARYING requires a BOOLS(n) length",
+                            _ => "VARYING requires a CHARS(n) length",
                         },
                     ));
                 }
@@ -1410,7 +1420,7 @@ impl<'a> Parser<'a> {
                 false
             };
             return Ok(ModeRef {
-                name: if wide { "WCHARS" } else { "CHARS" }.to_owned(),
+                name: kind.to_owned(),
                 arrays: Vec::new(),
                 string_length: length,
                 varying,
@@ -2126,6 +2136,14 @@ impl<'a> Parser<'a> {
             }
             TokenKind::WideString(value) => {
                 let expr = Expr::WideString {
+                    value: value.clone(),
+                    span,
+                };
+                self.advance();
+                Ok(expr)
+            }
+            TokenKind::Bits(value) => {
+                let expr = Expr::Bits {
                     value: value.clone(),
                     span,
                 };

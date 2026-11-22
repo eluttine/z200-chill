@@ -32,6 +32,7 @@ pub enum TokenKind {
     String(String),
     WideChar(char),
     WideString(String),
+    Bits(String),
     Keyword(Keyword),
 
     Semicolon,
@@ -236,6 +237,7 @@ impl fmt::Display for TokenKind {
             Self::String(_) => f.write_str("string literal"),
             Self::WideChar(value) => write!(f, "wide character literal `{value}`"),
             Self::WideString(_) => f.write_str("wide string literal"),
+            Self::Bits(_) => f.write_str("bit string literal"),
             Self::Keyword(keyword) => write!(f, "`{keyword}`"),
             Self::Semicolon => f.write_str("`;`"),
             Self::Comma => f.write_str("`,`"),
@@ -542,21 +544,31 @@ impl<'a> Lexer<'a> {
         let digits_start = self.pos;
         loop {
             match self.peek() {
-                Some('\'') => break,
-                Some('\n') | None => {
-                    return Err(Error::coded(
-                        "E0102",
-                        start,
-                        "unterminated based integer literal",
-                    ));
-                }
-                Some(_) => {
+                Some(ch) if is_digit_for_base(ch, base) || ch == '_' => {
                     self.bump();
                 }
+                _ => break,
             }
         }
         let digits = &self.source[digits_start..self.pos];
-        self.bump(); // closing apostrophe
+
+        if self.peek() == Some('\'') {
+            if prefix.eq_ignore_ascii_case(&'D') {
+                // Retain support for the qualified decimal integer spelling
+                // `D'123'`; the standard's decimal integer has no closing quote.
+                self.bump();
+                if digits.chars().all(|ch| ch == '_') {
+                    return Err(Error::coded(
+                        "E0102",
+                        start,
+                        "based integer literal must contain at least one digit",
+                    ));
+                }
+                return parse_integer(digits, base, start);
+            }
+            self.bump(); // closing apostrophe
+            return Ok(TokenKind::Bits(bit_string(digits, base)));
+        }
 
         if digits.chars().all(|ch| ch == '_') {
             return Err(Error::coded(
@@ -565,7 +577,6 @@ impl<'a> Lexer<'a> {
                 "based integer literal must contain at least one digit",
             ));
         }
-
         parse_integer(digits, base, start)
     }
 
@@ -787,6 +798,33 @@ fn is_based_prefix(ch: char) -> bool {
     matches!(ch, 'B' | 'b' | 'D' | 'd' | 'O' | 'o' | 'H' | 'h')
 }
 
+fn is_digit_for_base(ch: char, base: u32) -> bool {
+    match base {
+        2 => matches!(ch, '0' | '1'),
+        8 => ('0'..='7').contains(&ch),
+        10 => ch.is_ascii_digit(),
+        16 => ch.is_ascii_hexdigit(),
+        _ => false,
+    }
+}
+
+fn bit_string(digits: &str, base: u32) -> String {
+    let width = match base {
+        2 => 1,
+        8 => 3,
+        16 => 4,
+        _ => 1,
+    };
+    let mut bits = String::new();
+    for ch in digits.chars().filter(|ch| *ch != '_') {
+        let value = ch.to_digit(base).unwrap_or(0);
+        for shift in (0..width).rev() {
+            bits.push(if (value >> shift) & 1 == 1 { '1' } else { '0' });
+        }
+    }
+    bits
+}
+
 fn parse_integer(text: &str, base: u32, offset: usize) -> Result<TokenKind, Error> {
     let cleaned: String = text.chars().filter(|ch| *ch != '_').collect();
     if cleaned.is_empty() {
@@ -881,7 +919,7 @@ mod tests {
             }]
         );
         assert_eq!(
-            kinds("D'1_000' H'FF' B'1010' O'17'"),
+            kinds("D'1_000' H'FF B'1010 O'17"),
             vec![
                 TokenKind::Integer {
                     value: 1000,
@@ -893,6 +931,14 @@ mod tests {
                 },
                 TokenKind::Integer { value: 10, base: 2 },
                 TokenKind::Integer { value: 15, base: 8 },
+            ]
+        );
+        assert_eq!(
+            kinds("B'1010' O'53_64' H'ff'"),
+            vec![
+                TokenKind::Bits("1010".to_owned()),
+                TokenKind::Bits("101011110100".to_owned()),
+                TokenKind::Bits("11111111".to_owned()),
             ]
         );
     }

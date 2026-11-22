@@ -46,6 +46,8 @@ pub enum Scalar {
     WChar,
     WString,
     WBoundedString { length: usize, varying: bool },
+    Bits,
+    BoundedBits { length: usize, varying: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -69,6 +71,10 @@ impl ArrayElement {
             Type::WString => Some(Self::Scalar(Scalar::WString)),
             Type::WBoundedString { length, varying } => {
                 Some(Self::Scalar(Scalar::WBoundedString { length, varying }))
+            }
+            Type::Bits => Some(Self::Scalar(Scalar::Bits)),
+            Type::BoundedBits { length, varying } => {
+                Some(Self::Scalar(Scalar::BoundedBits { length, varying }))
             }
             Type::Struct(id) => Some(Self::Struct(id)),
             Type::Association
@@ -188,6 +194,13 @@ pub enum Type {
         length: usize,
         varying: bool,
     },
+    /// An unbounded bit string (`BOOLS`).
+    Bits,
+    /// `BOOLS(n)` fixed or `BOOLS(n) VARYING` bounded bit string mode.
+    BoundedBits {
+        length: usize,
+        varying: bool,
+    },
     Struct(ModeId),
     Set(SetId),
     Moreta(MoretaId),
@@ -239,6 +252,8 @@ impl Type {
             Self::WBoundedString { length, varying } => {
                 Some(Scalar::WBoundedString { length, varying })
             }
+            Self::Bits => Some(Scalar::Bits),
+            Self::BoundedBits { length, varying } => Some(Scalar::BoundedBits { length, varying }),
             Self::Association
             | Self::Access(_)
             | Self::PowerSet(_)
@@ -264,6 +279,8 @@ impl Type {
             Scalar::WChar => Self::WChar,
             Scalar::WString => Self::WString,
             Scalar::WBoundedString { length, varying } => Self::WBoundedString { length, varying },
+            Scalar::Bits => Self::Bits,
+            Scalar::BoundedBits { length, varying } => Self::BoundedBits { length, varying },
         }
     }
 
@@ -281,6 +298,9 @@ impl Type {
             Self::WString => "wide character string",
             Self::WBoundedString { varying: true, .. } => "varying wide character string",
             Self::WBoundedString { .. } => "fixed wide character string",
+            Self::Bits => "bit string",
+            Self::BoundedBits { varying: true, .. } => "varying bit string",
+            Self::BoundedBits { .. } => "fixed bit string",
             Self::Struct(_) => "structure",
             Self::Set(_) => "set",
             Self::Moreta(_) => "module mode object",
@@ -307,6 +327,7 @@ pub fn resolve_mode(name: &str) -> Option<Type> {
         "CHARS" => Some(Type::String),
         "WCHAR" => Some(Type::WChar),
         "WCHARS" => Some(Type::WString),
+        "BOOLS" => Some(Type::Bits),
         "ASSOCIATION" => Some(Type::Association),
         _ => None,
     }
@@ -364,6 +385,10 @@ pub fn resolve_mode_ref(
     let base = match mode.string_length {
         Some(length) => match base {
             Type::WString => Type::WBoundedString {
+                length,
+                varying: mode.varying,
+            },
+            Type::Bits => Type::BoundedBits {
                 length,
                 varying: mode.varying,
             },

@@ -482,6 +482,24 @@ fn parse_external_type(
         };
         return Ok(program::ExternalType::Builtin(Type::Access(access)));
     }
+    if let Some(rest) = name.strip_prefix("BOOLS(") {
+        let (length, suffix) = rest
+            .split_once(')')
+            .ok_or_else(|| format!("invalid string mode `{name}` in grant file"))?;
+        let length = length
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| format!("invalid string length in `{name}`"))?;
+        let varying = match suffix.trim() {
+            "" => false,
+            "VARYING" => true,
+            other => return Err(format!("invalid string attribute `{other}` in `{name}`")),
+        };
+        return Ok(program::ExternalType::Builtin(Type::BoundedBits {
+            length,
+            varying,
+        }));
+    }
     if let Some(rest) = name.strip_prefix("WCHARS(") {
         let (length, suffix) = rest
             .split_once(')')
@@ -575,6 +593,15 @@ fn type_name(ty: Type) -> String {
             length,
             varying: false,
         } => format!("WCHARS({length})"),
+        Type::Bits => "BOOLS".to_owned(),
+        Type::BoundedBits {
+            length,
+            varying: true,
+        } => format!("BOOLS({length}) VARYING"),
+        Type::BoundedBits {
+            length,
+            varying: false,
+        } => format!("BOOLS({length})"),
         // Structure modes must be referenced symbolically; this branch should
         // not be reached because portable types use `ExternalType::Mode`.
         Type::Struct(_) => "STRUCT".to_owned(),
@@ -997,6 +1024,15 @@ END M;
             },
             Type::WChar,
             Type::WString,
+            Type::Bits,
+            Type::BoundedBits {
+                length: 12,
+                varying: false,
+            },
+            Type::BoundedBits {
+                length: 12,
+                varying: true,
+            },
         ] {
             let text = type_name(ty);
             assert_eq!(

@@ -98,8 +98,8 @@ implementation-defined built-in routines, which Z.200 permits. `READTEXT`/`WRITE
 support literal format text, conversion/editing codes, variable widths, io lists, and
 I/O control clauses. Bounded text modes (`CHARS(n)`, `CHARS(n) VARYING`) and a
 simplified text-file association/access model are also implemented. `WCHAR`/`WCHARS`
-modes and wide literals are implemented, but `WTEXT`, full association attributes,
-and arbitrary file models remain future work.
+modes, wide literals, and bit strings are implemented, but `WTEXT`, full association
+attributes, and arbitrary file models remain future work.
 
 ## 10.13 Exceptions (partial, resolved for now)
 

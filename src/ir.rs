@@ -48,6 +48,11 @@ pub enum Expr {
         ty: Type,
         span: Span,
     },
+    Bits {
+        value: String,
+        ty: Type,
+        span: Span,
+    },
     Name {
         name: String,
         ty: Type,
@@ -172,6 +177,7 @@ impl Expr {
             | Self::Bool { span, .. }
             | Self::Char { span, .. }
             | Self::String { span, .. }
+            | Self::Bits { span, .. }
             | Self::Name { span, .. }
             | Self::SetValue { span, .. }
             | Self::Conversion { span, .. }
@@ -200,6 +206,7 @@ impl Expr {
             | Self::Bool { ty, .. }
             | Self::Char { ty, .. }
             | Self::String { ty, .. }
+            | Self::Bits { ty, .. }
             | Self::Name { ty, .. }
             | Self::SetValue { ty, .. }
             | Self::Conversion { ty, .. }
@@ -1073,6 +1080,11 @@ impl Lowerer<'_> {
                 span,
             }),
             AstExpr::WideString { value, .. } => Rc::new(Expr::String {
+                value: value.clone(),
+                ty,
+                span,
+            }),
+            AstExpr::Bits { value, .. } => Rc::new(Expr::Bits {
                 value: value.clone(),
                 ty,
                 span,

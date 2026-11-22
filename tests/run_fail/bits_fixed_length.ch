@@ -1,0 +1,3 @@
+M: MODULE
+  DCL s BOOLS(2) INIT := B'101';
+END M;

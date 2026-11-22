@@ -1382,16 +1382,19 @@ impl Checker {
                 .ok_or_else(|| Error::coded("E0400", mode.span, "unsupported array dimensions"));
         }
         if let Some(length) = mode.string_length {
-            return Ok(if mode.name == "WCHARS" {
-                Type::WBoundedString {
+            return Ok(match mode.name.as_str() {
+                "WCHARS" => Type::WBoundedString {
                     length,
                     varying: mode.varying,
-                }
-            } else {
-                Type::BoundedString {
+                },
+                "BOOLS" => Type::BoundedBits {
                     length,
                     varying: mode.varying,
-                }
+                },
+                _ => Type::BoundedString {
+                    length,
+                    varying: mode.varying,
+                },
             });
         }
         for scope in self.scopes[self.module_floor..].iter().rev() {
@@ -2190,6 +2193,7 @@ impl Checker {
                 }
                 Ok(Type::WString)
             }
+            Expr::Bits { .. } => Ok(Type::Bits),
             Expr::ArrayTuple { elements, .. } => {
                 for element in elements {
                     self.check_expr(&element.value)?;
@@ -2245,11 +2249,16 @@ impl Checker {
                     UnaryOp::Not => {
                         if ty == Type::Bool {
                             Ok(Type::Bool)
+                        } else if is_bits_type(ty) {
+                            Ok(ty)
                         } else {
                             Err(Error::coded(
                                 "E0404",
                                 *span,
-                                format!("NOT requires BOOL, found {}", ty.describe()),
+                                format!(
+                                    "NOT requires BOOL or a bit string, found {}",
+                                    ty.describe()
+                                ),
                             ))
                         }
                     }
@@ -2312,8 +2321,14 @@ impl Checker {
     ) -> Result<Type, Error> {
         match op {
             BinaryOp::And | BinaryOp::AndIf | BinaryOp::Or | BinaryOp::OrIf | BinaryOp::Xor => {
-                self.expect_bool_pair(left, right, span)?;
-                Ok(Type::Bool)
+                if matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
+                    && bits_compatible(left, right)
+                {
+                    Ok(left)
+                } else {
+                    self.expect_bool_pair(left, right, span)?;
+                    Ok(Type::Bool)
+                }
             }
             BinaryOp::Eq | BinaryOp::Ne => {
                 if left.is_int() && right.is_int() {
@@ -2330,6 +2345,7 @@ impl Checker {
                             | Type::Float
                     ))
                     || strings_compatible(left, right)
+                    || bits_compatible(left, right)
                     || (matches!(left, Type::PowerSet(_)) && left == right)
                     || arrays_compatible(left, right)
                 {
@@ -2355,6 +2371,7 @@ impl Checker {
                     || (left == Type::Float && right == Type::Float)
                     || (matches!(left, Type::PowerSet(_)) && left == right))
                     || strings_compatible(left, right)
+                    || bits_compatible(left, right)
                 {
                     Ok(Type::Bool)
                 } else {
@@ -2425,6 +2442,8 @@ impl Checker {
                     } else {
                         Type::String
                     })
+                } else if bits_compatible(left, right) {
+                    Ok(Type::Bits)
                 } else {
                     Err(Error::coded(
                         "E0400",
@@ -3386,6 +3405,8 @@ impl Checker {
             Type::WChar => value == Type::WChar,
             Type::WString => is_wide_string_type(value),
             Type::WBoundedString { .. } => is_wide_string_type(value),
+            Type::Bits => is_bits_type(value),
+            Type::BoundedBits { .. } => is_bits_type(value),
             Type::Struct(id) => value == Type::Struct(id),
             Type::Set(id) => value == Type::Set(id),
             Type::Moreta(id) => value == Type::Moreta(id),
@@ -3525,6 +3546,14 @@ fn is_wide_string_type(ty: Type) -> bool {
 
 fn is_string_type(ty: Type) -> bool {
     is_narrow_string_type(ty) || is_wide_string_type(ty)
+}
+
+fn is_bits_type(ty: Type) -> bool {
+    matches!(ty, Type::Bits | Type::BoundedBits { .. })
+}
+
+fn bits_compatible(left: Type, right: Type) -> bool {
+    is_bits_type(left) && is_bits_type(right)
 }
 
 fn strings_compatible(left: Type, right: Type) -> bool {

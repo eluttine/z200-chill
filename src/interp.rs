@@ -246,6 +246,7 @@ enum Value {
     Bool(bool),
     Char(char),
     String(String),
+    Bits(String),
     Struct(Vec<(String, Value)>),
     Moreta(Vec<(String, Value)>),
     Array { low: i128, values: Vec<Value> },
@@ -1964,6 +1965,7 @@ impl<'a> Interpreter<'a> {
             ir::Expr::Bool { value, .. } => Ok(Value::Bool(*value)),
             ir::Expr::Char { value, .. } => Ok(Value::Char(*value)),
             ir::Expr::String { value, .. } => Ok(Value::String(value.clone())),
+            ir::Expr::Bits { value, .. } => Ok(Value::Bits(value.clone())),
             ir::Expr::Name { name, span, .. } => self.read_var(name, *span),
             ir::Expr::Builtin {
                 builtin,
@@ -2346,7 +2348,20 @@ impl<'a> Interpreter<'a> {
                             self.make_int(negated, type_kind(*ty), *span)
                         }
                     },
-                    UnaryOp::Not => Ok(Value::Bool(!self.as_bool(value, *span)?)),
+                    UnaryOp::Not => match value {
+                        Value::Bool(value) => Ok(Value::Bool(!value)),
+                        Value::Bits(value) => Ok(Value::Bits(
+                            value
+                                .chars()
+                                .map(|bit| if bit == '1' { '0' } else { '1' })
+                                .collect(),
+                        )),
+                        _ => Err(Error::coded(
+                            "E0507",
+                            *span,
+                            "expected a BOOL or bit string value",
+                        )),
+                    },
                 }
             }
             ir::Expr::Field {
@@ -2728,15 +2743,30 @@ impl<'a> Interpreter<'a> {
         span: Span,
     ) -> Result<Value, Error> {
         match op {
-            BinaryOp::And | BinaryOp::AndIf => Ok(Value::Bool(
-                self.as_bool(left, span)? && self.as_bool(right, span)?,
-            )),
-            BinaryOp::Or | BinaryOp::OrIf => Ok(Value::Bool(
-                self.as_bool(left, span)? || self.as_bool(right, span)?,
-            )),
-            BinaryOp::Xor => Ok(Value::Bool(
-                self.as_bool(left, span)? ^ self.as_bool(right, span)?,
-            )),
+            BinaryOp::And | BinaryOp::AndIf => match (left, right) {
+                (Value::Bits(left), Value::Bits(right)) => {
+                    Ok(Value::Bits(bits_binary("and", &left, &right, span)?))
+                }
+                (left, right) => Ok(Value::Bool(
+                    self.as_bool(left, span)? && self.as_bool(right, span)?,
+                )),
+            },
+            BinaryOp::Or | BinaryOp::OrIf => match (left, right) {
+                (Value::Bits(left), Value::Bits(right)) => {
+                    Ok(Value::Bits(bits_binary("or", &left, &right, span)?))
+                }
+                (left, right) => Ok(Value::Bool(
+                    self.as_bool(left, span)? || self.as_bool(right, span)?,
+                )),
+            },
+            BinaryOp::Xor => match (left, right) {
+                (Value::Bits(left), Value::Bits(right)) => {
+                    Ok(Value::Bits(bits_binary("xor", &left, &right, span)?))
+                }
+                (left, right) => Ok(Value::Bool(
+                    self.as_bool(left, span)? ^ self.as_bool(right, span)?,
+                )),
+            },
             BinaryOp::Eq => Ok(Value::Bool(self.values_equal(&left, &right, span)?)),
             BinaryOp::Ne => Ok(Value::Bool(!self.values_equal(&left, &right, span)?)),
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
@@ -2768,10 +2798,11 @@ impl<'a> Interpreter<'a> {
             }
             BinaryOp::Concat => match (left, right) {
                 (Value::String(left), Value::String(right)) => Ok(Value::String(left + &right)),
+                (Value::Bits(left), Value::Bits(right)) => Ok(Value::Bits(left + &right)),
                 _ => Err(Error::coded(
                     "E0507",
                     span,
-                    "`//` requires character strings",
+                    "`//` requires matching character or bit strings",
                 )),
             },
             BinaryOp::Add
@@ -2894,6 +2925,7 @@ impl<'a> Interpreter<'a> {
             (Value::Bool(left), Value::Bool(right)) => Ok(left == right),
             (Value::Char(left), Value::Char(right)) => Ok(left == right),
             (Value::String(left), Value::String(right)) => Ok(left == right),
+            (Value::Bits(left), Value::Bits(right)) => Ok(left == right),
             (Value::PowerSet(left), Value::PowerSet(right)) => Ok(left == right),
             (Value::Set(left), Value::Set(right)) => Ok(left == right),
             (
@@ -2952,6 +2984,7 @@ impl<'a> Interpreter<'a> {
                 .partial_cmp(right)
                 .ok_or_else(|| Error::coded("E0507", span, "cannot order NaN values")),
             (Value::String(left), Value::String(right)) => Ok(left.cmp(right)),
+            (Value::Bits(left), Value::Bits(right)) => Ok(left.cmp(right)),
             (Value::PowerSet(left), Value::PowerSet(right)) => {
                 if left == right {
                     Ok(Ordering::Equal)
@@ -3074,6 +3107,33 @@ impl<'a> Interpreter<'a> {
                     span,
                     "expected a wide character string value",
                 )),
+            },
+            Type::Bits => match value {
+                Value::Bits(value) => Ok(Value::Bits(value)),
+                _ => Err(Error::coded("E0507", span, "expected a bit string value")),
+            },
+            Type::BoundedBits { length, varying } => match value {
+                Value::Bits(value) => {
+                    let actual = value.len();
+                    let fits = if varying {
+                        actual <= length
+                    } else {
+                        actual == length
+                    };
+                    if fits {
+                        Ok(Value::Bits(value))
+                    } else {
+                        Err(Error::coded(
+                            "E0507",
+                            span,
+                            format!(
+                                "string length {actual} does not fit BOOLS({length}){}",
+                                if varying { " VARYING" } else { "" }
+                            ),
+                        ))
+                    }
+                }
+                _ => Err(Error::coded("E0507", span, "expected a bit string value")),
             },
             Type::String => match value {
                 Value::String(value) => Ok(Value::String(value)),
@@ -3247,16 +3307,19 @@ impl<'a> Interpreter<'a> {
                 .ok_or_else(|| Error::coded("E0500", mode.span, "unsupported array dimensions"));
         }
         if let Some(length) = mode.string_length {
-            return Ok(if mode.name == "WCHARS" {
-                Type::WBoundedString {
+            return Ok(match mode.name.as_str() {
+                "WCHARS" => Type::WBoundedString {
                     length,
                     varying: mode.varying,
-                }
-            } else {
-                Type::BoundedString {
+                },
+                "BOOLS" => Type::BoundedBits {
                     length,
                     varying: mode.varying,
-                }
+                },
+                _ => Type::BoundedString {
+                    length,
+                    varying: mode.varying,
+                },
             });
         }
         let floor = self.local_floor();
@@ -4510,6 +4573,33 @@ fn parse_external(
             "unsupported text conversion target",
         )),
     }
+}
+
+fn bits_binary(op: &str, left: &str, right: &str, span: Span) -> Result<String, Error> {
+    if left.len() != right.len() {
+        return Err(Error::coded(
+            "E0507",
+            span,
+            "bit strings must have the same length",
+        ));
+    }
+    Ok(left
+        .chars()
+        .zip(right.chars())
+        .map(|(left, right)| {
+            let value = match op {
+                "and" => left == '1' && right == '1',
+                "or" => left == '1' || right == '1',
+                "xor" => left != right,
+                _ => false,
+            };
+            if value {
+                '1'
+            } else {
+                '0'
+            }
+        })
+        .collect())
 }
 
 fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {

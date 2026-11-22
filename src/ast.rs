@@ -497,6 +497,10 @@ pub enum Expr {
         value: String,
         span: Span,
     },
+    Bits {
+        value: String,
+        span: Span,
+    },
     Name {
         name: String,
         span: Span,
@@ -556,6 +560,7 @@ impl Expr {
             | Self::String { span, .. }
             | Self::WideChar { span, .. }
             | Self::WideString { span, .. }
+            | Self::Bits { span, .. }
             | Self::Name { span, .. }
             | Self::Apply { span, .. }
             | Self::Unary { span, .. }

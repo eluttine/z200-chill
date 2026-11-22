@@ -49,7 +49,7 @@ Explicitly **deferred**:
 
 - faithful processes/signals/timers and region mutual exclusion (single-threaded first
   release);
-- references/rows, `ALLOCATE`/`TERMINATE`, bit strings;
+- references/rows and `ALLOCATE`/`TERMINATE`;
 - constructors/destructors, `SELF`, task/region object modes, and the rest of moreta;
 - generic region/process templates;
 - grant encoding for named set modes and moreta module modes;
@@ -103,6 +103,9 @@ Implemented in `z200c`:
   labelled array tuples;
 - wide characters and wide character strings, including wide character/string
   literals and UCS-2 range checks;
+- bit strings (`BOOLS`, `BOOLS(n)`, `BOOLS(n) VARYING`), binary/octal/hexadecimal
+  bit-string literals, elementwise `AND`/`OR`/`XOR`/`NOT`, concatenation, ordering,
+  and comparison;
 - bounded text modes, format conversion/editing codes, variable widths, and I/O
   control clauses;
 - simplified text-file associations/access modes with indexed access;
@@ -119,7 +122,7 @@ Not implemented yet (rejected or deferred with a diagnostic):
 - multiple `CASE` selectors and non-integer `CASE` labels;
 - region concurrency/mutual exclusion;
 - faithful processes/signals/timers (first release is single-threaded);
-- references/rows, `ALLOCATE`/`TERMINATE`, and bit strings;
+- references/rows and `ALLOCATE`/`TERMINATE`;
 - moreta constructors/destructors, `SELF`, and task/region object modes;
 - generic region/process templates;
 - grant encoding for named set modes and moreta module modes.
@@ -245,7 +248,8 @@ invariant `width(SHORT_INT) <= width(INT) <= width(LONG_INT)` holds by construct
 `ARRAY (low:high, ...) element-mode` declares an array with one or more constant
 integer index ranges. Up to four dimensions are supported. The element mode may be
 scalar (`SHORT_INT`/`INT`/`LONG_INT`, `FLOAT`, `BOOL`, `CHAR`, `WCHAR`, `CHARS`,
-`WCHARS`, or bounded character/wide-character strings) or a structure mode.
+`WCHARS`, `BOOLS`, or bounded character/wide-character/bit strings) or a structure
+mode.
 
 - `a(i)` selects an element from a one-dimensional array; `a(i, j, ...)` selects an
   element from a multidimensional array. Both may be read or used as assignment
@@ -543,6 +547,11 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
   assignable to one another.
 - `ACCESS`/association record paths and record I/O remain narrow `CHARS` only.
 - `WTEXT` and wide-character text records are not implemented.
+- `BOOLS`, `BOOLS(n)`, and `BOOLS(n) VARYING` are bit-string modes. `B'...'`,
+  `O'...'`, and `H'...'` with a closing apostrophe are bit-string literals; without
+  the closing apostrophe they are based integer literals (`B'1010` is binary 10).
+- Elementwise `AND`, `OR`, `XOR`, and `NOT` require equal-length bit strings.
+  Concatenation delivers an unbounded `BOOLS` value.
 
 ### 5.7 Associations and access modes (simplified)
 

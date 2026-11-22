@@ -109,6 +109,8 @@ deferred.
 - [x] `WCHAR` and `WCHARS` scalar/string modes, wide character and string literals,
       bounded `WCHARS(n)` modes, wide-string concatenation/comparison, wide powersets,
       and grant-interface encoding. `WTEXT` remains deferred.
+- [x] Bit strings: `BOOLS`, bounded `BOOLS(n)` modes, binary/octal/hexadecimal bit
+      literals, elementwise logic, concatenation, comparison, and grant encoding.
 - [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
 - [x] Action-level handlers, including handlers on bracketed actions, assignment,
       assert, and call actions.
