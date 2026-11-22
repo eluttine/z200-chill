@@ -1,0 +1,733 @@
+use crate::ast::{Action, Declaration, Expr, ModeRef, Module, Program};
+use crate::lexer::Span;
+use std::collections::{HashMap, HashSet};
+
+use super::{apply_virtual_grants, Error};
+
+pub fn normalize(program: &Program) -> Result<Program, Error> {
+    let mut normalized = program.clone();
+    apply_virtual_grants(&mut normalized.modules)?;
+    for module in &mut normalized.modules {
+        expand_module_generics(module)?;
+        merge_moreta_specs(module)?;
+    }
+    expand_generic_modules(&mut normalized)?;
+    Ok(normalized)
+}
+
+fn merge_moreta_specs(module: &mut Module) -> Result<(), Error> {
+    let mut specs = HashMap::new();
+    let mut bodies = HashMap::new();
+    for (index, declaration) in module.declarations.iter().enumerate() {
+        if let Declaration::Mode(mode_def) = declaration {
+            if let crate::ast::ModeDefinitionBody::Moreta { spec, .. } = &mode_def.body {
+                if *spec {
+                    specs.insert(mode_def.name.clone(), index);
+                } else {
+                    bodies.insert(mode_def.name.clone(), index);
+                }
+            }
+        }
+    }
+    let mut remove = HashSet::new();
+    for (name, body_index) in &bodies {
+        let Some(spec_index) = specs.get(name).copied() else {
+            continue;
+        };
+        let body_mode = match module.declarations[*body_index].clone() {
+            Declaration::Mode(mode_def) => mode_def,
+            _ => unreachable!(),
+        };
+        let spec_mode = match module.declarations[spec_index].clone() {
+            Declaration::Mode(mode_def) => mode_def,
+            _ => unreachable!(),
+        };
+        let body_declarations = match body_mode.body {
+            crate::ast::ModeDefinitionBody::Moreta { declarations, .. } => declarations,
+            _ => unreachable!(),
+        };
+        let (spec_declarations, spec_bases, spec_invariant) = match spec_mode.body {
+            crate::ast::ModeDefinitionBody::Moreta {
+                declarations,
+                bases,
+                invariant,
+                ..
+            } => (declarations, bases, invariant),
+            _ => unreachable!(),
+        };
+        let body_proc_names: HashSet<String> = body_declarations
+            .iter()
+            .filter_map(|declaration| match declaration {
+                Declaration::Proc(proc_def) => Some(proc_def.name.clone()),
+                _ => None,
+            })
+            .collect();
+        for declaration in &spec_declarations {
+            if let Declaration::ProcSignature(signature) = declaration {
+                if !body_proc_names.contains(&signature.name) {
+                    return Err(Error::new(
+                        signature.span,
+                        format!(
+                            "module mode body `{name}` is missing procedure component `{}`",
+                            signature.name
+                        ),
+                    ));
+                }
+            }
+        }
+        let body_names: HashSet<String> = body_declarations
+            .iter()
+            .filter_map(declaration_name)
+            .collect();
+        let mut merged: Vec<Declaration> = spec_declarations
+            .into_iter()
+            .filter(|declaration| {
+                declaration_name(declaration).is_none_or(|name| !body_names.contains(&name))
+            })
+            .collect();
+        merged.extend(body_declarations);
+        if let Declaration::Mode(mode_def) = &mut module.declarations[*body_index] {
+            if let crate::ast::ModeDefinitionBody::Moreta {
+                spec,
+                bases,
+                declarations,
+                invariant,
+                ..
+            } = &mut mode_def.body
+            {
+                *spec = false;
+                if bases.is_empty() {
+                    *bases = spec_bases;
+                }
+                *declarations = merged;
+                *invariant = match (spec_invariant, invariant.take()) {
+                    (Some(spec_invariant), Some(body_invariant)) => Some(Expr::Binary {
+                        op: crate::ast::BinaryOp::And,
+                        span: body_invariant.span(),
+                        left: Box::new(spec_invariant),
+                        right: Box::new(body_invariant),
+                    }),
+                    (Some(spec_invariant), None) => Some(spec_invariant),
+                    (None, body_invariant) => body_invariant,
+                };
+            }
+        }
+        remove.insert(spec_index);
+    }
+    let mut index = 0;
+    module.declarations.retain(|_| {
+        let keep = !remove.contains(&index);
+        index += 1;
+        keep
+    });
+    for action in &mut module.actions {
+        merge_moreta_specs_in_action(action)?;
+    }
+    Ok(())
+}
+
+fn declaration_name(declaration: &Declaration) -> Option<String> {
+    match declaration {
+        Declaration::Var(vars) => vars.first().map(|var| var.name.clone()),
+        Declaration::Proc(proc_def) => Some(proc_def.name.clone()),
+        Declaration::ProcSignature(signature) => Some(signature.name.clone()),
+        _ => None,
+    }
+}
+
+fn merge_moreta_specs_in_action(action: &mut Action) -> Result<(), Error> {
+    match action {
+        Action::Module(module) => merge_moreta_specs(module),
+        Action::Begin { actions, .. } | Action::Do { body: actions, .. } => {
+            for action in actions {
+                merge_moreta_specs_in_action(action)?;
+            }
+            Ok(())
+        }
+        Action::If {
+            branches,
+            else_actions,
+            ..
+        } => {
+            for branch in branches {
+                for action in &mut branch.body {
+                    merge_moreta_specs_in_action(action)?;
+                }
+            }
+            if let Some(actions) = else_actions {
+                for action in actions {
+                    merge_moreta_specs_in_action(action)?;
+                }
+            }
+            Ok(())
+        }
+        Action::Case {
+            alternatives,
+            else_actions,
+            ..
+        } => {
+            for alternative in alternatives {
+                for action in &mut alternative.body {
+                    merge_moreta_specs_in_action(action)?;
+                }
+            }
+            if let Some(actions) = else_actions {
+                for action in actions {
+                    merge_moreta_specs_in_action(action)?;
+                }
+            }
+            Ok(())
+        }
+        Action::Labelled { action, .. } => merge_moreta_specs_in_action(action),
+        Action::Handled { handler, .. } => {
+            for alternative in &mut handler.alternatives {
+                for action in &mut alternative.actions {
+                    merge_moreta_specs_in_action(action)?;
+                }
+            }
+            if let Some(actions) = &mut handler.else_actions {
+                for action in actions {
+                    merge_moreta_specs_in_action(action)?;
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn expand_generic_modules(program: &mut Program) -> Result<(), Error> {
+    if program.generic_module_instances.is_empty() {
+        program.generic_modules.clear();
+        return Ok(());
+    }
+    let mut templates: HashMap<String, crate::ast::GenericModuleTemplate> = HashMap::new();
+    for template in &program.generic_modules {
+        if templates
+            .insert(template.name.clone(), template.clone())
+            .is_some()
+        {
+            return Err(Error::new(
+                template.span,
+                format!("duplicate generic module template `{}`", template.name),
+            ));
+        }
+    }
+    let instances = std::mem::take(&mut program.generic_module_instances);
+    for instance in instances {
+        let Some(template) = templates.get(&instance.template) else {
+            return Err(Error::new(
+                instance.span,
+                format!("unknown generic module template `{}`", instance.template),
+            ));
+        };
+        let (substitutions, syn_substitutions) = generic_substitutions(
+            &template.formal_params,
+            &instance.actuals,
+            instance.span,
+            &instance.template,
+        )?;
+        let mut module = template.module.clone();
+        module.name = Some(instance.name.clone());
+        module.span = instance.span;
+        substitute_module_modes(&mut module, &substitutions)?;
+        substitute_module_syns(&mut module, &syn_substitutions);
+        program.modules.push(module);
+    }
+    program.generic_modules.clear();
+    Ok(())
+}
+
+fn substitute_module_modes(
+    module: &mut Module,
+    substitutions: &HashMap<&str, &ModeRef>,
+) -> Result<(), Error> {
+    substitute_declaration_modes(&mut module.declarations, substitutions)?;
+    for context in &mut module.contexts {
+        substitute_declaration_modes(&mut context.declarations, substitutions)?;
+    }
+    substitute_action_modes(&mut module.actions, substitutions)?;
+    if let Some(handler) = &mut module.handler {
+        for alternative in &mut handler.alternatives {
+            substitute_action_modes(&mut alternative.actions, substitutions)?;
+        }
+        if let Some(actions) = &mut handler.else_actions {
+            substitute_action_modes(actions, substitutions)?;
+        }
+    }
+    Ok(())
+}
+
+fn substitute_action_modes(
+    actions: &mut [Action],
+    substitutions: &HashMap<&str, &ModeRef>,
+) -> Result<(), Error> {
+    for action in actions {
+        match action {
+            Action::Begin {
+                declarations,
+                actions,
+                ..
+            } => {
+                substitute_declaration_modes(declarations, substitutions)?;
+                substitute_action_modes(actions, substitutions)?;
+            }
+            Action::If {
+                branches,
+                else_actions,
+                ..
+            } => {
+                for branch in branches {
+                    substitute_action_modes(&mut branch.body, substitutions)?;
+                }
+                if let Some(actions) = else_actions {
+                    substitute_action_modes(actions, substitutions)?;
+                }
+            }
+            Action::Case {
+                alternatives,
+                else_actions,
+                ..
+            } => {
+                for alternative in alternatives {
+                    substitute_action_modes(&mut alternative.body, substitutions)?;
+                }
+                if let Some(actions) = else_actions {
+                    substitute_action_modes(actions, substitutions)?;
+                }
+            }
+            Action::Do { body, .. } => substitute_action_modes(body, substitutions)?,
+            Action::Labelled { action, .. } => {
+                substitute_action_modes(std::slice::from_mut(action.as_mut()), substitutions)?;
+            }
+            Action::Handled { handler, .. } => {
+                for alternative in &mut handler.alternatives {
+                    substitute_action_modes(&mut alternative.actions, substitutions)?;
+                }
+                if let Some(actions) = &mut handler.else_actions {
+                    substitute_action_modes(actions, substitutions)?;
+                }
+            }
+            Action::Module(module) => substitute_module_modes(module, substitutions)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn expand_module_generics(module: &mut Module) -> Result<(), Error> {
+    let mut templates: HashMap<String, crate::ast::GenericProcTemplate> = HashMap::new();
+    for declaration in &module.declarations {
+        if let Declaration::GenericProc(template) = declaration {
+            if templates
+                .insert(template.name.clone(), template.clone())
+                .is_some()
+            {
+                return Err(Error::new(
+                    template.span,
+                    format!("duplicate generic template `{}`", template.name),
+                ));
+            }
+        }
+    }
+    let mut declarations = Vec::with_capacity(module.declarations.len());
+    for declaration in module.declarations.drain(..) {
+        match declaration {
+            Declaration::GenericProc(_) => {}
+            Declaration::GenericProcInstance(instance) => {
+                let Some(template) = templates.get(&instance.template) else {
+                    return Err(Error::new(
+                        instance.span,
+                        format!("unknown generic template `{}`", instance.template),
+                    ));
+                };
+                let (substitutions, syn_substitutions) = generic_substitutions(
+                    &template.formal_params,
+                    &instance.actuals,
+                    instance.span,
+                    &instance.template,
+                )?;
+                let mut proc_def = template.proc_def.clone();
+                proc_def.name = instance.name.clone();
+                proc_def.span = instance.span;
+                substitute_proc_modes(&mut proc_def, &substitutions)?;
+                substitute_proc_syns(&mut proc_def, &syn_substitutions);
+                declarations.push(Declaration::Proc(proc_def));
+            }
+            other => declarations.push(other),
+        }
+    }
+    module.declarations = declarations;
+    Ok(())
+}
+
+type GenericModeSubstitutions<'a, 'b> = HashMap<&'a str, &'b ModeRef>;
+type GenericSynSubstitutions<'a, 'b> = HashMap<&'a str, &'b Expr>;
+
+fn generic_substitutions<'a, 'b>(
+    formals: &'a [crate::ast::GenericFormal],
+    actuals: &'b [crate::ast::GenericActual],
+    span: Span,
+    template: &str,
+) -> Result<
+    (
+        GenericModeSubstitutions<'a, 'b>,
+        GenericSynSubstitutions<'a, 'b>,
+    ),
+    Error,
+> {
+    if formals.len() != actuals.len() {
+        return Err(Error::new(
+            span,
+            format!(
+                "generic template `{template}` expects {} parameter(s), found {}",
+                formals.len(),
+                actuals.len()
+            ),
+        ));
+    }
+    let mut modes = HashMap::new();
+    let mut syns = HashMap::new();
+    for (formal, actual) in formals.iter().zip(actuals) {
+        match (formal, actual) {
+            (crate::ast::GenericFormal::Mode(name), crate::ast::GenericActual::Mode(mode)) => {
+                modes.insert(name.as_str(), mode);
+            }
+            (
+                crate::ast::GenericFormal::Syn { name, .. },
+                crate::ast::GenericActual::Value(value),
+            ) => {
+                syns.insert(name.as_str(), value);
+            }
+            (crate::ast::GenericFormal::Mode(name), crate::ast::GenericActual::Value(_)) => {
+                return Err(Error::new(
+                    span,
+                    format!("generic mode parameter `{name}` requires a mode actual"),
+                ));
+            }
+            (crate::ast::GenericFormal::Syn { name, .. }, crate::ast::GenericActual::Mode(_)) => {
+                return Err(Error::new(
+                    span,
+                    format!("generic SYN parameter `{name}` requires a value actual"),
+                ));
+            }
+        }
+    }
+    Ok((modes, syns))
+}
+
+fn substitute_expr_syns(expr: &Expr, syns: &HashMap<&str, &Expr>) -> Expr {
+    match expr {
+        Expr::Name { name, .. } => syns
+            .get(name.as_str())
+            .map(|value| (*value).clone())
+            .unwrap_or_else(|| expr.clone()),
+        Expr::Apply { name, args, span } => Expr::Apply {
+            name: name.clone(),
+            args: args
+                .iter()
+                .map(|arg| substitute_expr_syns(arg, syns))
+                .collect(),
+            span: *span,
+        },
+        Expr::Unary { op, operand, span } => Expr::Unary {
+            op: *op,
+            operand: Box::new(substitute_expr_syns(operand, syns)),
+            span: *span,
+        },
+        Expr::Binary {
+            op,
+            left,
+            right,
+            span,
+        } => Expr::Binary {
+            op: *op,
+            left: Box::new(substitute_expr_syns(left, syns)),
+            right: Box::new(substitute_expr_syns(right, syns)),
+            span: *span,
+        },
+        Expr::Field { base, field, span } => Expr::Field {
+            base: Box::new(substitute_expr_syns(base, syns)),
+            field: field.clone(),
+            span: *span,
+        },
+        Expr::ArrayTuple { elements, span } => Expr::ArrayTuple {
+            elements: elements
+                .iter()
+                .map(|element| crate::ast::ArrayTupleElement {
+                    labels: element.labels.clone(),
+                    value: substitute_expr_syns(&element.value, syns),
+                    range_end: element
+                        .range_end
+                        .as_ref()
+                        .map(|end| Box::new(substitute_expr_syns(end, syns))),
+                    span: element.span,
+                })
+                .collect(),
+            span: *span,
+        },
+        Expr::ArraySlice {
+            name,
+            first,
+            last,
+            up,
+            span,
+        } => Expr::ArraySlice {
+            name: name.clone(),
+            first: Box::new(substitute_expr_syns(first, syns)),
+            last: Box::new(substitute_expr_syns(last, syns)),
+            up: *up,
+            span: *span,
+        },
+        Expr::MethodCall {
+            base,
+            method,
+            args,
+            span,
+        } => Expr::MethodCall {
+            base: Box::new(substitute_expr_syns(base, syns)),
+            method: method.clone(),
+            args: args
+                .iter()
+                .map(|arg| substitute_expr_syns(arg, syns))
+                .collect(),
+            span: *span,
+        },
+        _ => expr.clone(),
+    }
+}
+
+fn substitute_actions_syns(actions: &mut [Action], syns: &HashMap<&str, &Expr>) {
+    for action in actions {
+        match action {
+            Action::Assign { target, value, .. } => {
+                *target = substitute_expr_syns(target, syns);
+                *value = substitute_expr_syns(value, syns);
+            }
+            Action::Assert { condition, .. } => {
+                *condition = substitute_expr_syns(condition, syns);
+            }
+            Action::Call { callee, .. } => {
+                *callee = substitute_expr_syns(callee, syns);
+            }
+            Action::Return {
+                value: Some(value), ..
+            } => {
+                *value = substitute_expr_syns(value, syns);
+            }
+            Action::Result { value, .. } => {
+                *value = substitute_expr_syns(value, syns);
+            }
+            Action::If {
+                branches,
+                else_actions,
+                ..
+            } => {
+                for branch in branches {
+                    branch.condition = substitute_expr_syns(&branch.condition, syns);
+                    substitute_actions_syns(&mut branch.body, syns);
+                }
+                if let Some(actions) = else_actions {
+                    substitute_actions_syns(actions, syns);
+                }
+            }
+            Action::Do { control, body, .. } => {
+                match control {
+                    crate::ast::DoControl::While(condition) => {
+                        *condition = substitute_expr_syns(condition, syns);
+                    }
+                    crate::ast::DoControl::For {
+                        start, end, step, ..
+                    } => {
+                        *start = substitute_expr_syns(start, syns);
+                        *end = substitute_expr_syns(end, syns);
+                        if let Some(step) = step {
+                            *step = substitute_expr_syns(step, syns);
+                        }
+                    }
+                    _ => {}
+                }
+                substitute_actions_syns(body, syns);
+            }
+            Action::Case {
+                selector,
+                alternatives,
+                else_actions,
+                ..
+            } => {
+                *selector = substitute_expr_syns(selector, syns);
+                for alternative in alternatives {
+                    substitute_actions_syns(&mut alternative.body, syns);
+                }
+                if let Some(actions) = else_actions {
+                    substitute_actions_syns(actions, syns);
+                }
+            }
+            Action::Labelled { action, .. } => {
+                substitute_actions_syns(std::slice::from_mut(action.as_mut()), syns);
+            }
+            Action::Begin {
+                declarations,
+                actions,
+                ..
+            } => {
+                substitute_declarations_syns(declarations, syns);
+                substitute_actions_syns(actions, syns);
+            }
+            Action::Handled {
+                action, handler, ..
+            } => {
+                substitute_actions_syns(std::slice::from_mut(action.as_mut()), syns);
+                substitute_handler_syns(handler, syns);
+            }
+            Action::Module(module) => substitute_module_syns(module, syns),
+            _ => {}
+        }
+    }
+}
+
+fn substitute_handler_syns(handler: &mut crate::ast::Handler, syns: &HashMap<&str, &Expr>) {
+    for alternative in &mut handler.alternatives {
+        substitute_actions_syns(&mut alternative.actions, syns);
+    }
+    if let Some(actions) = &mut handler.else_actions {
+        substitute_actions_syns(actions, syns);
+    }
+}
+
+fn substitute_declarations_syns(declarations: &mut [Declaration], syns: &HashMap<&str, &Expr>) {
+    for declaration in declarations {
+        match declaration {
+            Declaration::Var(vars) => {
+                for var in vars {
+                    if let Some(init) = &mut var.init {
+                        init.value = substitute_expr_syns(&init.value, syns);
+                    }
+                }
+            }
+            Declaration::Proc(proc_def) => {
+                substitute_declarations_syns(&mut proc_def.declarations, syns);
+                substitute_actions_syns(&mut proc_def.actions, syns);
+                if let Some(handler) = &mut proc_def.handler {
+                    substitute_handler_syns(handler, syns);
+                }
+            }
+            Declaration::Mode(mode_def) => {
+                if let crate::ast::ModeDefinitionBody::Moreta {
+                    declarations,
+                    invariant,
+                    ..
+                } = &mut mode_def.body
+                {
+                    substitute_declarations_syns(declarations, syns);
+                    if let Some(invariant) = invariant {
+                        *invariant = substitute_expr_syns(invariant, syns);
+                    }
+                }
+            }
+            Declaration::SpecModule(module) => substitute_module_syns(module, syns),
+            _ => {}
+        }
+    }
+}
+
+fn substitute_module_syns(module: &mut Module, syns: &HashMap<&str, &Expr>) {
+    substitute_declarations_syns(&mut module.declarations, syns);
+    for context in &mut module.contexts {
+        substitute_declarations_syns(&mut context.declarations, syns);
+    }
+    substitute_actions_syns(&mut module.actions, syns);
+    if let Some(handler) = &mut module.handler {
+        substitute_handler_syns(handler, syns);
+    }
+}
+
+fn substitute_proc_syns(proc_def: &mut crate::ast::ProcDef, syns: &HashMap<&str, &Expr>) {
+    substitute_declarations_syns(&mut proc_def.declarations, syns);
+    substitute_actions_syns(&mut proc_def.actions, syns);
+    if let Some(handler) = &mut proc_def.handler {
+        substitute_handler_syns(handler, syns);
+    }
+}
+
+fn substitute_mode(
+    mode: &mut ModeRef,
+    substitutions: &HashMap<&str, &ModeRef>,
+) -> Result<(), Error> {
+    let Some(actual) = substitutions.get(mode.name.as_str()) else {
+        return Ok(());
+    };
+    if !mode.arrays.is_empty() && !actual.arrays.is_empty() {
+        return Err(Error::new(
+            mode.span,
+            "nested array modes are not implemented for generic substitution",
+        ));
+    }
+    mode.name = actual.name.clone();
+    if mode.arrays.is_empty() {
+        mode.arrays = actual.arrays.clone();
+    }
+    mode.string_length = actual.string_length.or(mode.string_length);
+    mode.varying = actual.varying || mode.varying;
+    mode.access = actual.access || mode.access;
+    mode.powerset = actual.powerset || mode.powerset;
+    mode.access_indexed = actual.access_indexed || mode.access_indexed;
+    mode.access_index = actual.access_index.or(mode.access_index);
+    Ok(())
+}
+
+fn substitute_proc_modes(
+    proc_def: &mut crate::ast::ProcDef,
+    substitutions: &HashMap<&str, &ModeRef>,
+) -> Result<(), Error> {
+    for param in &mut proc_def.params {
+        substitute_mode(&mut param.mode, substitutions)?;
+    }
+    if let Some(result) = &mut proc_def.result {
+        substitute_mode(result, substitutions)?;
+    }
+    substitute_declaration_modes(&mut proc_def.declarations, substitutions)
+}
+
+fn substitute_declaration_modes(
+    declarations: &mut [Declaration],
+    substitutions: &HashMap<&str, &ModeRef>,
+) -> Result<(), Error> {
+    for declaration in declarations {
+        match declaration {
+            Declaration::Var(vars) => {
+                for var in vars {
+                    substitute_mode(&mut var.mode, substitutions)?;
+                }
+            }
+            Declaration::Proc(proc_def) => substitute_proc_modes(proc_def, substitutions)?,
+            Declaration::ProcSignature(signature) => {
+                for param in &mut signature.params {
+                    substitute_mode(&mut param.mode, substitutions)?;
+                }
+                if let Some(result) = &mut signature.result {
+                    substitute_mode(result, substitutions)?;
+                }
+            }
+            Declaration::Mode(mode_def) => match &mut mode_def.body {
+                crate::ast::ModeDefinitionBody::Struct(fields) => {
+                    for field in fields {
+                        substitute_mode(&mut field.mode, substitutions)?;
+                    }
+                }
+                crate::ast::ModeDefinitionBody::Alias(mode) => {
+                    substitute_mode(mode, substitutions)?;
+                }
+                crate::ast::ModeDefinitionBody::Set(_) => {}
+                crate::ast::ModeDefinitionBody::Moreta { declarations, .. } => {
+                    substitute_declaration_modes(declarations, substitutions)?;
+                }
+            },
+            Declaration::Visibility(_)
+            | Declaration::SpecModule(_)
+            | Declaration::GenericProc(_)
+            | Declaration::GenericProcInstance(_) => {}
+        }
+    }
+    Ok(())
+}
