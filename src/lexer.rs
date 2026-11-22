@@ -30,6 +30,8 @@ pub enum TokenKind {
     Bool(bool),
     Char(char),
     String(String),
+    WideChar(char),
+    WideString(String),
     Keyword(Keyword),
 
     Semicolon,
@@ -232,6 +234,8 @@ impl fmt::Display for TokenKind {
             Self::Bool(value) => write!(f, "`{value}`"),
             Self::Char(value) => write!(f, "character literal `{value}`"),
             Self::String(_) => f.write_str("string literal"),
+            Self::WideChar(value) => write!(f, "wide character literal `{value}`"),
+            Self::WideString(_) => f.write_str("wide string literal"),
             Self::Keyword(keyword) => write!(f, "`{keyword}`"),
             Self::Semicolon => f.write_str("`;`"),
             Self::Comma => f.write_str("`,`"),
@@ -403,7 +407,9 @@ impl<'a> Lexer<'a> {
         };
         let start = self.pos;
 
-        let kind = if is_based_prefix(ch) && self.peek_second() == Some('\'') {
+        let kind = if matches!(ch, 'W' | 'w') && self.peek_second() == Some('\'') {
+            self.lex_wide_literal()?
+        } else if is_based_prefix(ch) && self.peek_second() == Some('\'') {
             self.lex_based_integer()?
         } else if is_identifier_start(ch) {
             self.lex_identifier()
@@ -561,6 +567,81 @@ impl<'a> Lexer<'a> {
         }
 
         parse_integer(digits, base, start)
+    }
+
+    fn lex_wide_literal(&mut self) -> Result<TokenKind, Error> {
+        let start = self.pos;
+        self.bump(); // W
+        self.bump(); // '
+        if self.peek() == Some('"') {
+            return self.lex_wide_string_body(start);
+        }
+        self.lex_wide_character_body(start)
+    }
+
+    fn lex_wide_character_body(&mut self, start: usize) -> Result<TokenKind, Error> {
+        if self.peek() == Some('^') {
+            return Err(Error::coded(
+                "E0103",
+                start,
+                "character literal control sequences are not supported yet",
+            ));
+        }
+
+        let Some(value) = self.bump() else {
+            return Err(Error::coded(
+                "E0104",
+                start,
+                "unterminated wide character literal",
+            ));
+        };
+
+        if self.peek() != Some('\'') {
+            return Err(Error::coded(
+                "E0104",
+                start,
+                "wide character literal must contain exactly one character",
+            ));
+        }
+        self.bump(); // closing apostrophe
+
+        Ok(TokenKind::WideChar(value))
+    }
+
+    fn lex_wide_string_body(&mut self, start: usize) -> Result<TokenKind, Error> {
+        self.bump(); // opening quote
+        let mut value = String::new();
+
+        loop {
+            let Some(ch) = self.peek() else {
+                return Err(Error::coded(
+                    "E0105",
+                    start,
+                    "unterminated wide character string literal",
+                ));
+            };
+
+            if ch == '"' {
+                self.bump();
+                if self.peek() == Some('"') {
+                    self.bump();
+                    value.push('"');
+                    continue;
+                }
+                return Ok(TokenKind::WideString(value));
+            }
+
+            if ch == '^' {
+                return Err(Error::coded(
+                    "E0106",
+                    self.pos,
+                    "character string control sequences are not supported yet",
+                ));
+            }
+
+            self.bump();
+            value.push(ch);
+        }
     }
 
     fn lex_character(&mut self) -> Result<TokenKind, Error> {
@@ -822,6 +903,20 @@ mod tests {
         assert_eq!(
             kinds("\"a\"\"b\""),
             vec![TokenKind::String("a\"b".to_owned())]
+        );
+    }
+
+    #[test]
+    fn wide_character_and_string_literals() {
+        assert_eq!(kinds("W'Ω'"), vec![TokenKind::WideChar('Ω')]);
+        assert_eq!(kinds("w'λ'"), vec![TokenKind::WideChar('λ')]);
+        assert_eq!(
+            kinds("W'\"a\"\"b\""),
+            vec![TokenKind::WideString("a\"b".to_owned())]
+        );
+        assert_eq!(
+            kinds("w'\"héllo\""),
+            vec![TokenKind::WideString("héllo".to_owned())]
         );
     }
 

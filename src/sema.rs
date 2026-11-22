@@ -1333,11 +1333,12 @@ impl Checker {
                 Some(Type::Int(kind)) => crate::types::PowerSetMember::Int(kind),
                 Some(Type::Bool) => crate::types::PowerSetMember::Bool,
                 Some(Type::Char) => crate::types::PowerSetMember::Char,
+                Some(Type::WChar) => crate::types::PowerSetMember::WChar,
                 _ => {
                     return Err(Error::coded(
                         "E0400",
                         mode.span,
-                        "POWERSET member mode must be INT/SHORT_INT/LONG_INT, BOOL, or CHAR",
+                        "POWERSET member mode must be INT/SHORT_INT/LONG_INT, BOOL, CHAR, or WCHAR",
                     ));
                 }
             };
@@ -1381,9 +1382,16 @@ impl Checker {
                 .ok_or_else(|| Error::coded("E0400", mode.span, "unsupported array dimensions"));
         }
         if let Some(length) = mode.string_length {
-            return Ok(Type::BoundedString {
-                length,
-                varying: mode.varying,
+            return Ok(if mode.name == "WCHARS" {
+                Type::WBoundedString {
+                    length,
+                    varying: mode.varying,
+                }
+            } else {
+                Type::BoundedString {
+                    length,
+                    varying: mode.varying,
+                }
             });
         }
         for scope in self.scopes[self.module_floor..].iter().rev() {
@@ -2142,8 +2150,46 @@ impl Checker {
                 Ok(Type::IntLiteral)
             }
             Expr::Bool { .. } => Ok(Type::Bool),
-            Expr::Char { .. } => Ok(Type::Char),
-            Expr::String { .. } => Ok(Type::String),
+            Expr::Char { value, span } => {
+                if (*value as u32) > 0xFF {
+                    return Err(Error::coded(
+                        "E0405",
+                        *span,
+                        "character literal is outside the CHAR range",
+                    ));
+                }
+                Ok(Type::Char)
+            }
+            Expr::String { value, span } => {
+                if value.chars().any(|ch| (ch as u32) > 0xFF) {
+                    return Err(Error::coded(
+                        "E0405",
+                        *span,
+                        "character string literal contains a character outside the CHAR range",
+                    ));
+                }
+                Ok(Type::String)
+            }
+            Expr::WideChar { value, span } => {
+                if (*value as u32) > 0xFFFF {
+                    return Err(Error::coded(
+                        "E0405",
+                        *span,
+                        "wide character literal is outside the UCS-2 range",
+                    ));
+                }
+                Ok(Type::WChar)
+            }
+            Expr::WideString { value, span } => {
+                if value.chars().any(|ch| (ch as u32) > 0xFFFF) {
+                    return Err(Error::coded(
+                        "E0405",
+                        *span,
+                        "wide character string literal contains a character outside the UCS-2 range",
+                    ));
+                }
+                Ok(Type::WString)
+            }
             Expr::ArrayTuple { elements, .. } => {
                 for element in elements {
                     self.check_expr(&element.value)?;
@@ -2276,9 +2322,14 @@ impl Checker {
                 } else if (left == right
                     && matches!(
                         left,
-                        Type::Bool | Type::Char | Type::Struct(_) | Type::Set(_) | Type::Float
+                        Type::Bool
+                            | Type::Char
+                            | Type::WChar
+                            | Type::Struct(_)
+                            | Type::Set(_)
+                            | Type::Float
                     ))
-                    || (is_string_type(left) && is_string_type(right))
+                    || strings_compatible(left, right)
                     || (matches!(left, Type::PowerSet(_)) && left == right)
                     || arrays_compatible(left, right)
                 {
@@ -2299,10 +2350,11 @@ impl Checker {
                 if left.is_int() && right.is_int() {
                     self.combine_int(left, right, span)?;
                     Ok(Type::Bool)
-                } else if (left == Type::Char && right == Type::Char)
+                } else if ((left == Type::Char && right == Type::Char)
+                    || (left == Type::WChar && right == Type::WChar)
                     || (left == Type::Float && right == Type::Float)
-                    || (matches!(left, Type::PowerSet(_)) && left == right)
-                    || (is_string_type(left) && is_string_type(right))
+                    || (matches!(left, Type::PowerSet(_)) && left == right))
+                    || strings_compatible(left, right)
                 {
                     Ok(Type::Bool)
                 } else {
@@ -2367,8 +2419,12 @@ impl Checker {
                 Ok(Type::Bool)
             }
             BinaryOp::Concat => {
-                if is_string_type(left) && is_string_type(right) {
-                    Ok(Type::String)
+                if strings_compatible(left, right) {
+                    Ok(if is_wide_string_type(left) {
+                        Type::WString
+                    } else {
+                        Type::String
+                    })
                 } else {
                     Err(Error::coded(
                         "E0400",
@@ -2485,7 +2541,7 @@ impl Checker {
                     };
                     association_arg(self, association)?;
                     let path_ty = self.check_expr(path)?;
-                    if !is_string_type(path_ty) {
+                    if !is_narrow_string_type(path_ty) {
                         return Err(Error::coded(
                             "E0400",
                             path.span(),
@@ -2597,7 +2653,7 @@ impl Checker {
                                 if second_ty.is_int() {
                                     has_index = true;
                                     Some(Type::String)
-                                } else if is_string_type(second_ty)
+                                } else if is_narrow_string_type(second_ty)
                                     && matches!(args[1], Expr::Name { .. })
                                 {
                                     has_target = true;
@@ -2627,7 +2683,7 @@ impl Checker {
                                     ));
                                 };
                                 let target_ty = self.check_expr(&args[2])?;
-                                if !is_string_type(target_ty) {
+                                if !is_narrow_string_type(target_ty) {
                                     return Err(Error::coded(
                                         "E0400",
                                         args[2].span(),
@@ -2657,7 +2713,7 @@ impl Checker {
                                     ));
                                 };
                                 let target_ty = self.check_expr(target)?;
-                                if !is_string_type(target_ty) {
+                                if !is_narrow_string_type(target_ty) {
                                     return Err(Error::coded(
                                         "E0400",
                                         target.span(),
@@ -2708,7 +2764,7 @@ impl Checker {
                         &args[1]
                     };
                     let value_ty = self.check_expr(value)?;
-                    if !is_string_type(value_ty) {
+                    if !is_narrow_string_type(value_ty) {
                         return Err(Error::coded(
                             "E0400",
                             value.span(),
@@ -3325,8 +3381,11 @@ impl Checker {
             Type::Bool => value == Type::Bool,
             Type::Float => value == Type::Float,
             Type::Char => value == Type::Char,
-            Type::String => is_string_type(value),
-            Type::BoundedString { .. } => is_string_type(value),
+            Type::String => is_narrow_string_type(value),
+            Type::BoundedString { .. } => is_narrow_string_type(value),
+            Type::WChar => value == Type::WChar,
+            Type::WString => is_wide_string_type(value),
+            Type::WBoundedString { .. } => is_wide_string_type(value),
             Type::Struct(id) => value == Type::Struct(id),
             Type::Set(id) => value == Type::Set(id),
             Type::Moreta(id) => value == Type::Moreta(id),
@@ -3443,6 +3502,7 @@ fn powerset_member_type(member: crate::types::PowerSetMember) -> Type {
         crate::types::PowerSetMember::Int(kind) => Type::Int(kind),
         crate::types::PowerSetMember::Bool => Type::Bool,
         crate::types::PowerSetMember::Char => Type::Char,
+        crate::types::PowerSetMember::WChar => Type::WChar,
     }
 }
 
@@ -3451,15 +3511,35 @@ fn member_compatible(member: crate::types::PowerSetMember, ty: Type) -> bool {
         crate::types::PowerSetMember::Int(_) => ty.is_int(),
         crate::types::PowerSetMember::Bool => ty == Type::Bool,
         crate::types::PowerSetMember::Char => ty == Type::Char,
+        crate::types::PowerSetMember::WChar => ty == Type::WChar,
     }
 }
 
-fn is_string_type(ty: Type) -> bool {
+fn is_narrow_string_type(ty: Type) -> bool {
     matches!(ty, Type::String | Type::BoundedString { .. })
 }
 
+fn is_wide_string_type(ty: Type) -> bool {
+    matches!(ty, Type::WString | Type::WBoundedString { .. })
+}
+
+fn is_string_type(ty: Type) -> bool {
+    is_narrow_string_type(ty) || is_wide_string_type(ty)
+}
+
+fn strings_compatible(left: Type, right: Type) -> bool {
+    (is_narrow_string_type(left) && is_narrow_string_type(right))
+        || (is_wide_string_type(left) && is_wide_string_type(right))
+}
+
 fn is_varying_string(ty: Type) -> bool {
-    matches!(ty, Type::String) || matches!(ty, Type::BoundedString { varying: true, .. })
+    matches!(
+        ty,
+        Type::String
+            | Type::WString
+            | Type::BoundedString { varying: true, .. }
+            | Type::WBoundedString { varying: true, .. }
+    )
 }
 
 fn arrays_compatible(left: Type, right: Type) -> bool {

@@ -435,6 +435,7 @@ fn parse_external_type(
             Some(Type::Int(kind)) => types::PowerSetMember::Int(kind),
             Some(Type::Bool) => types::PowerSetMember::Bool,
             Some(Type::Char) => types::PowerSetMember::Char,
+            Some(Type::WChar) => types::PowerSetMember::WChar,
             _ => return Err(format!("invalid POWERSET member mode in `{name}`")),
         };
         return Ok(program::ExternalType::Builtin(Type::PowerSet(
@@ -480,6 +481,24 @@ fn parse_external_type(
             }
         };
         return Ok(program::ExternalType::Builtin(Type::Access(access)));
+    }
+    if let Some(rest) = name.strip_prefix("WCHARS(") {
+        let (length, suffix) = rest
+            .split_once(')')
+            .ok_or_else(|| format!("invalid string mode `{name}` in grant file"))?;
+        let length = length
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| format!("invalid string length in `{name}`"))?;
+        let varying = match suffix.trim() {
+            "" => false,
+            "VARYING" => true,
+            other => return Err(format!("invalid string attribute `{other}` in `{name}`")),
+        };
+        return Ok(program::ExternalType::Builtin(Type::WBoundedString {
+            length,
+            varying,
+        }));
     }
     if let Some(rest) = name.strip_prefix("CHARS(") {
         let (length, suffix) = rest
@@ -546,6 +565,16 @@ fn type_name(ty: Type) -> String {
             length,
             varying: false,
         } => format!("CHARS({length})"),
+        Type::WChar => "WCHAR".to_owned(),
+        Type::WString => "WCHARS".to_owned(),
+        Type::WBoundedString {
+            length,
+            varying: true,
+        } => format!("WCHARS({length}) VARYING"),
+        Type::WBoundedString {
+            length,
+            varying: false,
+        } => format!("WCHARS({length})"),
         // Structure modes must be referenced symbolically; this branch should
         // not be reached because portable types use `ExternalType::Mode`.
         Type::Struct(_) => "STRUCT".to_owned(),
@@ -575,6 +604,7 @@ fn type_name(ty: Type) -> String {
                 types::PowerSetMember::Int(kind) => kind.name(),
                 types::PowerSetMember::Bool => "BOOL",
                 types::PowerSetMember::Char => "CHAR",
+                types::PowerSetMember::WChar => "WCHAR",
             }
         ),
         Type::Access(access) => {
@@ -957,6 +987,16 @@ END M;
                 length: 20,
                 varying: true,
             },
+            Type::WBoundedString {
+                length: 20,
+                varying: false,
+            },
+            Type::WBoundedString {
+                length: 20,
+                varying: true,
+            },
+            Type::WChar,
+            Type::WString,
         ] {
             let text = type_name(ty);
             assert_eq!(

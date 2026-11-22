@@ -394,6 +394,8 @@ impl<'a> Parser<'a> {
                     | TokenKind::Bool(_)
                     | TokenKind::Char(_)
                     | TokenKind::String(_)
+                    | TokenKind::WideChar(_)
+                    | TokenKind::WideString(_)
                     | TokenKind::Minus
                     | TokenKind::LParen
                     | TokenKind::LParenColon
@@ -1371,7 +1373,8 @@ impl<'a> Parser<'a> {
                 span: Span::new(self.source, start.start, element.span.end),
             });
         }
-        if self.at_keyword(Keyword::Chars) {
+        if self.at_keyword(Keyword::Chars) || self.at_keyword(Keyword::WChars) {
+            let wide = self.at_keyword(Keyword::WChars);
             let span = self.current_span();
             self.advance();
             let length = if self.at_lparen() {
@@ -1395,7 +1398,11 @@ impl<'a> Parser<'a> {
                     return Err(Error::coded(
                         "E0205",
                         span,
-                        "VARYING requires a CHARS(n) length",
+                        if wide {
+                            "VARYING requires a WCHARS(n) length"
+                        } else {
+                            "VARYING requires a CHARS(n) length"
+                        },
                     ));
                 }
                 true
@@ -1403,7 +1410,7 @@ impl<'a> Parser<'a> {
                 false
             };
             return Ok(ModeRef {
-                name: "CHARS".to_owned(),
+                name: if wide { "WCHARS" } else { "CHARS" }.to_owned(),
                 arrays: Vec::new(),
                 string_length: length,
                 varying,
@@ -2103,6 +2110,22 @@ impl<'a> Parser<'a> {
             }
             TokenKind::String(value) => {
                 let expr = Expr::String {
+                    value: value.clone(),
+                    span,
+                };
+                self.advance();
+                Ok(expr)
+            }
+            TokenKind::WideChar(value) => {
+                let expr = Expr::WideChar {
+                    value: *value,
+                    span,
+                };
+                self.advance();
+                Ok(expr)
+            }
+            TokenKind::WideString(value) => {
+                let expr = Expr::WideString {
                     value: value.clone(),
                     span,
                 };

@@ -49,7 +49,7 @@ Explicitly **deferred**:
 
 - faithful processes/signals/timers and region mutual exclusion (single-threaded first
   release);
-- `WCHARS`, references/rows, `ALLOCATE`/`TERMINATE`, bit strings;
+- references/rows, `ALLOCATE`/`TERMINATE`, bit strings;
 - constructors/destructors, `SELF`, task/region object modes, and the rest of moreta;
 - generic region/process templates;
 - grant encoding for named set modes and moreta module modes;
@@ -62,7 +62,8 @@ Implemented in `z200c`:
 - manifest loading and width-profile validation;
 - lexer, parser, and AST for the constructs in the subset above;
 - mode checking for `SHORT_INT` / `INT` / `LONG_INT` / `FLOAT` / `BOOL` / `CHAR` /
-  `CHARS`, `CHARS(n)` / `CHARS(n) VARYING`, literals, arithmetic, and one-dimensional
+  `WCHAR` / `CHARS` / `WCHARS`, `CHARS(n)` / `WCHARS(n)` with optional `VARYING`,
+  literals, arithmetic, and one-dimensional
   arrays of scalar or structure modes (`ARRAY (low:high) mode`),
   relational and boolean expressions, procedures, calls, assignments, `ASSERT`,
   `IF`, `DO WHILE` / `DO FOR EVER`, and `BEGIN … END`;
@@ -100,6 +101,8 @@ Implemented in `z200c`:
 - floating-point `FLOAT`, literals, arithmetic/comparisons, and `%F` output;
 - arrays of structures, array slices, multidimensional arrays, array literals, and
   labelled array tuples;
+- wide characters and wide character strings, including wide character/string
+  literals and UCS-2 range checks;
 - bounded text modes, format conversion/editing codes, variable widths, and I/O
   control clauses;
 - simplified text-file associations/access modes with indexed access;
@@ -116,7 +119,7 @@ Not implemented yet (rejected or deferred with a diagnostic):
 - multiple `CASE` selectors and non-integer `CASE` labels;
 - region concurrency/mutual exclusion;
 - faithful processes/signals/timers (first release is single-threaded);
-- `WCHARS`, references/rows, `ALLOCATE`/`TERMINATE`, and bit strings;
+- references/rows, `ALLOCATE`/`TERMINATE`, and bit strings;
 - moreta constructors/destructors, `SELF`, and task/region object modes;
 - generic region/process templates;
 - grant encoding for named set modes and moreta module modes.
@@ -241,8 +244,8 @@ invariant `width(SHORT_INT) <= width(INT) <= width(LONG_INT)` holds by construct
 
 `ARRAY (low:high, ...) element-mode` declares an array with one or more constant
 integer index ranges. Up to four dimensions are supported. The element mode may be
-scalar (`SHORT_INT`/`INT`/`LONG_INT`, `FLOAT`, `BOOL`, `CHAR`, `CHARS`, or bounded
-character strings) or a structure mode.
+scalar (`SHORT_INT`/`INT`/`LONG_INT`, `FLOAT`, `BOOL`, `CHAR`, `WCHAR`, `CHARS`,
+`WCHARS`, or bounded character/wide-character strings) or a structure mode.
 
 - `a(i)` selects an element from a one-dimensional array; `a(i, j, ...)` selects an
   element from a multidimensional array. Both may be read or used as assignment
@@ -517,7 +520,8 @@ text**:
   until their semantics are designed.
 - Indexed access is supported with `ACCESS (index-mode) CHARS`, indexed `CONNECT`, and
   indexed `READRECORD`/`WRITERECORD`.
-- Text locations must have a varying string mode (`CHARS` or `CHARS(n) VARYING`).
+- Text locations must have a varying string mode (`CHARS` or `CHARS(n) VARYING`;
+  varying `WCHARS` locations are also accepted by `READTEXT`/`WRITETEXT`).
 
 ### 5.6 Text modes
 
@@ -531,7 +535,14 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
   `CHARS(n) VARYING`; concatenation delivers an unbounded `CHARS` value.
 - String literals and `READLINE` deliver unbounded `CHARS` values, so assigning them to
   a bounded string is checked at runtime.
-- `WCHARS` and wide-character text are not implemented.
+- `WCHAR` is the UCS-2 character mode. Wide character literals are written `W'A'`;
+  wide string literals are written `W'"..."` (the `W'` qualification precedes the
+  ordinary double-quoted body). Lowercase `w` is accepted.
+- `WCHARS`, `WCHARS(n)`, and `WCHARS(n) VARYING` are the wide-string counterparts of
+  `CHARS` modes. Narrow and wide strings are distinct modes and are not implicitly
+  assignable to one another.
+- `ACCESS`/association record paths and record I/O remain narrow `CHARS` only.
+- `WTEXT` and wide-character text records are not implemented.
 
 ### 5.7 Associations and access modes (simplified)
 

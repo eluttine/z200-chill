@@ -97,8 +97,9 @@ IR statements to find nested module declarations.
 implementation-defined built-in routines, which Z.200 permits. `READTEXT`/`WRITETEXT`
 support literal format text, conversion/editing codes, variable widths, io lists, and
 I/O control clauses. Bounded text modes (`CHARS(n)`, `CHARS(n) VARYING`) and a
-simplified text-file association/access model are also implemented. `WCHARS`, full
-association attributes, and arbitrary file models remain future work.
+simplified text-file association/access model are also implemented. `WCHAR`/`WCHARS`
+modes and wide literals are implemented, but `WTEXT`, full association attributes,
+and arbitrary file models remain future work.
 
 ## 10.13 Exceptions (partial, resolved for now)
 

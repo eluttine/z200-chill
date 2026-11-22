@@ -105,7 +105,10 @@ deferred.
 - [x] Labelled array tuples with literal/range/`ELSE`/`(*)` labels, completeness and
       overlap checking.
 - [x] `CHAR`, unbounded `CHARS`, fixed `CHARS(n)`, and bounded
-      `CHARS(n) VARYING` modes (`WCHARS` remains).
+      `CHARS(n) VARYING` modes.
+- [x] `WCHAR` and `WCHARS` scalar/string modes, wide character and string literals,
+      bounded `WCHARS(n)` modes, wide-string concatenation/comparison, wide powersets,
+      and grant-interface encoding. `WTEXT` remains deferred.
 - [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
 - [x] Action-level handlers, including handlers on bracketed actions, assignment,
       assert, and call actions.

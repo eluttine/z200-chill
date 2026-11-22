@@ -1067,6 +1067,16 @@ impl Lowerer<'_> {
                 ty,
                 span,
             }),
+            AstExpr::WideChar { value, .. } => Rc::new(Expr::Char {
+                value: *value,
+                ty,
+                span,
+            }),
+            AstExpr::WideString { value, .. } => Rc::new(Expr::String {
+                value: value.clone(),
+                ty,
+                span,
+            }),
             AstExpr::Name { name, .. } => {
                 if let Some(ApplyResolution::SetElement { ty, value }) =
                     self.check.resolutions.get(&span)

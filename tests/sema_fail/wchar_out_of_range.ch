@@ -1,0 +1,3 @@
+M: MODULE
+  DCL w WCHAR INIT := W'🦀';
+END M;

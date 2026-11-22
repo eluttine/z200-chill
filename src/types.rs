@@ -43,6 +43,9 @@ pub enum Scalar {
     Char,
     String,
     BoundedString { length: usize, varying: bool },
+    WChar,
+    WString,
+    WBoundedString { length: usize, varying: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,6 +64,11 @@ impl ArrayElement {
             Type::String => Some(Self::Scalar(Scalar::String)),
             Type::BoundedString { length, varying } => {
                 Some(Self::Scalar(Scalar::BoundedString { length, varying }))
+            }
+            Type::WChar => Some(Self::Scalar(Scalar::WChar)),
+            Type::WString => Some(Self::Scalar(Scalar::WString)),
+            Type::WBoundedString { length, varying } => {
+                Some(Self::Scalar(Scalar::WBoundedString { length, varying }))
             }
             Type::Struct(id) => Some(Self::Struct(id)),
             Type::Association
@@ -96,6 +104,7 @@ pub enum PowerSetMember {
     Int(IntKind),
     Bool,
     Char,
+    WChar,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -171,6 +180,14 @@ pub enum Type {
         length: usize,
         varying: bool,
     },
+    /// A `WCHAR` value, a UCS-2 character.
+    WChar,
+    WString,
+    /// `WCHARS(n)` fixed or `WCHARS(n) VARYING` bounded wide string mode.
+    WBoundedString {
+        length: usize,
+        varying: bool,
+    },
     Struct(ModeId),
     Set(SetId),
     Moreta(MoretaId),
@@ -217,6 +234,11 @@ impl Type {
             Self::BoundedString { length, varying } => {
                 Some(Scalar::BoundedString { length, varying })
             }
+            Self::WChar => Some(Scalar::WChar),
+            Self::WString => Some(Scalar::WString),
+            Self::WBoundedString { length, varying } => {
+                Some(Scalar::WBoundedString { length, varying })
+            }
             Self::Association
             | Self::Access(_)
             | Self::PowerSet(_)
@@ -239,6 +261,9 @@ impl Type {
             Scalar::Char => Self::Char,
             Scalar::String => Self::String,
             Scalar::BoundedString { length, varying } => Self::BoundedString { length, varying },
+            Scalar::WChar => Self::WChar,
+            Scalar::WString => Self::WString,
+            Scalar::WBoundedString { length, varying } => Self::WBoundedString { length, varying },
         }
     }
 
@@ -252,6 +277,10 @@ impl Type {
             Self::String => "character string",
             Self::BoundedString { varying: true, .. } => "varying character string",
             Self::BoundedString { .. } => "fixed character string",
+            Self::WChar => "WCHAR",
+            Self::WString => "wide character string",
+            Self::WBoundedString { varying: true, .. } => "varying wide character string",
+            Self::WBoundedString { .. } => "fixed wide character string",
             Self::Struct(_) => "structure",
             Self::Set(_) => "set",
             Self::Moreta(_) => "module mode object",
@@ -276,6 +305,8 @@ pub fn resolve_mode(name: &str) -> Option<Type> {
         "BOOL" => Some(Type::Bool),
         "CHAR" => Some(Type::Char),
         "CHARS" => Some(Type::String),
+        "WCHAR" => Some(Type::WChar),
+        "WCHARS" => Some(Type::WString),
         "ASSOCIATION" => Some(Type::Association),
         _ => None,
     }
@@ -312,6 +343,7 @@ pub fn resolve_mode_ref(
             Type::Int(kind) => PowerSetMember::Int(kind),
             Type::Bool => PowerSetMember::Bool,
             Type::Char => PowerSetMember::Char,
+            Type::WChar => PowerSetMember::WChar,
             _ => return None,
         };
         return Some(Type::PowerSet(PowerSetType { member }));
@@ -330,9 +362,15 @@ pub fn resolve_mode_ref(
         .copied()
         .or_else(|| resolve_mode(&mode.name))?;
     let base = match mode.string_length {
-        Some(length) => Type::BoundedString {
-            length,
-            varying: mode.varying,
+        Some(length) => match base {
+            Type::WString => Type::WBoundedString {
+                length,
+                varying: mode.varying,
+            },
+            _ => Type::BoundedString {
+                length,
+                varying: mode.varying,
+            },
         },
         None => base,
     };

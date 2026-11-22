@@ -3023,8 +3023,57 @@ impl<'a> Interpreter<'a> {
                 _ => Err(Error::coded("E0507", span, "expected a BOOL value")),
             },
             Type::Char => match value {
-                Value::Char(value) => Ok(Value::Char(value)),
+                Value::Char(value) if (value as u32) <= 0xFF => Ok(Value::Char(value)),
+                Value::Char(_) => Err(Error::coded(
+                    "E0507",
+                    span,
+                    "character value is outside the CHAR range",
+                )),
                 _ => Err(Error::coded("E0507", span, "expected a CHAR value")),
+            },
+            Type::WChar => match value {
+                Value::Char(value) if (value as u32) <= 0xFFFF => Ok(Value::Char(value)),
+                Value::Char(_) => Err(Error::coded(
+                    "E0507",
+                    span,
+                    "character value is outside the WCHAR range",
+                )),
+                _ => Err(Error::coded("E0507", span, "expected a WCHAR value")),
+            },
+            Type::WString => match value {
+                Value::String(value) => Ok(Value::String(value)),
+                _ => Err(Error::coded(
+                    "E0507",
+                    span,
+                    "expected a wide character string value",
+                )),
+            },
+            Type::WBoundedString { length, varying } => match value {
+                Value::String(value) => {
+                    let actual = value.chars().count();
+                    let fits = if varying {
+                        actual <= length
+                    } else {
+                        actual == length
+                    };
+                    if fits {
+                        Ok(Value::String(value))
+                    } else {
+                        Err(Error::coded(
+                            "E0507",
+                            span,
+                            format!(
+                                "string length {actual} does not fit WCHARS({length}){}",
+                                if varying { " VARYING" } else { "" }
+                            ),
+                        ))
+                    }
+                }
+                _ => Err(Error::coded(
+                    "E0507",
+                    span,
+                    "expected a wide character string value",
+                )),
             },
             Type::String => match value {
                 Value::String(value) => Ok(Value::String(value)),
@@ -3149,6 +3198,7 @@ impl<'a> Interpreter<'a> {
                 Some(Type::Int(kind)) => crate::types::PowerSetMember::Int(kind),
                 Some(Type::Bool) => crate::types::PowerSetMember::Bool,
                 Some(Type::Char) => crate::types::PowerSetMember::Char,
+                Some(Type::WChar) => crate::types::PowerSetMember::WChar,
                 _ => {
                     return Err(Error::coded(
                         "E0500",
@@ -3197,9 +3247,16 @@ impl<'a> Interpreter<'a> {
                 .ok_or_else(|| Error::coded("E0500", mode.span, "unsupported array dimensions"));
         }
         if let Some(length) = mode.string_length {
-            return Ok(Type::BoundedString {
-                length,
-                varying: mode.varying,
+            return Ok(if mode.name == "WCHARS" {
+                Type::WBoundedString {
+                    length,
+                    varying: mode.varying,
+                }
+            } else {
+                Type::BoundedString {
+                    length,
+                    varying: mode.varying,
+                }
             });
         }
         let floor = self.local_floor();
@@ -3955,7 +4012,10 @@ fn powerset_member_rep(
 ) -> Result<i128, Error> {
     match (member, value) {
         (crate::types::PowerSetMember::Int(_), Value::Int { value, .. }) => Ok(value),
-        (crate::types::PowerSetMember::Char, Value::Char(value)) => Ok(value as i128),
+        (
+            crate::types::PowerSetMember::Char | crate::types::PowerSetMember::WChar,
+            Value::Char(value),
+        ) => Ok(value as i128),
         (crate::types::PowerSetMember::Bool, Value::Bool(value)) => Ok(i128::from(value)),
         _ => Err(Error::coded("E0500", span, "invalid powerset member value")),
     }
@@ -4308,14 +4368,17 @@ fn read_conversion(
                 return Err(textfail(span, "expected TRUE or FALSE"));
             }
         }
-        Type::Char => {
+        Type::Char | Type::WChar => {
             let Some(ch) = chars.get(start) else {
                 return Err(textfail(span, "expected a character"));
             };
+            if target == Type::Char && (*ch as u32) > 0xFF {
+                return Err(textfail(span, "character is outside the CHAR range"));
+            }
             *cursor = (start + 1) as i128;
             Value::Char(*ch)
         }
-        Type::String | Type::BoundedString { .. } => {
+        Type::String | Type::BoundedString { .. } | Type::WString | Type::WBoundedString { .. } => {
             let text: String = chars[start..].iter().collect();
             *cursor = chars.len() as i128;
             Value::String(text)
@@ -4369,7 +4432,10 @@ fn read_conversion(
 }
 
 fn is_string_type_for_io(ty: Type) -> bool {
-    matches!(ty, Type::String | Type::BoundedString { .. })
+    matches!(
+        ty,
+        Type::String | Type::BoundedString { .. } | Type::WString | Type::WBoundedString { .. }
+    )
 }
 
 fn is_digit_for(ch: char, code: &crate::builtins::ConversionCode) -> bool {
@@ -4422,7 +4488,7 @@ fn parse_external(
             "FALSE" => Ok(Value::Bool(false)),
             _ => Err(textfail(span, "expected TRUE or FALSE")),
         },
-        Type::Char => {
+        Type::Char | Type::WChar => {
             let mut chars = text.chars();
             let Some(ch) = chars.next() else {
                 return Err(textfail(span, "expected a character"));
@@ -4430,9 +4496,14 @@ fn parse_external(
             if chars.next().is_some() {
                 return Err(textfail(span, "expected one character"));
             }
+            if target == Type::Char && (ch as u32) > 0xFF {
+                return Err(textfail(span, "character is outside the CHAR range"));
+            }
             Ok(Value::Char(ch))
         }
-        Type::String | Type::BoundedString { .. } => Ok(Value::String(text.to_owned())),
+        Type::String | Type::BoundedString { .. } | Type::WString | Type::WBoundedString { .. } => {
+            Ok(Value::String(text.to_owned()))
+        }
         _ => Err(Error::coded(
             "E0507",
             span,
