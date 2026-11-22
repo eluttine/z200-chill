@@ -67,6 +67,7 @@ pub struct MoretaMode {
     pub module: usize,
     pub package_name: Option<String>,
     pub module_name: Option<String>,
+    pub bases: Vec<MoretaId>,
     pub components: Vec<MoretaComponent>,
 }
 

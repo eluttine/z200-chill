@@ -485,10 +485,16 @@ impl Lowerer<'_> {
                     }
                 }
                 Declaration::Mode(mode_def) => {
-                    if let crate::ast::ModeDefinitionBody::Moreta { declarations, .. } =
-                        &mode_def.body
+                    if let crate::ast::ModeDefinitionBody::Moreta {
+                        declarations,
+                        invariant,
+                        ..
+                    } = &mode_def.body
                     {
                         self.lower_declarations(declarations)?;
+                        if let Some(invariant) = invariant {
+                            self.lower_expr(invariant)?;
+                        }
                     }
                 }
                 Declaration::ProcSignature(_)

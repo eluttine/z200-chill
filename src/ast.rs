@@ -160,6 +160,7 @@ pub enum ModeDefinitionBody {
         spec: bool,
         bases: Vec<String>,
         declarations: Vec<Declaration>,
+        invariant: Option<Expr>,
         span: Span,
     },
     Alias(ModeRef),

@@ -1331,6 +1331,7 @@ fn process_module_modes(
                 declarations,
                 ..
             } => {
+                let mut base_ids = Vec::new();
                 let mut components: Vec<crate::modes::MoretaComponent> = Vec::new();
                 for base in bases {
                     let base_ref = ModeRef {
@@ -1350,6 +1351,7 @@ fn process_module_modes(
                             format!("module mode base `{base}` is not a module mode"),
                         ));
                     };
+                    base_ids.push(base_id);
                     for component in &table.moretas[base_id.0].components {
                         if !components
                             .iter()
@@ -1433,6 +1435,7 @@ fn process_module_modes(
                     module: top,
                     package_name: top_package_name.clone(),
                     module_name: module.name.clone(),
+                    bases: base_ids,
                     components,
                 });
                 Type::Moreta(id)

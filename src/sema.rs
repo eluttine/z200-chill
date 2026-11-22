@@ -1007,7 +1007,12 @@ impl Checker {
                     self.declare_proc(&signature.name, proc_sig, signature.span)?;
                 }
                 Declaration::Mode(mode_def) => {
-                    if let ModeDefinitionBody::Moreta { declarations, .. } = &mode_def.body {
+                    if let ModeDefinitionBody::Moreta {
+                        declarations,
+                        invariant,
+                        ..
+                    } = &mode_def.body
+                    {
                         let mode_ref = ModeRef {
                             name: mode_def.name.clone(),
                             arrays: Vec::new(),
@@ -1043,6 +1048,15 @@ impl Checker {
                         self.scopes.push(component_scope);
                         let result = (|| {
                             self.check_initializers(declarations)?;
+                            if let Some(invariant) = invariant {
+                                let ty = self.check_expr(invariant)?;
+                                if ty != Type::Bool {
+                                    return Err(Error::new(
+                                        invariant.span(),
+                                        "INVARIANT expression must be BOOL",
+                                    ));
+                                }
+                            }
                             for declaration in declarations {
                                 if let Declaration::Proc(proc_def) = declaration {
                                     self.check_proc(proc_def)?;

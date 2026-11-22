@@ -811,6 +811,12 @@ impl<'a> Parser<'a> {
                 }
             }
             let declarations = self.parse_declarations(spec, spec)?;
+            let invariant = if self.at_keyword(Keyword::Invariant) {
+                self.advance();
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
             self.expect_keyword(Keyword::End)?;
             if let Some(TokenKind::Identifier(trailing)) = self.kind() {
                 if trailing != &name {
@@ -825,6 +831,7 @@ impl<'a> Parser<'a> {
                 spec,
                 bases,
                 declarations,
+                invariant,
                 span: Span::new(self.source, body_start.start, self.current_span().start),
             }
         } else {

@@ -219,7 +219,8 @@ pub fn run_checked(
         reaches: info.reaches,
         modules_by_span: collect_modules_by_span(&program),
         proc_defs: collect_proc_defs(&program),
-        moreta_decls: collect_moreta_decls(&program),
+        moreta_decls: collect_moreta_decls(&program).0,
+        moreta_invariants: collect_moreta_decls(&program).1,
         package_names: program
             .modules
             .iter()
@@ -367,6 +368,7 @@ struct Interpreter<'a> {
     modules_by_span: HashMap<Span, &'a Module>,
     proc_defs: HashMap<Span, &'a ProcDef>,
     moreta_decls: HashMap<types::MoretaId, &'a [Declaration]>,
+    moreta_invariants: HashMap<types::MoretaId, &'a Expr>,
     package_names: Vec<Option<String>>,
     /// Scopes for nested modules declared in a module body, keyed by span.
     nested_scopes: HashMap<Span, Scope<'a>>,
@@ -696,24 +698,45 @@ impl<'a> Interpreter<'a> {
         Ok(())
     }
 
+    fn moreta_initializer_declarations(&self, id: types::MoretaId) -> Vec<Declaration> {
+        let mut declarations = Vec::new();
+        for base in &self.modes.get_moreta(id).bases {
+            declarations.extend(self.moreta_initializer_declarations(*base));
+        }
+        if let Some(own) = self.moreta_decls.get(&id) {
+            declarations.extend(
+                own.iter()
+                    .filter(|declaration| matches!(declaration, Declaration::Var(_)))
+                    .cloned(),
+            );
+        }
+        declarations
+    }
+
     fn create_moreta_object(&mut self, id: types::MoretaId, span: Span) -> Result<Value, Error> {
-        let Some(declarations) = self.moreta_decls.get(&id).copied() else {
+        if !self.moreta_decls.contains_key(&id) {
             return Err(Error::new(
                 span,
                 "internal: missing module mode declarations",
             ));
-        };
-        let components: Vec<Declaration> = declarations
-            .iter()
-            .filter(|declaration| matches!(declaration, Declaration::Var(_)))
-            .cloned()
-            .collect();
+        }
+        let initializer_declarations = self.moreta_initializer_declarations(id);
         self.locals.push(Scope::default());
-        let result = (|| {
-            self.declare_local_vars(&components)?;
-            self.initialize_declarations(&components)?;
-            Ok(())
-        })();
+        {
+            let scope = self.locals.last_mut().expect("module mode scope");
+            for component in &self.modes.get_moreta(id).components {
+                if let crate::modes::MoretaComponent::Var { name, ty } = component {
+                    scope.vars.insert(
+                        name.clone(),
+                        Rc::new(RefCell::new(Var {
+                            ty: *ty,
+                            value: default_value(&self.modes, *ty),
+                        })),
+                    );
+                }
+            }
+        }
+        let result = self.initialize_declarations(&initializer_declarations);
         if let Err(error) = result {
             self.locals.pop();
             return Err(error);
@@ -2293,6 +2316,32 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    fn check_moreta_invariants(&mut self, id: types::MoretaId, span: Span) -> Result<(), Error> {
+        let mut invariants = Vec::new();
+        for base in &self.modes.get_moreta(id).bases {
+            invariants.extend(self.collect_moreta_invariants(*base));
+        }
+        invariants.extend(self.collect_moreta_invariants(id));
+        for invariant in invariants {
+            let value = self.eval_expr(&invariant)?;
+            if !self.as_bool(value, span)? {
+                return Err(Error::exception(
+                    "INVFAIL",
+                    span,
+                    "INVFAIL: module mode invariant is false",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_moreta_invariants(&self, id: types::MoretaId) -> Vec<Expr> {
+        self.moreta_invariants
+            .get(&id)
+            .map(|invariant| vec![(*invariant).clone()])
+            .unwrap_or_default()
+    }
+
     fn call_method(
         &mut self,
         object_name: &str,
@@ -2341,7 +2390,12 @@ impl<'a> Interpreter<'a> {
                 }
             }
         }
-        let result = self.call_proc_inner(proc_def, args, span);
+        let result = (|| {
+            self.check_moreta_invariants(id, span)?;
+            let result = self.call_proc_inner(proc_def, args, span)?;
+            self.check_moreta_invariants(id, span)?;
+            Ok(result)
+        })();
         self.depth -= 1;
         self.call_bases.pop();
         let updated = if result.is_ok() {
@@ -3197,30 +3251,44 @@ fn collect_modules_by_span(program: &Program) -> HashMap<Span, &Module> {
     map
 }
 
-fn collect_moreta_decls(program: &Program) -> HashMap<types::MoretaId, &[Declaration]> {
-    let mut map = HashMap::new();
+type MoretaDecls<'a> = HashMap<types::MoretaId, &'a [Declaration]>;
+type MoretaInvariants<'a> = HashMap<types::MoretaId, &'a Expr>;
+
+fn collect_moreta_decls(program: &Program) -> (MoretaDecls<'_>, MoretaInvariants<'_>) {
+    let mut decls = HashMap::new();
+    let mut invariants = HashMap::new();
     let mut next = 0usize;
     for module in &program.modules {
-        collect_module_moreta_decls(module, &mut next, &mut map);
+        collect_module_moreta_decls(module, &mut next, &mut decls, &mut invariants);
     }
-    map
+    (decls, invariants)
 }
 
 fn collect_module_moreta_decls<'a>(
     module: &'a Module,
     next: &mut usize,
-    map: &mut HashMap<types::MoretaId, &'a [Declaration]>,
+    decls: &mut MoretaDecls<'a>,
+    invariants: &mut MoretaInvariants<'a>,
 ) {
     for declaration in &module.declarations {
         if let Declaration::Mode(mode_def) = declaration {
-            if let crate::ast::ModeDefinitionBody::Moreta { declarations, .. } = &mode_def.body {
-                map.insert(types::MoretaId(*next), declarations.as_slice());
+            if let crate::ast::ModeDefinitionBody::Moreta {
+                declarations,
+                invariant,
+                ..
+            } = &mode_def.body
+            {
+                let id = types::MoretaId(*next);
+                decls.insert(id, declarations.as_slice());
+                if let Some(invariant) = invariant {
+                    invariants.insert(id, invariant);
+                }
                 *next += 1;
             }
         }
     }
     walk_action_modules(&module.actions, &mut |child| {
-        collect_module_moreta_decls(child, next, map);
+        collect_module_moreta_decls(child, next, decls, invariants);
     });
 }
 
