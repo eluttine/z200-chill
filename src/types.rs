@@ -32,6 +32,7 @@ pub struct ModeId(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scalar {
     Int(IntKind),
+    Float,
     Bool,
     Char,
     String,
@@ -48,6 +49,7 @@ impl ArrayElement {
     pub fn from_type(ty: Type) -> Option<Self> {
         match ty {
             Type::Int(kind) => Some(Self::Scalar(Scalar::Int(kind))),
+            Type::Float => Some(Self::Scalar(Scalar::Float)),
             Type::Bool => Some(Self::Scalar(Scalar::Bool)),
             Type::Char => Some(Self::Scalar(Scalar::Char)),
             Type::String => Some(Self::Scalar(Scalar::String)),
@@ -133,6 +135,7 @@ pub enum Type {
     Int(IntKind),
     /// The `&INT`-derived class of an integer literal.
     IntLiteral,
+    Float,
     Bool,
     Char,
     String,
@@ -175,6 +178,7 @@ impl Type {
     pub fn scalar(self) -> Option<Scalar> {
         match self {
             Self::Int(kind) => Some(Scalar::Int(kind)),
+            Self::Float => Some(Scalar::Float),
             Self::Bool => Some(Scalar::Bool),
             Self::Char => Some(Scalar::Char),
             Self::String => Some(Scalar::String),
@@ -195,6 +199,7 @@ impl Type {
     pub fn from_scalar(scalar: Scalar) -> Self {
         match scalar {
             Scalar::Int(kind) => Self::Int(kind),
+            Scalar::Float => Self::Float,
             Scalar::Bool => Self::Bool,
             Scalar::Char => Self::Char,
             Scalar::String => Self::String,
@@ -206,6 +211,7 @@ impl Type {
         match self {
             Self::Int(kind) => kind.name(),
             Self::IntLiteral => "integer literal",
+            Self::Float => "FLOAT",
             Self::Bool => "BOOL",
             Self::Char => "CHAR",
             Self::String => "character string",
@@ -227,6 +233,7 @@ pub fn resolve_mode(name: &str) -> Option<Type> {
     match name {
         "SHORT_INT" => Some(Type::Int(IntKind::Short)),
         "INT" => Some(Type::Int(IntKind::Int)),
+        "FLOAT" => Some(Type::Float),
         "LONG_INT" => Some(Type::Int(IntKind::Long)),
         "BOOL" => Some(Type::Bool),
         "CHAR" => Some(Type::Char),

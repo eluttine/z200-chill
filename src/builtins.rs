@@ -33,6 +33,7 @@ pub enum ConversionCode {
     Octal,
     Hex,
     Default,
+    Scientific,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +46,8 @@ pub enum ClauseWidth {
 pub struct Conversion {
     pub code: ConversionCode,
     pub width: ClauseWidth,
+    pub fractional_width: Option<usize>,
+    pub exponent_width: Option<usize>,
     pub left: bool,
     pub overflow: bool,
     pub pad: char,
@@ -125,7 +128,7 @@ pub fn parse_format(text: &str) -> Result<Vec<FormatOp>, String> {
                     'O' => ConversionCode::Octal,
                     'H' => ConversionCode::Hex,
                     'C' => ConversionCode::Default,
-                    _ => return Err("scientific `%F` conversion is not implemented yet".to_owned()),
+                    _ => ConversionCode::Scientific,
                 };
                 let mut left = false;
                 let mut overflow = false;
@@ -174,17 +177,53 @@ pub fn parse_format(text: &str) -> Result<Vec<FormatOp>, String> {
                         )
                     }
                 };
+                let mut fractional_width = None;
                 if index + 1 < chars.len()
-                    && matches!(chars[index], '.' | ':')
+                    && chars[index] == '.'
                     && chars[index + 1].is_ascii_digit()
                 {
-                    return Err(
-                        "fractional and exponent format widths are not implemented yet".to_owned(),
+                    index += 1;
+                    let start = index;
+                    while index < chars.len() && chars[index].is_ascii_digit() {
+                        index += 1;
+                    }
+                    if index == start {
+                        return Err("fractional format width has no digits".to_owned());
+                    }
+                    fractional_width = Some(
+                        chars[start..index]
+                            .iter()
+                            .collect::<String>()
+                            .parse::<usize>()
+                            .map_err(|_| "invalid fractional format width".to_owned())?,
+                    );
+                }
+                let mut exponent_width = None;
+                if index + 1 < chars.len()
+                    && chars[index] == ':'
+                    && chars[index + 1].is_ascii_digit()
+                {
+                    index += 1;
+                    let start = index;
+                    while index < chars.len() && chars[index].is_ascii_digit() {
+                        index += 1;
+                    }
+                    if index == start {
+                        return Err("exponent format width has no digits".to_owned());
+                    }
+                    exponent_width = Some(
+                        chars[start..index]
+                            .iter()
+                            .collect::<String>()
+                            .parse::<usize>()
+                            .map_err(|_| "invalid exponent format width".to_owned())?,
                     );
                 }
                 let conversion = Conversion {
                     code,
                     width,
+                    fractional_width,
+                    exponent_width,
                     left,
                     overflow,
                     pad,

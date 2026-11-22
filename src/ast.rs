@@ -390,6 +390,10 @@ pub enum Expr {
         base: u32,
         span: Span,
     },
+    Float {
+        value: f64,
+        span: Span,
+    },
     Bool {
         value: bool,
         span: Span,
@@ -448,6 +452,7 @@ impl Expr {
     pub fn span(&self) -> Span {
         match self {
             Self::Integer { span, .. }
+            | Self::Float { span, .. }
             | Self::Bool { span, .. }
             | Self::Char { span, .. }
             | Self::String { span, .. }

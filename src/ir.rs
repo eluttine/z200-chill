@@ -23,6 +23,16 @@ pub enum Expr {
         ty: Type,
         span: Span,
     },
+    Float {
+        value: f64,
+        ty: Type,
+        span: Span,
+    },
+    FloatConversion {
+        arg: Node,
+        ty: Type,
+        span: Span,
+    },
     Bool {
         value: bool,
         ty: Type,
@@ -135,6 +145,8 @@ impl Expr {
     pub fn span(&self) -> Span {
         match self {
             Self::Integer { span, .. }
+            | Self::Float { span, .. }
+            | Self::FloatConversion { span, .. }
             | Self::Bool { span, .. }
             | Self::Char { span, .. }
             | Self::String { span, .. }
@@ -158,6 +170,8 @@ impl Expr {
     pub fn ty(&self) -> Option<Type> {
         match self {
             Self::Integer { ty, .. }
+            | Self::Float { ty, .. }
+            | Self::FloatConversion { ty, .. }
             | Self::Bool { ty, .. }
             | Self::Char { ty, .. }
             | Self::String { ty, .. }
@@ -795,6 +809,19 @@ impl Lowerer<'_> {
                         span,
                     })
                 }
+                Some(ApplyResolution::FloatConversion) => {
+                    let ty = ty.ok_or_else(|| {
+                        Error::new(span, "internal: FLOAT conversion has no checked mode")
+                    })?;
+                    Rc::new(Expr::FloatConversion {
+                        arg: args
+                            .into_iter()
+                            .next()
+                            .ok_or_else(|| Error::new(span, "FLOAT conversion has no argument"))?,
+                        ty,
+                        span,
+                    })
+                }
                 Some(ApplyResolution::Procedure) => Rc::new(Expr::Call {
                     name: name.clone(),
                     args,
@@ -940,6 +967,11 @@ impl Lowerer<'_> {
             AstExpr::Integer { value, base, .. } => Rc::new(Expr::Integer {
                 value: *value,
                 base: *base,
+                ty,
+                span,
+            }),
+            AstExpr::Float { value, .. } => Rc::new(Expr::Float {
+                value: *value,
                 ty,
                 span,
             }),

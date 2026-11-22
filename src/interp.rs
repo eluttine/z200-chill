@@ -243,10 +243,11 @@ pub fn run_checked(
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum Value {
     Undefined,
     Int { value: i128, kind: Option<IntKind> },
+    Float(f64),
     Bool(bool),
     Char(char),
     String(String),
@@ -1749,6 +1750,18 @@ impl<'a> Interpreter<'a> {
             ir::Expr::Integer {
                 value, ty, span, ..
             } => self.make_int(*value, type_kind(*ty), *span),
+            ir::Expr::Float { value, .. } => Ok(Value::Float(*value)),
+            ir::Expr::FloatConversion { arg, span, .. } => {
+                let value = self.eval_ir(arg)?;
+                match value {
+                    Value::Float(value) => Ok(Value::Float(value)),
+                    Value::Int { value, .. } => Ok(Value::Float(value as f64)),
+                    _ => Err(Error::new(
+                        *span,
+                        "conversion to FLOAT requires a numeric value",
+                    )),
+                }
+            }
             ir::Expr::Bool { value, .. } => Ok(Value::Bool(*value)),
             ir::Expr::Char { value, .. } => Ok(Value::Char(*value)),
             ir::Expr::String { value, .. } => Ok(Value::String(value.clone())),
@@ -2047,13 +2060,16 @@ impl<'a> Interpreter<'a> {
             } => {
                 let value = self.eval_ir(operand)?;
                 match op {
-                    UnaryOp::Neg => {
-                        let (value, _) = self.expect_int(value, *span)?;
-                        let negated = value
-                            .checked_neg()
-                            .ok_or_else(|| Error::new(*span, "OVERFLOW in unary `-`"))?;
-                        self.make_int(negated, type_kind(*ty), *span)
-                    }
+                    UnaryOp::Neg => match value {
+                        Value::Float(value) => Ok(Value::Float(-value)),
+                        value => {
+                            let (value, _) = self.expect_int(value, *span)?;
+                            let negated = value
+                                .checked_neg()
+                                .ok_or_else(|| Error::new(*span, "OVERFLOW in unary `-`"))?;
+                            self.make_int(negated, type_kind(*ty), *span)
+                        }
+                    },
                     UnaryOp::Not => Ok(Value::Bool(!self.as_bool(value, *span)?)),
                 }
             }
@@ -2227,6 +2243,26 @@ impl<'a> Interpreter<'a> {
             | BinaryOp::Mod
             | BinaryOp::Rem
             | BinaryOp::Pow => {
+                if let (Value::Float(left), Value::Float(right)) = (&left, &right) {
+                    let value = match op {
+                        BinaryOp::Add => left + right,
+                        BinaryOp::Sub => left - right,
+                        BinaryOp::Mul => left * right,
+                        BinaryOp::Div => {
+                            if *right == 0.0 {
+                                return Err(Error::new(span, "division by zero"));
+                            }
+                            left / right
+                        }
+                        _ => {
+                            return Err(Error::new(
+                                span,
+                                "this operator does not accept FLOAT operands",
+                            ));
+                        }
+                    };
+                    return Ok(Value::Float(value));
+                }
                 let (left, _) = self.expect_int(left, span)?;
                 let (right, _) = self.expect_int(right, span)?;
                 let kind = match result_type {
@@ -2293,6 +2329,7 @@ impl<'a> Interpreter<'a> {
         }
         match (left, right) {
             (Value::Int { value: left, .. }, Value::Int { value: right, .. }) => Ok(left == right),
+            (Value::Float(left), Value::Float(right)) => Ok(left == right),
             (Value::Bool(left), Value::Bool(right)) => Ok(left == right),
             (Value::Char(left), Value::Char(right)) => Ok(left == right),
             (Value::String(left), Value::String(right)) => Ok(left == right),
@@ -2346,6 +2383,9 @@ impl<'a> Interpreter<'a> {
                 Ok(left.cmp(right))
             }
             (Value::Char(left), Value::Char(right)) => Ok(left.cmp(right)),
+            (Value::Float(left), Value::Float(right)) => left
+                .partial_cmp(right)
+                .ok_or_else(|| Error::new(span, "cannot order NaN values")),
             (Value::String(left), Value::String(right)) => Ok(left.cmp(right)),
             _ => Err(Error::new(span, "cannot order these values")),
         }
@@ -2391,6 +2431,10 @@ impl<'a> Interpreter<'a> {
 
     fn convert(&self, value: Value, ty: Type, span: Span) -> Result<Value, Error> {
         match ty {
+            Type::Float => match value {
+                Value::Float(value) => Ok(Value::Float(value)),
+                _ => Err(Error::new(span, "expected a FLOAT value")),
+            },
             Type::Int(kind) => {
                 let (value, _) = self.expect_int(value, span)?;
                 self.make_int(value, Some(kind), span)
@@ -3287,6 +3331,17 @@ fn format_value(
         }
         (crate::builtins::ConversionCode::Default, Value::Char(value)) => value.to_string(),
         (crate::builtins::ConversionCode::Default, Value::String(value)) => value.clone(),
+        (crate::builtins::ConversionCode::Default, Value::Float(value)) => {
+            match conversion.fractional_width {
+                Some(width) => format!("{value:.width$}"),
+                None => value.to_string(),
+            }
+        }
+        (crate::builtins::ConversionCode::Scientific, Value::Float(value)) => format_scientific(
+            *value,
+            conversion.fractional_width,
+            conversion.exponent_width,
+        ),
         _ => {
             return Err(Error::new(
                 span,
@@ -3295,6 +3350,29 @@ fn format_value(
         }
     };
     Ok(fit_width(representation, width, conversion))
+}
+
+fn format_scientific(
+    value: f64,
+    fractional_width: Option<usize>,
+    exponent_width: Option<usize>,
+) -> String {
+    let formatted = match fractional_width {
+        Some(width) => format!("{value:.width$e}"),
+        None => format!("{value:e}"),
+    };
+    let Some((mantissa, exponent)) = formatted.split_once('e') else {
+        return formatted;
+    };
+    let (sign, digits) = if let Some(digits) = exponent.strip_prefix('-') {
+        ("-", digits)
+    } else if let Some(digits) = exponent.strip_prefix('+') {
+        ("+", digits)
+    } else {
+        ("", exponent)
+    };
+    let width = exponent_width.unwrap_or(3);
+    format!("{mantissa}e{sign}{digits:0>width$}")
 }
 
 fn format_integer_base(value: i128, base: u32) -> String {
@@ -3412,6 +3490,26 @@ fn read_conversion(
             *cursor = chars.len() as i128;
             Value::String(text)
         }
+        Type::Float => {
+            let mut end = start;
+            while end < chars.len() && matches!(chars[end], ' ' | '\t') {
+                end += 1;
+            }
+            let mut token = String::new();
+            if end < chars.len() && matches!(chars[end], '+' | '-') {
+                token.push(chars[end]);
+                end += 1;
+            }
+            while end < chars.len()
+                && (chars[end].is_ascii_digit()
+                    || matches!(chars[end], '.' | 'e' | 'E' | '+' | '-'))
+            {
+                token.push(chars[end]);
+                end += 1;
+            }
+            *cursor = end as i128;
+            parse_external(&token, conversion, target, span)?
+        }
         Type::Int(_) | Type::IntLiteral => {
             let mut end = start;
             while end < chars.len() && matches!(chars[end], ' ' | '\t') {
@@ -3448,7 +3546,9 @@ fn is_digit_for(ch: char, code: &crate::builtins::ConversionCode) -> bool {
         crate::builtins::ConversionCode::Binary => matches!(ch, '0' | '1'),
         crate::builtins::ConversionCode::Octal => ('0'..='7').contains(&ch),
         crate::builtins::ConversionCode::Hex => ch.is_ascii_hexdigit(),
-        crate::builtins::ConversionCode::Default => ch.is_ascii_digit(),
+        crate::builtins::ConversionCode::Default | crate::builtins::ConversionCode::Scientific => {
+            ch.is_ascii_digit()
+        }
     }
 }
 
@@ -3471,7 +3571,8 @@ fn parse_external(
                 crate::builtins::ConversionCode::Binary => 2,
                 crate::builtins::ConversionCode::Octal => 8,
                 crate::builtins::ConversionCode::Hex => 16,
-                crate::builtins::ConversionCode::Default => 10,
+                crate::builtins::ConversionCode::Default
+                | crate::builtins::ConversionCode::Scientific => 10,
             };
             let magnitude = i128::from_str_radix(digits, base)
                 .map_err(|_| textfail(span, "invalid integer in text"))?;
@@ -3481,6 +3582,10 @@ fn parse_external(
                 kind: Some(kind),
             })
         }
+        Type::Float => text
+            .parse::<f64>()
+            .map(Value::Float)
+            .map_err(|_| textfail(span, "invalid floating-point value in text")),
         Type::Bool => match text.to_ascii_uppercase().as_str() {
             "TRUE" => Ok(Value::Bool(true)),
             "FALSE" => Ok(Value::Bool(false)),

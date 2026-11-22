@@ -117,8 +117,9 @@ all existing tests pass with no new special cases.
 - [x] Variable format widths (`V`) for conversions and editing clauses.
 - [x] Association attributes `EXISTING`, `READABLE`, `WRITEABLE`, `INDEXABLE`,
       `SEQUENCIBLE`, and `VARIABLE`.
-- [ ] Fractional/exponent widths and `%F` (blocked on floating-point modes),
-      I/O control clauses, `MODIFY`, and indexed access.
+- [x] Floating-point mode `FLOAT`, literals, arithmetic/comparisons, `FLOAT(...)`
+      conversion, float arrays, fractional/exponent format widths, and `%F`.
+- [ ] I/O control clauses, `MODIFY`, and indexed access.
 - [ ] Processes, signals, and timers.
 - [ ] Sets/powersets, moreta modes, templates.
 

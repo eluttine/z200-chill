@@ -378,6 +378,7 @@ fn type_name(ty: Type) -> String {
     match ty {
         Type::Int(kind) => kind.name().to_owned(),
         Type::Bool => "BOOL".to_owned(),
+        Type::Float => "FLOAT".to_owned(),
         Type::Char => "CHAR".to_owned(),
         Type::String => "CHARS".to_owned(),
         Type::BoundedString {

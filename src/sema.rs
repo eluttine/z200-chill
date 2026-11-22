@@ -81,6 +81,7 @@ impl std::error::Error for Error {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyResolution {
     Conversion(IntKind),
+    FloatConversion,
     Procedure,
     ArrayIndex(Type),
     Builtin(crate::builtins::Builtin),
@@ -1766,6 +1767,7 @@ impl Checker {
 
     fn check_expr_inner(&mut self, expr: &Expr) -> Result<Type, Error> {
         match expr {
+            Expr::Float { .. } => Ok(Type::Float),
             Expr::Integer { value, span, .. } => {
                 let long = IntKind::Long;
                 let Some((low, high)) = types::int_bounds(long, self.profile) else {
@@ -1814,7 +1816,7 @@ impl Checker {
                 let ty = self.check_expr(operand)?;
                 match op {
                     UnaryOp::Neg => {
-                        if ty.is_int() {
+                        if ty.is_int() || ty == Type::Float {
                             Ok(ty)
                         } else {
                             Err(Error::new(
@@ -1892,7 +1894,10 @@ impl Checker {
                     self.combine_int(left, right, span)?;
                     Ok(Type::Bool)
                 } else if (left == right
-                    && matches!(left, Type::Bool | Type::Char | Type::Struct(_)))
+                    && matches!(
+                        left,
+                        Type::Bool | Type::Char | Type::Struct(_) | Type::Float
+                    ))
                     || (is_string_type(left) && is_string_type(right))
                     || arrays_compatible(left, right)
                 {
@@ -1913,6 +1918,7 @@ impl Checker {
                     self.combine_int(left, right, span)?;
                     Ok(Type::Bool)
                 } else if (left == Type::Char && right == Type::Char)
+                    || (left == Type::Float && right == Type::Float)
                     || (is_string_type(left) && is_string_type(right))
                 {
                     Ok(Type::Bool)
@@ -1936,11 +1942,19 @@ impl Checker {
             | BinaryOp::Pow => {
                 if left.is_int() && right.is_int() {
                     self.combine_int(left, right, span)
+                } else if left == Type::Float
+                    && right == Type::Float
+                    && matches!(
+                        op,
+                        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+                    )
+                {
+                    Ok(Type::Float)
                 } else {
                     Err(Error::new(
                         span,
                         format!(
-                            "arithmetic requires integers, found {} and {}",
+                            "arithmetic requires integers or matching FLOAT operands, found {} and {}",
                             left.describe(),
                             right.describe()
                         ),
@@ -2265,9 +2279,11 @@ impl Checker {
                             | crate::builtins::ConversionCode::Hex => ty.is_int(),
                             crate::builtins::ConversionCode::Default => {
                                 ty.is_int()
+                                    || ty == Type::Float
                                     || matches!(ty, Type::Bool | Type::Char)
                                     || is_string_type(ty)
                             }
+                            crate::builtins::ConversionCode::Scientific => ty == Type::Float,
                         };
                         if !valid {
                             return Err(Error::new(
@@ -2332,6 +2348,27 @@ impl Checker {
         }
 
         if let Some(mode) = types::resolve_mode(name) {
+            if mode == Type::Float {
+                if args.len() != 1 {
+                    return Err(Error::new(
+                        span,
+                        "conversion to FLOAT takes exactly one argument",
+                    ));
+                }
+                let arg_ty = self.check_expr(&args[0])?;
+                if !arg_ty.is_int() && arg_ty != Type::Float {
+                    return Err(Error::new(
+                        args[0].span(),
+                        format!(
+                            "conversion to FLOAT requires an integer or FLOAT, found {}",
+                            arg_ty.describe()
+                        ),
+                    ));
+                }
+                self.resolutions
+                    .insert(span, ApplyResolution::FloatConversion);
+                return Ok(Some(Type::Float));
+            }
             let Type::Int(kind) = mode else {
                 return Err(Error::new(
                     span,
@@ -2602,6 +2639,7 @@ impl Checker {
                 _ => false,
             },
             Type::Bool => value == Type::Bool,
+            Type::Float => value == Type::Float,
             Type::Char => value == Type::Char,
             Type::String => is_string_type(value),
             Type::BoundedString { .. } => is_string_type(value),

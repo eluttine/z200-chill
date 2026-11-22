@@ -54,9 +54,9 @@ Implemented in `z200c`:
 
 - manifest loading and width-profile validation;
 - lexer, parser, and AST for the constructs in the subset above;
-- mode checking for `SHORT_INT` / `INT` / `LONG_INT` / `BOOL` / `CHAR` / `CHARS`,
-  `CHARS(n)` / `CHARS(n) VARYING`, literals, arithmetic, and one-dimensional arrays
-  of scalar or structure modes (`ARRAY (low:high) mode`),
+- mode checking for `SHORT_INT` / `INT` / `LONG_INT` / `FLOAT` / `BOOL` / `CHAR` /
+  `CHARS`, `CHARS(n)` / `CHARS(n) VARYING`, literals, arithmetic, and one-dimensional
+  arrays of scalar or structure modes (`ARRAY (low:high) mode`),
   relational and boolean expressions, procedures, calls, assignments, `ASSERT`,
   `IF`, `DO WHILE` / `DO FOR EVER`, and `BEGIN … END`;
 - `GRANT` / `SEIZE` visibility with module/package-qualified names (`Module!x`,
@@ -223,7 +223,8 @@ invariant `width(SHORT_INT) <= width(INT) <= width(LONG_INT)` holds by construct
 
 `ARRAY (low:high, ...) element-mode` declares an array with one or more constant
 integer index ranges. Up to four dimensions are supported. The element mode may be
-scalar (`SHORT_INT`/`INT`/`LONG_INT`, `BOOL`, `CHAR`, or `CHARS`) or a structure mode.
+scalar (`SHORT_INT`/`INT`/`LONG_INT`, `FLOAT`, `BOOL`, `CHAR`, `CHARS`, or bounded
+character strings) or a structure mode.
 
 - `a(i)` selects an element from a one-dimensional array; `a(i, j, ...)` selects an
   element from a multidimensional array. Both may be read or used as assignment
@@ -262,6 +263,14 @@ scalar (`SHORT_INT`/`INT`/`LONG_INT`, `BOOL`, `CHAR`, or `CHARS`) or a structure
 - Array slices currently apply to one-dimensional arrays only.
 - Array literals currently apply to one-dimensional arrays only.
 
+
+### 4.3.1 Floating-point mode
+
+`FLOAT` is the implementation-defined floating-point mode, represented as an IEEE-754
+double. Floating-point literals use a decimal point and/or exponent (`1.5`, `1e3`).
+Arithmetic supports `+`, `-`, `*`, and `/`; comparisons and equality are defined for
+matching `FLOAT` operands. `FLOAT(expr)` converts an integer or floating-point value.
+Floating-point values may be array elements and procedure parameters/results.
 
 ### 4.4 Runtime checks
 
@@ -440,11 +449,13 @@ text**:
   the literal format and raise the `TEXTFAIL` exception otherwise.
 - Format text must be a literal in the current subset.
 - Supported format elements:
-  - conversions `%B` (binary), `%O` (octal), `%H` (hexadecimal), and `%C` (default);
+  - conversions `%B` (binary), `%O` (octal), `%H` (hexadecimal), `%C` (default), and
+    `%F` (scientific floating point);
   - conversion qualifiers `L` (left justification), `E` (overflow `*`), and
     `P<char>` (padding character);
-  - fixed clause widths such as `%C5`, variable widths `%CV` / `%XV`, and repetition
-    factors such as `%3C`;
+  - fixed clause widths such as `%C5`, variable widths `%CV` / `%XV`, fractional widths
+    such as `%C.2` / `%F.2`, exponent widths such as `%F:3`, and repetition factors
+    such as `%3C`;
   - editing clauses `%X` (space), `%>` (skip right), `%<` (skip left), and `%T`
     (tabulate), with optional widths;
   - `%%` for a literal percent and ordinary format text;
@@ -454,8 +465,7 @@ text**:
 - Parenthesized clauses are supported, e.g. `%2(%C:%C %)`.
 - Variable widths are taken from the io list in format order; for example
   `WRITETEXT(s, "%CV", 5, 42)` uses width 5 and value 42.
-- Not implemented yet: fractional/exponent widths and `%F` (these require
-  floating-point modes), and I/O control clauses (`%/`, `%+`, etc.).
+- Not implemented yet: I/O control clauses (`%/`, `%+`, etc.).
 - Text locations must have a varying string mode (`CHARS` or `CHARS(n) VARYING`).
 
 ### 5.6 Text modes

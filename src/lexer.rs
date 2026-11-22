@@ -16,16 +16,17 @@ impl Span {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     Identifier(String),
     Integer { value: i128, base: u32 },
+    Float(f64),
     Bool(bool),
     Char(char),
     String(String),
@@ -227,6 +228,7 @@ impl fmt::Display for TokenKind {
         match self {
             Self::Identifier(name) => write!(f, "identifier `{name}`"),
             Self::Integer { value, base } => write!(f, "integer `{value}` (base {base})"),
+            Self::Float(value) => write!(f, "floating-point literal `{value}`"),
             Self::Bool(value) => write!(f, "`{value}`"),
             Self::Char(value) => write!(f, "character literal `{value}`"),
             Self::String(_) => f.write_str("string literal"),
@@ -477,8 +479,46 @@ impl<'a> Lexer<'a> {
         while matches!(self.peek(), Some(ch) if ch.is_ascii_digit() || ch == '_') {
             self.bump();
         }
+        let mut is_float = false;
+        if self.peek() == Some('.') && matches!(self.peek_second(), Some(ch) if ch.is_ascii_digit())
+        {
+            is_float = true;
+            self.bump();
+            while matches!(self.peek(), Some(ch) if ch.is_ascii_digit() || ch == '_') {
+                self.bump();
+            }
+        }
+        if matches!(self.peek(), Some('e' | 'E')) {
+            is_float = true;
+            self.bump();
+            if matches!(self.peek(), Some('+' | '-')) {
+                self.bump();
+            }
+            let digits_start = self.pos;
+            while matches!(self.peek(), Some(ch) if ch.is_ascii_digit() || ch == '_') {
+                self.bump();
+            }
+            if self.pos == digits_start {
+                return Err(Error::coded(
+                    "E0102",
+                    start,
+                    "floating-point exponent has no digits",
+                ));
+            }
+        }
         let text = &self.source[start..self.pos];
-        parse_integer(text, 10, start)
+        if is_float {
+            let cleaned: String = text.chars().filter(|ch| *ch != '_').collect();
+            cleaned.parse::<f64>().map(TokenKind::Float).map_err(|_| {
+                Error::coded(
+                    "E0102",
+                    start,
+                    format!("invalid floating-point literal `{text}`"),
+                )
+            })
+        } else {
+            parse_integer(text, 10, start)
+        }
     }
 
     fn lex_based_integer(&mut self) -> Result<TokenKind, Error> {

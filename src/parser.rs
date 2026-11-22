@@ -1618,6 +1618,14 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(expr)
             }
+            TokenKind::Float(value) => {
+                let expr = Expr::Float {
+                    value: *value,
+                    span,
+                };
+                self.advance();
+                Ok(expr)
+            }
             TokenKind::Bool(value) => {
                 let expr = Expr::Bool {
                     value: *value,
