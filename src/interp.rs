@@ -721,10 +721,13 @@ impl<'a> Interpreter<'a> {
         let scope = self.locals.pop().expect("module mode scope");
         let mut components = Vec::new();
         for component in &self.modes.get_moreta(id).components {
-            if let crate::modes::MoretaComponent::Var { name, .. } = component {
-                if let Some(cell) = scope.vars.get(name) {
-                    components.push((name.clone(), cell.borrow().value.clone()));
-                }
+            if let crate::modes::MoretaComponent::Var { name, ty } = component {
+                let value = if let Some(cell) = scope.vars.get(name) {
+                    cell.borrow().value.clone()
+                } else {
+                    default_value(&self.modes, *ty)
+                };
+                components.push((name.clone(), value));
             }
         }
         Ok(Value::Moreta(components))

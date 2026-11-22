@@ -1145,8 +1145,39 @@ fn process_module_modes(
                 });
                 Type::Set(id)
             }
-            crate::ast::ModeDefinitionBody::Moreta { declarations, .. } => {
-                let mut components = Vec::new();
+            crate::ast::ModeDefinitionBody::Moreta {
+                bases,
+                declarations,
+                ..
+            } => {
+                let mut components: Vec<crate::modes::MoretaComponent> = Vec::new();
+                for base in bases {
+                    let base_ref = ModeRef {
+                        name: base.clone(),
+                        arrays: Vec::new(),
+                        string_length: None,
+                        varying: false,
+                        access: false,
+                        powerset: false,
+                        access_indexed: false,
+                        access_index: None,
+                        span: mode_def.span,
+                    };
+                    let Type::Moreta(base_id) = resolve_mode_with(&base_ref, resolution)? else {
+                        return Err(Error::new(
+                            mode_def.span,
+                            format!("module mode base `{base}` is not a module mode"),
+                        ));
+                    };
+                    for component in &table.moretas[base_id.0].components {
+                        if !components
+                            .iter()
+                            .any(|existing| existing.name() == component.name())
+                        {
+                            components.push(component.clone());
+                        }
+                    }
+                }
                 let mut seen = HashSet::new();
                 for declaration in declarations {
                     match declaration {
@@ -1159,6 +1190,7 @@ fn process_module_modes(
                                         format!("duplicate component `{}`", var.name),
                                     ));
                                 }
+                                components.retain(|component| component.name() != var.name);
                                 components.push(crate::modes::MoretaComponent::Var {
                                     name: var.name.clone(),
                                     ty,
@@ -1178,6 +1210,7 @@ fn process_module_modes(
                                     format!("duplicate component `{}`", proc_def.name),
                                 ));
                             }
+                            components.retain(|component| component.name() != proc_def.name);
                             components.push(crate::modes::MoretaComponent::Proc {
                                 name: proc_def.name.clone(),
                                 signature,
@@ -1197,6 +1230,7 @@ fn process_module_modes(
                                     format!("duplicate component `{}`", signature.name),
                                 ));
                             }
+                            components.retain(|component| component.name() != signature.name);
                             components.push(crate::modes::MoretaComponent::Proc {
                                 name: signature.name.clone(),
                                 signature: ty,

@@ -798,6 +798,19 @@ impl<'a> Parser<'a> {
             if self.at_keyword(Keyword::Body) {
                 self.advance();
             }
+            let mut bases = Vec::new();
+            if self.at_keyword(Keyword::BasedOn) {
+                self.advance();
+                loop {
+                    let (base, _) = self.expect_identifier()?;
+                    bases.push(base);
+                    if self.at_comma() {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
             let declarations = self.parse_declarations(false, false)?;
             self.expect_keyword(Keyword::End)?;
             if let Some(TokenKind::Identifier(trailing)) = self.kind() {
@@ -810,6 +823,7 @@ impl<'a> Parser<'a> {
                 self.advance();
             }
             ModeDefinitionBody::Moreta {
+                bases,
                 declarations,
                 span: Span::new(self.source, body_start.start, self.current_span().start),
             }

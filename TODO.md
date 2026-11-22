@@ -132,9 +132,11 @@ all existing tests pass with no new special cases.
 - [x] Generic module templates parameterized by `MODE`, with
       `name: MODULE = NEW template (modes) END;` instantiation.
 - [x] Moreta module-body objects with variable/procedure components, value-returning
-      methods, non-value method actions, and component `INIT` evaluation.
-- [ ] Moreta specs, inheritance, invariants, and constructors/destructors; generic
-      `SYN`/`PROC` parameters and region/process templates.
+      methods, non-value method actions, component `INIT` evaluation, and
+      `BASED_ON` component inheritance/override.
+- [ ] Moreta specs, base component initializers, invariants, and
+      constructors/destructors; generic `SYN`/`PROC` parameters and region/process
+      templates.
 - [ ] Processes/signals/timers: deferred pending a resumable/concurrent runtime.
 
 ## 8. Cleanup
