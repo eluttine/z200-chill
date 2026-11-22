@@ -174,9 +174,11 @@ deferred.
       action-boundary scheduler, shared module locations, and process-local state.
 - [x] `EVENT`/`EVENT(n)` modes, `DELAY`, `CONTINUE`, priority wake-up, event-length
       `DELAYFAIL`, and delayed-process deadlock detection.
-- [ ] Timer-based delays/timeouts, `DELAY CASE`, signals/`SEND`/receive cases, region
-      mutual exclusion, process handlers/instances, and process `LOC`/`OUT`/`INOUT`
-      parameters.
+- [x] `SIGNAL` declarations, `SEND`, `RECEIVE CASE`, pending signal queues, parked
+      receivers, receive bindings, and `ELSE` receive alternatives.
+- [ ] Timer-based delays/timeouts, `DELAY CASE`, signal `TO` targeting, receive `SET`
+      instance locations, buffer modes, region mutual exclusion, process
+      handlers/instances, and process `LOC`/`OUT`/`INOUT` parameters.
 
 ## 8. Cleanup
 

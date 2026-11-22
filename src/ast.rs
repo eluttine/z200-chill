@@ -128,6 +128,8 @@ pub enum Declaration {
     GenericProc(GenericProcTemplate),
     /// `name: PROC = NEW template (actual modes) END;`
     GenericProcInstance(GenericProcInstance),
+    /// `SIGNAL name [= (modes)];`
+    Signal(Vec<SignalDef>),
 }
 
 #[derive(Debug, Clone)]
@@ -334,6 +336,13 @@ pub struct Param {
 }
 
 #[derive(Debug, Clone)]
+pub struct SignalDef {
+    pub name: String,
+    pub modes: Vec<ModeRef>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct ProcessDef {
     pub name: String,
     pub params: Vec<Param>,
@@ -354,6 +363,14 @@ pub struct ProcDef {
     pub declarations: Vec<Declaration>,
     pub actions: Vec<Action>,
     pub handler: Option<Handler>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReceiveAlternative {
+    pub signal: String,
+    pub bindings: Vec<String>,
+    pub actions: Vec<Action>,
     pub span: Span,
 }
 
@@ -390,6 +407,16 @@ pub enum Action {
     },
     Continue {
         event: String,
+        span: Span,
+    },
+    Send {
+        signal: String,
+        values: Vec<Expr>,
+        span: Span,
+    },
+    ReceiveCase {
+        alternatives: Vec<ReceiveAlternative>,
+        else_actions: Option<Vec<Action>>,
         span: Span,
     },
     Return {
@@ -652,6 +679,8 @@ impl Action {
             | Self::Stop { span }
             | Self::Delay { span, .. }
             | Self::Continue { span, .. }
+            | Self::Send { span, .. }
+            | Self::ReceiveCase { span, .. }
             | Self::Return { span, .. }
             | Self::Result { span, .. }
             | Self::If { span, .. }

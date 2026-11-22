@@ -9,6 +9,12 @@
 - `STOP;` actions.
 - `EVENT` and `EVENT(n)` synchronization modes.
 - `DELAY event [PRIORITY expr];` and `CONTINUE event;`.
+- `SIGNAL name [= (modes)];` declarations.
+- `SEND signal [(values)];`.
+- `RECEIVE CASE (signal [IN names]): actions ... [ELSE actions] ESAC;`.
+- Pending signals are queued; waiting receivers are parked on every alternative and
+  woken when a matching signal arrives.
+- Signal values are copied into the receive names before the branch executes.
 - Events wake the highest-priority delayed process; equal priorities use FIFO order.
 - Event lengths are enforced and raise `DELAYFAIL`.
 - A scheduler run with only delayed processes reports a deadlock.
@@ -28,7 +34,10 @@
 
 - timer-based delay (`DELAY` currently waits for an `EVENT`, not a timer).
 - `DELAY CASE`, timeout supervision, and `TIMEOUT`.
-- signals, `SEND`, receive cases.
+- `SEND ... TO` process targeting and process instance values.
+- `RECEIVE CASE SET` instance locations.
+- signal priorities.
+- buffer modes and buffer send/receive.
 - region/task mutual exclusion and critical procedures.
 - process handlers and full exception termination semantics.
 - process instance values and `THIS`.

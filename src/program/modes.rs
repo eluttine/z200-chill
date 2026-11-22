@@ -447,7 +447,7 @@ pub fn collect_interface(
 
     for declaration in &module.declarations {
         match declaration {
-            Declaration::Process(_) => {}
+            Declaration::Process(_) | Declaration::Signal(_) => {}
             Declaration::Var(list) => {
                 for var in list {
                     let ty = match resolve_mode_with(&var.mode, mode_names) {

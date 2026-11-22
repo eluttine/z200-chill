@@ -234,20 +234,36 @@ pub fn run_checked(
 
     drop(interpreter);
     loop {
-        let Some(mut entry) = scheduler.borrow_mut().ready.pop_front() else {
+        let Some(mut runnable) = scheduler.borrow_mut().ready.pop_front() else {
             break;
         };
-        CURRENT_YIELDER.with(|slot| slot.set(entry.yielder.get()));
-        match entry.coroutine.resume(()) {
+        CURRENT_YIELDER.with(|slot| slot.set(runnable.entry.yielder.get()));
+        match runnable.entry.coroutine.resume(runnable.input) {
             corosensei::CoroutineResult::Yield(yielded) => match yielded {
-                ProcessYield::Tick => scheduler.borrow_mut().ready.push_back(entry),
+                ProcessYield::Tick => scheduler.borrow_mut().ready.push_back(Runnable {
+                    input: ProcessInput::None,
+                    entry: runnable.entry,
+                }),
                 ProcessYield::Delay { event, priority } => {
                     scheduler
                         .borrow_mut()
                         .waiting
                         .entry(event)
                         .or_default()
-                        .push((priority, entry));
+                        .push((priority, runnable.entry));
+                }
+                ProcessYield::Receive { signals } => {
+                    let entry = runnable.entry;
+                    let id = entry.id;
+                    let slot = Rc::new(RefCell::new(Some(entry)));
+                    let mut state = scheduler.borrow_mut();
+                    for signal in signals {
+                        state
+                            .receivers
+                            .entry(signal.name)
+                            .or_default()
+                            .push((id, Rc::clone(&slot)));
+                    }
                 }
             },
             corosensei::CoroutineResult::Return(result) => {
@@ -262,6 +278,11 @@ pub fn run_checked(
         .waiting
         .values()
         .any(|waiting| !waiting.is_empty())
+        || scheduler
+            .borrow()
+            .receivers
+            .values()
+            .any(|receivers| receivers.iter().any(|(_, slot)| slot.borrow().is_some()))
     {
         return Err(Error::coded(
             "E0500",
@@ -371,27 +392,49 @@ struct ProcessRef<'a> {
     scope_key: Option<Span>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ProcessYield {
     Tick,
     Delay { event: usize, priority: i128 },
+    Receive { signals: Vec<ReceiverSignal> },
 }
 
-type ProcessCoroutine = Coroutine<(), ProcessYield, Result<(), Error>, DefaultStack>;
+#[derive(Clone)]
+struct ReceiverSignal {
+    name: String,
+}
+
+#[derive(Clone)]
+enum ProcessInput {
+    None,
+    Signal { name: String, values: Vec<Value> },
+}
+
+type ProcessCoroutine = Coroutine<ProcessInput, ProcessYield, Result<(), Error>, DefaultStack>;
+type ReceiverSlot = Rc<RefCell<Option<ProcessEntry>>>;
 
 struct ProcessEntry {
+    id: usize,
     coroutine: ProcessCoroutine,
-    yielder: Rc<Cell<*const Yielder<(), ProcessYield>>>,
+    yielder: Rc<Cell<*const Yielder<ProcessInput, ProcessYield>>>,
+}
+
+struct Runnable {
+    input: ProcessInput,
+    entry: ProcessEntry,
 }
 
 #[derive(Default)]
 struct ScheduleState {
-    ready: VecDeque<ProcessEntry>,
+    next_process_id: usize,
+    ready: VecDeque<Runnable>,
     waiting: HashMap<usize, Vec<(i128, ProcessEntry)>>,
+    signals: HashMap<String, VecDeque<Vec<Value>>>,
+    receivers: HashMap<String, Vec<(usize, ReceiverSlot)>>,
 }
 
 thread_local! {
-    static CURRENT_YIELDER: Cell<*const Yielder<(), ProcessYield>> = const { Cell::new(std::ptr::null()) };
+    static CURRENT_YIELDER: Cell<*const Yielder<ProcessInput, ProcessYield>> = const { Cell::new(std::ptr::null()) };
 }
 
 fn cooperative_yield() {
@@ -401,7 +444,7 @@ fn cooperative_yield() {
             // The pointer is installed by the scheduler only while this process is
             // executing on the current thread.
             unsafe {
-                (*ptr).suspend(ProcessYield::Tick);
+                let _: ProcessInput = (*ptr).suspend(ProcessYield::Tick);
             }
         }
     });
@@ -418,9 +461,30 @@ fn cooperative_delay(event: usize, priority: i128) -> Result<(), Error> {
             ));
         }
         unsafe {
-            (*ptr).suspend(ProcessYield::Delay { event, priority });
+            let _: ProcessInput = (*ptr).suspend(ProcessYield::Delay { event, priority });
         }
         Ok(())
+    })
+}
+
+fn cooperative_receive(signals: Vec<String>) -> Result<ProcessInput, Error> {
+    CURRENT_YIELDER.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            return Err(Error::coded(
+                "E0500",
+                Span::new(SourceId(0), 0, 0),
+                "RECEIVE is only valid inside a process",
+            ));
+        }
+        Ok(unsafe {
+            (*ptr).suspend(ProcessYield::Receive {
+                signals: signals
+                    .into_iter()
+                    .map(|name| ReceiverSignal { name })
+                    .collect(),
+            })
+        })
     })
 }
 
@@ -429,6 +493,7 @@ struct Scope<'a> {
     vars: HashMap<String, VarCell>,
     procs: HashMap<String, ProcRef<'a>>,
     processes: HashMap<String, ProcessRef<'a>>,
+    signals: HashMap<String, Vec<Type>>,
     modes: HashMap<String, Type>,
     /// Names granted into this reach by directly enclosed modules.
     exports: HashMap<String, Vec<ReachBinding<'a>>>,
@@ -987,7 +1052,8 @@ impl<'a> Interpreter<'a> {
                 | Declaration::SpecModule(_)
                 | Declaration::GenericProc(_)
                 | Declaration::GenericProcInstance(_)
-                | Declaration::Process(_) => {}
+                | Declaration::Process(_)
+                | Declaration::Signal(_) => {}
             }
         }
         Ok(())
@@ -1142,7 +1208,138 @@ impl<'a> Interpreter<'a> {
                         }
                     }
                     let (_, entry) = waiting.remove(best);
-                    scheduler.ready.push_back(entry);
+                    scheduler.ready.push_back(Runnable {
+                        input: ProcessInput::None,
+                        entry,
+                    });
+                }
+                ir::Stmt::Send {
+                    signal,
+                    values,
+                    span,
+                } => {
+                    let modes = self.lookup_signal_modes(signal).ok_or_else(|| {
+                        Error::coded("E0505", *span, format!("unknown signal `{signal}`"))
+                    })?;
+                    if modes.len() != values.len() {
+                        return Err(Error::coded(
+                            "E0507",
+                            *span,
+                            format!(
+                                "signal `{signal}` expects {} value(s), found {}",
+                                modes.len(),
+                                values.len()
+                            ),
+                        ));
+                    }
+                    let mut lowered = Vec::with_capacity(values.len());
+                    for (value, mode) in values.iter().zip(modes) {
+                        let value = self.eval_ir(value)?;
+                        lowered.push(self.convert(value, mode, *span)?);
+                    }
+                    let mut scheduler = self.scheduler.borrow_mut();
+                    let receiver = scheduler.receivers.get(signal).and_then(|receivers| {
+                        receivers
+                            .iter()
+                            .find(|(_, slot)| slot.borrow().is_some())
+                            .map(|(id, slot)| (*id, Rc::clone(slot)))
+                    });
+                    if let Some((id, slot)) = receiver {
+                        let entry = slot.borrow_mut().take().ok_or_else(|| {
+                            Error::coded("E0500", *span, "internal: signal receiver disappeared")
+                        })?;
+                        for receivers in scheduler.receivers.values_mut() {
+                            receivers.retain(|(receiver_id, _)| *receiver_id != id);
+                        }
+                        scheduler.ready.push_back(Runnable {
+                            input: ProcessInput::Signal {
+                                name: signal.clone(),
+                                values: lowered,
+                            },
+                            entry,
+                        });
+                    } else {
+                        scheduler
+                            .signals
+                            .entry(signal.clone())
+                            .or_default()
+                            .push_back(lowered);
+                    }
+                }
+                ir::Stmt::ReceiveCase {
+                    alternatives,
+                    else_actions,
+                    span,
+                } => {
+                    let mut pending = None;
+                    {
+                        let mut scheduler = self.scheduler.borrow_mut();
+                        for alternative in alternatives {
+                            if let Some(queue) = scheduler.signals.get_mut(&alternative.signal) {
+                                if let Some(values) = queue.pop_front() {
+                                    pending = Some((alternative.signal.clone(), values));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    let received = if let Some(received) = pending {
+                        received
+                    } else if let Some(else_actions) = else_actions {
+                        return self.exec_stmts(else_actions, frame);
+                    } else {
+                        let names = alternatives
+                            .iter()
+                            .map(|alternative| alternative.signal.clone())
+                            .collect();
+                        match cooperative_receive(names)? {
+                            ProcessInput::Signal { name, values } => (name, values),
+                            ProcessInput::None => {
+                                return Err(Error::coded(
+                                    "E0500",
+                                    *span,
+                                    "internal: receive resumed without a signal",
+                                ));
+                            }
+                        }
+                    };
+                    let alternative = alternatives
+                        .iter()
+                        .find(|alternative| alternative.signal == received.0)
+                        .ok_or_else(|| {
+                            Error::coded(
+                                "E0500",
+                                *span,
+                                "internal: received unknown signal alternative",
+                            )
+                        })?;
+                    let modes = self
+                        .lookup_signal_modes(&alternative.signal)
+                        .ok_or_else(|| {
+                            Error::coded(
+                                "E0505",
+                                *span,
+                                format!("unknown signal `{}`", alternative.signal),
+                            )
+                        })?;
+                    self.locals.push(Scope::default());
+                    let setup = (|| {
+                        for ((name, mode), value) in alternative
+                            .bindings
+                            .iter()
+                            .zip(modes.iter())
+                            .zip(received.1)
+                        {
+                            let value = self.convert(value, *mode, *span)?;
+                            self.locals.last_mut().expect("receive scope").vars.insert(
+                                name.clone(),
+                                Rc::new(RefCell::new(Var { ty: *mode, value })),
+                            );
+                        }
+                        self.exec_stmts(&alternative.actions, frame)
+                    })();
+                    self.locals.pop();
+                    return setup;
                 }
                 ir::Stmt::Start {
                     process,
@@ -1181,17 +1378,26 @@ impl<'a> Interpreter<'a> {
                     let coroutine = unsafe {
                         Coroutine::with_stack_unchecked(
                             DefaultStack::default(),
-                            move |current: &Yielder<(), ProcessYield>, ()| {
+                            move |current: &Yielder<ProcessInput, ProcessYield>,
+                                  input: ProcessInput| {
+                                let _ = input;
                                 yielder_slot.set(current as *const _);
                                 CURRENT_YIELDER.with(|slot| slot.set(current as *const _));
                                 child.run_process(def, values)
                             },
                         )
                     };
-                    self.scheduler
-                        .borrow_mut()
-                        .ready
-                        .push_back(ProcessEntry { coroutine, yielder });
+                    let mut scheduler = self.scheduler.borrow_mut();
+                    let id = scheduler.next_process_id;
+                    scheduler.next_process_id += 1;
+                    scheduler.ready.push_back(Runnable {
+                        input: ProcessInput::None,
+                        entry: ProcessEntry {
+                            id,
+                            coroutine,
+                            yielder,
+                        },
+                    });
                 }
                 ir::Stmt::Return { value, span } => {
                     if let Some(value) = value {
@@ -4378,6 +4584,21 @@ impl<'a> Interpreter<'a> {
         None
     }
 
+    fn lookup_signal_modes(&self, name: &str) -> Option<Vec<Type>> {
+        let floor = self.local_floor();
+        for scope in self.locals[floor..].iter().rev() {
+            if let Some(modes) = scope.signals.get(name) {
+                return Some(modes.clone());
+            }
+        }
+        for scope in self.modules.iter().rev() {
+            if let Some(modes) = scope.signals.get(name) {
+                return Some(modes.clone());
+            }
+        }
+        None
+    }
+
     fn lookup_process(&self, name: &str) -> Option<ProcessRef<'a>> {
         let floor = self.local_floor();
         for scope in self.locals[floor..].iter().rev() {
@@ -4662,6 +4883,16 @@ fn declare_into_scope<'a>(
                         scope_key,
                     },
                 );
+            }
+            Declaration::Signal(defs) => {
+                for def in defs {
+                    let modes = def
+                        .modes
+                        .iter()
+                        .map(|mode| resolve_mode_with(mode, mode_names))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    scope.signals.insert(def.name.clone(), modes);
+                }
             }
             Declaration::Process(process_def) => {
                 if scope.vars.contains_key(&process_def.name)

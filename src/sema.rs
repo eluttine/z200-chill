@@ -238,6 +238,7 @@ struct Scope {
     vars: HashMap<String, Type>,
     procs: HashMap<String, ProcType>,
     processes: HashMap<String, ProcType>,
+    signals: HashMap<String, Vec<Type>>,
     modes: HashMap<String, Type>,
     set_values: HashMap<String, (Type, i128)>,
     /// Names granted into this reach by directly enclosed modules.
@@ -553,7 +554,7 @@ impl Checker {
             let mut current_names = HashSet::new();
             for declaration in &context.declarations {
                 match declaration {
-                    Declaration::Process(_) => {}
+                    Declaration::Process(_) | Declaration::Signal(_) => {}
                     Declaration::Var(list) => {
                         for var in list {
                             if !declared_names.insert(var.name.clone()) {
@@ -990,6 +991,16 @@ impl Checker {
                     )?;
                     self.declare_process(&process_def.name, signature, process_def.span)?;
                 }
+                Declaration::Signal(defs) => {
+                    for def in defs {
+                        let modes = def
+                            .modes
+                            .iter()
+                            .map(|mode| self.resolve_mode(mode))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        self.declare_signal(&def.name, modes, def.span)?;
+                    }
+                }
                 Declaration::ProcSignature(signature) => {
                     let proc_sig = self.signature_from_params(
                         &signature.params,
@@ -1341,6 +1352,7 @@ impl Checker {
         if scope.vars.contains_key(name)
             || scope.procs.contains_key(name)
             || scope.processes.contains_key(name)
+            || scope.signals.contains_key(name)
             || scope.set_values.contains_key(name)
         {
             return Err(Error::coded(
@@ -1350,6 +1362,23 @@ impl Checker {
             ));
         }
         scope.vars.insert(name.to_owned(), ty);
+        Ok(())
+    }
+
+    fn declare_signal(&mut self, name: &str, modes: Vec<Type>, span: Span) -> Result<(), Error> {
+        let scope = self.scopes.last_mut().expect("scope stack is never empty");
+        if scope.vars.contains_key(name)
+            || scope.procs.contains_key(name)
+            || scope.processes.contains_key(name)
+            || scope.signals.contains_key(name)
+        {
+            return Err(Error::coded(
+                "E0402",
+                span,
+                format!("duplicate declaration of `{name}`"),
+            ));
+        }
+        scope.signals.insert(name.to_owned(), modes);
         Ok(())
     }
 
@@ -1363,6 +1392,7 @@ impl Checker {
         if scope.vars.contains_key(name)
             || scope.procs.contains_key(name)
             || scope.processes.contains_key(name)
+            || scope.signals.contains_key(name)
             || scope.set_values.contains_key(name)
         {
             return Err(Error::coded(
@@ -1380,6 +1410,7 @@ impl Checker {
         if scope.vars.contains_key(name)
             || scope.procs.contains_key(name)
             || scope.processes.contains_key(name)
+            || scope.signals.contains_key(name)
             || scope.set_values.contains_key(name)
         {
             return Err(Error::coded(
@@ -1641,6 +1672,15 @@ impl Checker {
                         return Some(*ty);
                     }
                 }
+            }
+        }
+        None
+    }
+
+    fn lookup_signal(&self, name: &str) -> Option<Vec<Type>> {
+        for scope in self.scopes[self.module_floor..].iter().rev() {
+            if let Some(modes) = scope.signals.get(name) {
+                return Some(modes.clone());
             }
         }
         None
@@ -1978,6 +2018,76 @@ impl Checker {
                 Ok(())
             }
             Action::Stop { .. } => Ok(()),
+            Action::Send {
+                signal,
+                values,
+                span,
+            } => {
+                let Some(modes) = self.lookup_signal(signal) else {
+                    return Err(Error::coded(
+                        "E0403",
+                        *span,
+                        format!("unknown signal `{signal}`"),
+                    ));
+                };
+                if modes.len() != values.len() {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        format!(
+                            "signal `{signal}` expects {} value(s), found {}",
+                            modes.len(),
+                            values.len()
+                        ),
+                    ));
+                }
+                for (value, mode) in values.iter().zip(modes) {
+                    let value_ty = self.check_expr_for_mode(value, mode)?;
+                    self.ensure_assignable(mode, value_ty, value.span())?;
+                }
+                Ok(())
+            }
+            Action::ReceiveCase {
+                alternatives,
+                else_actions,
+                span,
+            } => {
+                for alternative in alternatives {
+                    let Some(modes) = self.lookup_signal(&alternative.signal) else {
+                        return Err(Error::coded(
+                            "E0403",
+                            alternative.span,
+                            format!("unknown signal `{}`", alternative.signal),
+                        ));
+                    };
+                    if alternative.bindings.len() != modes.len() {
+                        return Err(Error::coded(
+                            "E0400",
+                            alternative.span,
+                            format!(
+                                "signal `{}` carries {} value(s), but {} receive name(s) were given",
+                                alternative.signal,
+                                modes.len(),
+                                alternative.bindings.len()
+                            ),
+                        ));
+                    }
+                    self.scopes.push(Scope::default());
+                    let setup = (|| {
+                        for (name, mode) in alternative.bindings.iter().zip(modes.iter()) {
+                            self.declare_var(name, *mode, alternative.span)?;
+                        }
+                        self.check_actions(&alternative.actions)
+                    })();
+                    self.scopes.pop();
+                    setup?;
+                }
+                if let Some(actions) = else_actions {
+                    self.check_actions(actions)?;
+                }
+                let _ = span;
+                Ok(())
+            }
             Action::Delay {
                 event,
                 priority,

@@ -243,7 +243,7 @@ impl<'a> Parser<'a> {
             let declarations = self.parse_declarations(true, true)?;
             for declaration in &declarations {
                 match declaration {
-                    Declaration::Process(_) => {}
+                    Declaration::Process(_) | Declaration::Signal(_) => {}
                     Declaration::Visibility(visibility) => {
                         if contexts.is_empty() && remote.is_none() {
                             return Err(Error::coded(
@@ -615,6 +615,8 @@ impl<'a> Parser<'a> {
                 }
                 let module = self.parse_module(contexts)?;
                 declarations.push(Declaration::SpecModule(Box::new(module)));
+            } else if self.at_keyword(Keyword::Signal) {
+                declarations.push(Declaration::Signal(self.parse_signals()?));
             } else if self.at_keyword(Keyword::Dcl) {
                 declarations.push(Declaration::Var(self.parse_dcl()?));
             } else if self.at_keyword(Keyword::NewMode) || self.at_keyword(Keyword::SynMode) {
@@ -924,6 +926,53 @@ impl<'a> Parser<'a> {
             body,
             span: Span::new(self.source, start.start, end.end),
         })
+    }
+
+    fn parse_signals(&mut self) -> Result<Vec<SignalDef>, Error> {
+        let start = self.current_span();
+        self.expect_keyword(Keyword::Signal)?;
+        let mut signals = Vec::new();
+        loop {
+            let (name, name_span) = self.expect_identifier()?;
+            let modes = if matches!(self.kind(), Some(TokenKind::Eq)) {
+                self.advance();
+                self.expect_lparen()?;
+                let mut modes = Vec::new();
+                if !self.at_rparen() {
+                    loop {
+                        modes.push(self.parse_mode_ref()?);
+                        if self.at_comma() {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.expect_rparen()?;
+                modes
+            } else {
+                Vec::new()
+            };
+            if self.at_keyword(Keyword::To) {
+                return Err(self.error_here_code(
+                    "E0205",
+                    "signal TO process targeting is not implemented yet",
+                ));
+            }
+            signals.push(SignalDef {
+                name,
+                modes,
+                span: Span::new(self.source, name_span.start, self.current_span().start),
+            });
+            if self.at_comma() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect_semicolon()?;
+        let _ = start;
+        Ok(signals)
     }
 
     fn parse_dcl(&mut self) -> Result<Vec<VarDecl>, Error> {
@@ -1797,6 +1846,43 @@ impl<'a> Parser<'a> {
                     span: Span::new(self.source, start.start, end.end),
                 })
             }
+            Some(TokenKind::Keyword(Keyword::Send)) => {
+                let start = self.current_span();
+                self.advance();
+                let (signal, _) = self.expect_identifier()?;
+                let mut values = Vec::new();
+                if self.at_lparen() {
+                    self.advance();
+                    if !self.at_rparen() {
+                        loop {
+                            values.push(self.parse_expr()?);
+                            if self.at_comma() {
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    self.expect_rparen()?;
+                }
+                if self.at_keyword(Keyword::To) {
+                    return Err(self.error_here_code(
+                        "E0205",
+                        "SEND TO process targeting is not implemented yet",
+                    ));
+                }
+                if self.at_keyword(Keyword::Priority) {
+                    self.advance();
+                    self.parse_expr()?;
+                }
+                let end = self.expect_semicolon()?;
+                Ok(Action::Send {
+                    signal,
+                    values,
+                    span: Span::new(self.source, start.start, end.end),
+                })
+            }
+            Some(TokenKind::Keyword(Keyword::Receive)) => self.parse_receive_case(),
             Some(TokenKind::Semicolon) => {
                 let span = self.current_span();
                 self.advance();
@@ -1804,6 +1890,76 @@ impl<'a> Parser<'a> {
             }
             _ => self.parse_expression_action(),
         }
+    }
+
+    fn parse_receive_case(&mut self) -> Result<Action, Error> {
+        let start = self.current_span();
+        self.expect_keyword(Keyword::Receive)?;
+        self.expect_keyword(Keyword::Case)?;
+        if self.at_keyword(Keyword::Set) {
+            return Err(self.error_here_code(
+                "E0205",
+                "RECEIVE CASE SET instance locations are not implemented yet",
+            ));
+        }
+        let mut alternatives = Vec::new();
+        while self.at_lparen() {
+            let alt_start = self.current_span();
+            self.advance();
+            let (signal, _) = self.expect_identifier()?;
+            let mut bindings = Vec::new();
+            if self.at_keyword(Keyword::In) {
+                self.advance();
+                loop {
+                    let (name, _) = self.expect_identifier()?;
+                    bindings.push(name);
+                    if self.at_comma() {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.expect_rparen()?;
+            self.expect_colon()?;
+            let mut actions = Vec::new();
+            while !self.at_lparen()
+                && !self.at_keyword(Keyword::Else)
+                && !self.at_keyword(Keyword::Esac)
+                && !self.at_end()
+            {
+                actions.push(self.parse_action()?);
+            }
+            alternatives.push(ReceiveAlternative {
+                signal,
+                bindings,
+                actions,
+                span: Span::new(self.source, alt_start.start, self.current_span().start),
+            });
+        }
+        if alternatives.is_empty() {
+            return Err(self.error_here_code(
+                "E0205",
+                "RECEIVE CASE requires at least one signal alternative",
+            ));
+        }
+        let else_actions = if self.at_keyword(Keyword::Else) {
+            self.advance();
+            let mut actions = Vec::new();
+            while !self.at_keyword(Keyword::Esac) && !self.at_end() {
+                actions.push(self.parse_action()?);
+            }
+            Some(actions)
+        } else {
+            None
+        };
+        self.expect_keyword(Keyword::Esac)?;
+        let end = self.expect_semicolon()?;
+        Ok(Action::ReceiveCase {
+            alternatives,
+            else_actions,
+            span: Span::new(self.source, start.start, end.end),
+        })
     }
 
     fn parse_cause(&mut self) -> Result<Action, Error> {

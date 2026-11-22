@@ -349,6 +349,16 @@ pub enum Stmt {
         event: String,
         span: Span,
     },
+    Send {
+        signal: String,
+        values: Vec<Node>,
+        span: Span,
+    },
+    ReceiveCase {
+        alternatives: Vec<ReceiveAlternativeIr>,
+        else_actions: Option<Vec<Stmt>>,
+        span: Span,
+    },
     Return {
         value: Option<Node>,
         span: Span,
@@ -422,6 +432,14 @@ pub struct BranchIr {
 pub struct CaseAlternativeIr {
     pub labels: Vec<CaseLabel>,
     pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct ReceiveAlternativeIr {
+    pub signal: String,
+    pub bindings: Vec<String>,
+    pub actions: Vec<Stmt>,
     pub span: Span,
 }
 
@@ -561,6 +579,7 @@ impl Lowerer<'_> {
                         }
                     }
                 }
+                Declaration::Signal(_) => {}
                 Declaration::Process(process_def) => {
                     self.lower_declarations(&process_def.declarations)?;
                     let actions = self.lower_actions(&process_def.actions)?;
@@ -658,6 +677,40 @@ impl Lowerer<'_> {
             }),
             Action::Continue { event, span } => Ok(Stmt::Continue {
                 event: event.clone(),
+                span: *span,
+            }),
+            Action::Send {
+                signal,
+                values,
+                span,
+            } => Ok(Stmt::Send {
+                signal: signal.clone(),
+                values: values
+                    .iter()
+                    .map(|value| self.lower_expr(value))
+                    .collect::<Result<Vec<_>, _>>()?,
+                span: *span,
+            }),
+            Action::ReceiveCase {
+                alternatives,
+                else_actions,
+                span,
+            } => Ok(Stmt::ReceiveCase {
+                alternatives: alternatives
+                    .iter()
+                    .map(|alternative| {
+                        Ok(ReceiveAlternativeIr {
+                            signal: alternative.signal.clone(),
+                            bindings: alternative.bindings.clone(),
+                            actions: self.lower_actions(&alternative.actions)?,
+                            span: alternative.span,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?,
+                else_actions: else_actions
+                    .as_ref()
+                    .map(|actions| self.lower_actions(actions))
+                    .transpose()?,
                 span: *span,
             }),
             Action::Return { value, span } => Ok(Stmt::Return {
