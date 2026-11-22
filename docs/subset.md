@@ -645,6 +645,8 @@ ASSERT p.x = 1;
   override the base.
 - Component modes/signatures are resolved when the module mode is defined.
 - Whole-object assignment uses value-copy semantics.
+- Module-mode types are currently module-local: exporting one through a grant
+  interface is rejected with a clear error.
 
 Not implemented yet: base component initializer replay, invariants, and
 constructors/destructors.

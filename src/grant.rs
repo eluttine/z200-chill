@@ -80,6 +80,15 @@ pub enum GrantKind {
 impl GrantFile {
     pub fn from_package(manifest: &Manifest, program: &Program) -> Result<Self, program::Error> {
         let info = program::analyze(program)?;
+        let exports = program::exports(program)?;
+        if let Err(message) = validate_exports(&exports, &info.modes) {
+            let span = program
+                .modules
+                .first()
+                .map(|module| module.span)
+                .unwrap_or_else(|| crate::lexer::Span::new(crate::lexer::SourceId(0), 0, 0));
+            return Err(program::Error::coded("E0406", span, message));
+        }
         let mut modes: Vec<GrantMode> = info
             .modes
             .modes
@@ -101,7 +110,6 @@ impl GrantFile {
             .collect();
         modes.sort_by_key(GrantMode::symbol);
 
-        let exports = program::exports(program)?;
         let mut entries = Vec::with_capacity(exports.len());
         for export in exports {
             let ExportInfo {
@@ -269,6 +277,50 @@ impl GrantFile {
         }
 
         Ok(program::ExternalInterface { modes, exports })
+    }
+}
+
+fn validate_exports(
+    exports: &[program::ExportInfo],
+    modes: &crate::modes::ModeTable,
+) -> Result<(), String> {
+    for export in exports {
+        match &export.kind {
+            program::ExportInfoKind::Var(ty) => validate_external_type(ty)?,
+            program::ExportInfoKind::Proc { params, result } => {
+                for ty in params {
+                    validate_external_type(ty)?;
+                }
+                if let Some(ty) = result {
+                    validate_external_type(ty)?;
+                }
+            }
+            program::ExportInfoKind::Mode(mode) => {
+                for (_, ty) in &mode.fields {
+                    validate_external_type(ty)?;
+                }
+            }
+        }
+    }
+    for mode in &modes.modes {
+        for field in &mode.fields {
+            validate_external_type(&program::portable_type(field.ty, modes))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_external_type(ty: &program::ExternalType) -> Result<(), String> {
+    match ty {
+        program::ExternalType::Builtin(Type::Set(_)) => {
+            Err("set modes are not supported in grant interfaces yet".to_owned())
+        }
+        program::ExternalType::Builtin(Type::Moreta(_)) => {
+            Err("module mode types are not supported in grant interfaces yet".to_owned())
+        }
+        program::ExternalType::Array { element, .. }
+        | program::ExternalType::MultiArray { element, .. } => validate_external_type(element),
+        _ => Ok(()),
     }
 }
 
@@ -788,6 +840,52 @@ END M;
                 parse_external_type(&text, &std::collections::HashMap::new()).unwrap(),
                 program::ExternalType::Builtin(ty)
             );
+        }
+    }
+
+    #[test]
+    fn rejects_unencodable_modes_in_grant_interfaces() {
+        let manifest = Manifest::parse(
+            r#"
+[package]
+name = "bad"
+
+[build]
+entry = "src/main.ch"
+"#,
+        )
+        .unwrap();
+        for (source, expected) in [
+            (
+                r#"
+M: MODULE
+  GRANT x;
+  NEWMODE S = SET(a, b);
+  DCL x S;
+END M;
+"#,
+                "set modes are not supported",
+            ),
+            (
+                r#"
+M: MODULE
+  GRANT x;
+  NEWMODE P = MODULE BODY
+    DCL y INT;
+  END P;
+  DCL x P;
+END M;
+"#,
+                "module mode types are not supported",
+            ),
+        ] {
+            let tokens = lexer::tokenize(source).unwrap();
+            let mut program = parser::parse(&tokens).unwrap();
+            for module in &mut program.modules {
+                module.package_name = Some("bad".to_owned());
+            }
+            let error = GrantFile::from_package(&manifest, &program).unwrap_err();
+            assert!(error.message.contains(expected), "{}", error.message);
         }
     }
 

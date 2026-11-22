@@ -126,6 +126,10 @@ kind = "variable"
 mode = "INT"
 ```
 
+Named `SET (...)` modes and moreta module-mode types are currently rejected at the
+grant-interface boundary: `z200c grant` reports an explicit error instead of writing a
+grant file that cannot be loaded.
+
 Array types are encoded as `ARRAY(low:high)` for one dimension or
 `ARRAY(low:high, low:high, ...)` for multidimensional arrays. The element mode may be
 scalar or a symbolic structure-mode reference (`package!Module!Mode`). Up to four
