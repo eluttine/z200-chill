@@ -12,7 +12,7 @@ pub struct Program {
 #[derive(Debug, Clone)]
 pub struct GenericModuleTemplate {
     pub name: String,
-    pub formal_modes: Vec<String>,
+    pub formal_params: Vec<GenericFormal>,
     pub module: Module,
     pub span: Span,
 }
@@ -21,7 +21,7 @@ pub struct GenericModuleTemplate {
 pub struct GenericModuleInstance {
     pub name: String,
     pub template: String,
-    pub actual_modes: Vec<ModeRef>,
+    pub actuals: Vec<GenericActual>,
     pub span: Span,
 }
 
@@ -130,9 +130,21 @@ pub enum Declaration {
 }
 
 #[derive(Debug, Clone)]
+pub enum GenericFormal {
+    Mode(String),
+    Syn { name: String, default: Expr },
+}
+
+#[derive(Debug, Clone)]
+pub enum GenericActual {
+    Mode(ModeRef),
+    Value(Expr),
+}
+
+#[derive(Debug, Clone)]
 pub struct GenericProcTemplate {
     pub name: String,
-    pub formal_modes: Vec<String>,
+    pub formal_params: Vec<GenericFormal>,
     pub proc_def: ProcDef,
     pub span: Span,
 }
@@ -141,7 +153,7 @@ pub struct GenericProcTemplate {
 pub struct GenericProcInstance {
     pub name: String,
     pub template: String,
-    pub actual_modes: Vec<ModeRef>,
+    pub actuals: Vec<GenericActual>,
     pub span: Span,
 }
 

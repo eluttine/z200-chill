@@ -589,11 +589,15 @@ IdentityInt: PROC = NEW Identity (INT) END;
 ```
 
 - `GENERIC MODE T;` declares formal mode parameters.
+- `GENERIC SYN N = 1;` declares a value parameter substituted into template
+  expressions.
 - Template bodies are checked after each instantiation, with formal modes substituted.
 - Local declarations, parameters, results, and nested procedure signatures are substituted.
-- Instantiation syntax is `name: PROC = NEW template (actual-modes) END;`.
-- The current subset supports `MODE` parameters only; generic `SYN` and `PROC`
-  parameters are not implemented yet.
+- Instantiation syntax is `name: PROC = NEW template (actuals) END;`.
+- Actual parameters are matched positionally to formal `MODE`/`SYN` clauses. SYN
+  actuals currently need literal or parenthesized value expressions so the parser can
+  distinguish them from mode names.
+- Generic `PROC` parameters are not implemented yet.
 
 Generic module templates use the same mechanism:
 
@@ -608,8 +612,8 @@ Pair: GENERIC
 PairInt: MODULE = NEW Pair (INT) END;
 ```
 
-- Instantiated modules are cloned with formal modes substituted through declarations,
-  contexts, nested modules, actions, and handlers.
+- Instantiated modules are cloned with formal modes and SYN values substituted through
+  declarations, contexts, nested modules, actions, handlers, and invariants.
 - Generic region and process templates are not implemented yet.
 
 ### 6.3 Minimal moreta module modes

@@ -146,8 +146,9 @@ deferred.
       assignment, reject abstract-mode instantiation, check invariants after
       initialization, merge spec/body invariants, and key moreta metadata by stable
       mode ID.
+- [x] Generic `SYN` value parameters in procedure and module templates.
 - [ ] Moreta constructors/destructors, `SELF`, task/region object modes; generic
-      `SYN`/`PROC` parameters and region/process templates.
+      `PROC` parameters and region/process templates.
 - [ ] Faithful processes/signals/timers and region mutual exclusion: deferred pending
       a resumable/concurrent runtime (post-first-release).
 

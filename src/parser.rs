@@ -298,6 +298,87 @@ impl<'a> Parser<'a> {
             && self.kind_at(3) == Some(&TokenKind::Eq)
     }
 
+    fn parse_generic_formals(&mut self) -> Result<Vec<GenericFormal>, Error> {
+        let mut formals = Vec::new();
+        loop {
+            if self.at_keyword(Keyword::Mode) {
+                self.advance();
+                loop {
+                    let (name, _) = self.expect_identifier()?;
+                    formals.push(GenericFormal::Mode(name));
+                    if self.at_comma() {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect_semicolon()?;
+            } else if self.at_keyword(Keyword::Syn) {
+                self.advance();
+                let mut names = Vec::new();
+                loop {
+                    let (name, _) = self.expect_identifier()?;
+                    names.push(name);
+                    if self.at_comma() {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect_equal()?;
+                let default = self.parse_expr()?;
+                self.expect_semicolon()?;
+                for name in names {
+                    formals.push(GenericFormal::Syn {
+                        name,
+                        default: default.clone(),
+                    });
+                }
+            } else {
+                break;
+            }
+        }
+        Ok(formals)
+    }
+
+    fn parse_generic_actuals(&mut self) -> Result<Vec<GenericActual>, Error> {
+        self.expect_lparen()?;
+        let mut actuals = Vec::new();
+        if !self.at_rparen() {
+            loop {
+                if self.actual_starts_value() {
+                    actuals.push(GenericActual::Value(self.parse_expr()?));
+                } else {
+                    actuals.push(GenericActual::Mode(self.parse_mode_ref()?));
+                }
+                if self.at_comma() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect_rparen()?;
+        Ok(actuals)
+    }
+
+    fn actual_starts_value(&self) -> bool {
+        matches!(
+            self.kind(),
+            Some(
+                TokenKind::Integer { .. }
+                    | TokenKind::Float(_)
+                    | TokenKind::Bool(_)
+                    | TokenKind::Char(_)
+                    | TokenKind::String(_)
+                    | TokenKind::Minus
+                    | TokenKind::LParen
+                    | TokenKind::LParenColon
+                    | TokenKind::LBracket
+            )
+        )
+    }
+
     fn parse_generic_module_template(
         &mut self,
         contexts: Vec<Context>,
@@ -306,25 +387,7 @@ impl<'a> Parser<'a> {
         let (name, _) = self.expect_identifier()?;
         self.expect_colon()?;
         self.expect_keyword(Keyword::Generic)?;
-        let mut formal_modes = Vec::new();
-        while self.at_keyword(Keyword::Mode) {
-            self.advance();
-            loop {
-                let (formal, _) = self.expect_identifier()?;
-                formal_modes.push(formal);
-                if self.at_comma() {
-                    self.advance();
-                } else {
-                    break;
-                }
-            }
-            self.expect_semicolon()?;
-        }
-        if self.at_keyword(Keyword::Syn) || self.at_keyword(Keyword::SynMode) {
-            return Err(
-                self.error_here_code("E0206", "generic SYN parameters are not implemented yet")
-            );
-        }
+        let formal_params = self.parse_generic_formals()?;
         if !contexts.is_empty() {
             return Err(self.error_here_code(
                 "E0206",
@@ -334,7 +397,7 @@ impl<'a> Parser<'a> {
         let module = self.parse_module_named(contexts, Some(name.clone()))?;
         Ok(GenericModuleTemplate {
             name,
-            formal_modes,
+            formal_params,
             span: Span::new(self.source, start.start, module.span.end),
             module,
         })
@@ -348,19 +411,7 @@ impl<'a> Parser<'a> {
         self.expect_equal()?;
         self.expect_keyword(Keyword::New)?;
         let (template, _) = self.expect_identifier()?;
-        self.expect_lparen()?;
-        let mut actual_modes = Vec::new();
-        if !self.at_rparen() {
-            loop {
-                actual_modes.push(self.parse_mode_ref()?);
-                if self.at_comma() {
-                    self.advance();
-                } else {
-                    break;
-                }
-            }
-        }
-        self.expect_rparen()?;
+        let actuals = self.parse_generic_actuals()?;
         self.expect_keyword(Keyword::End)?;
         if let Some(TokenKind::Identifier(trailing)) = self.kind() {
             if trailing != &name {
@@ -375,7 +426,7 @@ impl<'a> Parser<'a> {
         Ok(GenericModuleInstance {
             name,
             template,
-            actual_modes,
+            actuals,
             span: Span::new(self.source, start.start, end.end),
         })
     }
@@ -925,37 +976,13 @@ impl<'a> Parser<'a> {
         let (name, _) = self.expect_identifier()?;
         self.expect_colon()?;
         self.expect_keyword(Keyword::Generic)?;
-        let mut formal_modes = Vec::new();
-        while self.at_keyword(Keyword::Mode) {
-            self.advance();
-            loop {
-                let (formal, _) = self.expect_identifier()?;
-                formal_modes.push(formal);
-                if self.at_comma() {
-                    self.advance();
-                } else {
-                    break;
-                }
-            }
-            self.expect_semicolon()?;
-        }
-        if self.at_keyword(Keyword::Syn) || self.at_keyword(Keyword::SynMode) {
-            return Err(
-                self.error_here_code("E0206", "generic SYN parameters are not implemented yet")
-            );
-        }
+        let formal_params = self.parse_generic_formals()?;
         if self.at_keyword(Keyword::Proc) && self.kind_at(1) == Some(&TokenKind::Colon) {
             return Err(
                 self.error_here_code("E0206", "generic PROC parameters are not implemented yet")
             );
         }
         self.expect_keyword(Keyword::Proc)?;
-        if formal_modes.is_empty() {
-            return Err(self.error_here_code(
-                "E0206",
-                "generic templates currently require at least one MODE parameter",
-            ));
-        }
         let params = self.parse_formal_params()?;
         let (result, exceptions) = self.parse_result_and_exceptions()?;
         self.expect_semicolon()?;
@@ -980,7 +1007,7 @@ impl<'a> Parser<'a> {
         let span = Span::new(self.source, start.start, end.end);
         Ok(GenericProcTemplate {
             name: name.clone(),
-            formal_modes,
+            formal_params,
             proc_def: ProcDef {
                 name,
                 params,
@@ -1003,19 +1030,7 @@ impl<'a> Parser<'a> {
         self.expect_equal()?;
         self.expect_keyword(Keyword::New)?;
         let (template, _) = self.expect_identifier()?;
-        self.expect_lparen()?;
-        let mut actual_modes = Vec::new();
-        if !self.at_rparen() {
-            loop {
-                actual_modes.push(self.parse_mode_ref()?);
-                if self.at_comma() {
-                    self.advance();
-                } else {
-                    break;
-                }
-            }
-        }
-        self.expect_rparen()?;
+        let actuals = self.parse_generic_actuals()?;
         self.expect_keyword(Keyword::End)?;
         if let Some(TokenKind::Identifier(trailing)) = self.kind() {
             if trailing != &name {
@@ -1030,7 +1045,7 @@ impl<'a> Parser<'a> {
         Ok(GenericProcInstance {
             name,
             template,
-            actual_modes,
+            actuals,
             span: Span::new(self.source, start.start, end.end),
         })
     }
