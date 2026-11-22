@@ -29,6 +29,53 @@ fn check_hello_succeeds() {
 }
 
 #[test]
+fn run_text_output_matches_golden() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let directory = std::env::temp_dir().join(format!(
+        "z200c-golden-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(directory.join("src")).unwrap();
+    std::fs::write(
+        directory.join("Chill.toml"),
+        r#"
+[package]
+name = "golden"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        directory.join("src/main.ch"),
+        r#"
+M: MODULE
+  WRITE("value=");
+  WRITELINE("ok");
+  WRITELINE();
+END M;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("run").arg(&directory).output().unwrap();
+    let _ = std::fs::remove_dir_all(&directory);
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"value=ok\n\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn run_hello_succeeds_without_output() {
     let output = z200c().arg("run").arg(example("hello")).output().unwrap();
 

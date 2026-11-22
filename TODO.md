@@ -58,6 +58,9 @@ all existing tests pass with no new special cases.
       values, `TEXTFAIL`, unhandled exceptions). Full stdout snapshots were not added;
       the interpreter writes directly to stdout, and the `ASSERT`-based fixtures already
       assert observable behavior.
+- [x] Extend regression coverage for newer features: generic actual-kind mismatch,
+      powerset member mismatch, float division by zero, negative variable widths, and
+      a golden stdout snapshot for `WRITE`/`WRITELINE` through the CLI.
 
 ## 4. Decide product direction (resolved: interpreter-first)
 
