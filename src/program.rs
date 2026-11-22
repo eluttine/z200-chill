@@ -309,7 +309,137 @@ pub fn normalize(program: &Program) -> Result<Program, Error> {
     for module in &mut normalized.modules {
         expand_module_generics(module)?;
     }
+    expand_generic_modules(&mut normalized)?;
     Ok(normalized)
+}
+
+fn expand_generic_modules(program: &mut Program) -> Result<(), Error> {
+    if program.generic_module_instances.is_empty() {
+        program.generic_modules.clear();
+        return Ok(());
+    }
+    let mut templates: HashMap<String, crate::ast::GenericModuleTemplate> = HashMap::new();
+    for template in &program.generic_modules {
+        if templates
+            .insert(template.name.clone(), template.clone())
+            .is_some()
+        {
+            return Err(Error::new(
+                template.span,
+                format!("duplicate generic module template `{}`", template.name),
+            ));
+        }
+    }
+    let instances = std::mem::take(&mut program.generic_module_instances);
+    for instance in instances {
+        let Some(template) = templates.get(&instance.template) else {
+            return Err(Error::new(
+                instance.span,
+                format!("unknown generic module template `{}`", instance.template),
+            ));
+        };
+        if template.formal_modes.len() != instance.actual_modes.len() {
+            return Err(Error::new(
+                instance.span,
+                format!(
+                    "generic module template `{}` expects {} mode(s), found {}",
+                    instance.template,
+                    template.formal_modes.len(),
+                    instance.actual_modes.len()
+                ),
+            ));
+        }
+        let mut module = template.module.clone();
+        module.name = Some(instance.name.clone());
+        module.span = instance.span;
+        let substitutions: HashMap<&str, &ModeRef> = template
+            .formal_modes
+            .iter()
+            .map(String::as_str)
+            .zip(instance.actual_modes.iter())
+            .collect();
+        substitute_module_modes(&mut module, &substitutions)?;
+        program.modules.push(module);
+    }
+    program.generic_modules.clear();
+    Ok(())
+}
+
+fn substitute_module_modes(
+    module: &mut Module,
+    substitutions: &HashMap<&str, &ModeRef>,
+) -> Result<(), Error> {
+    substitute_declaration_modes(&mut module.declarations, substitutions)?;
+    for context in &mut module.contexts {
+        substitute_declaration_modes(&mut context.declarations, substitutions)?;
+    }
+    substitute_action_modes(&mut module.actions, substitutions)?;
+    if let Some(handler) = &mut module.handler {
+        for alternative in &mut handler.alternatives {
+            substitute_action_modes(&mut alternative.actions, substitutions)?;
+        }
+        if let Some(actions) = &mut handler.else_actions {
+            substitute_action_modes(actions, substitutions)?;
+        }
+    }
+    Ok(())
+}
+
+fn substitute_action_modes(
+    actions: &mut [Action],
+    substitutions: &HashMap<&str, &ModeRef>,
+) -> Result<(), Error> {
+    for action in actions {
+        match action {
+            Action::Begin {
+                declarations,
+                actions,
+                ..
+            } => {
+                substitute_declaration_modes(declarations, substitutions)?;
+                substitute_action_modes(actions, substitutions)?;
+            }
+            Action::If {
+                branches,
+                else_actions,
+                ..
+            } => {
+                for branch in branches {
+                    substitute_action_modes(&mut branch.body, substitutions)?;
+                }
+                if let Some(actions) = else_actions {
+                    substitute_action_modes(actions, substitutions)?;
+                }
+            }
+            Action::Case {
+                alternatives,
+                else_actions,
+                ..
+            } => {
+                for alternative in alternatives {
+                    substitute_action_modes(&mut alternative.body, substitutions)?;
+                }
+                if let Some(actions) = else_actions {
+                    substitute_action_modes(actions, substitutions)?;
+                }
+            }
+            Action::Do { body, .. } => substitute_action_modes(body, substitutions)?,
+            Action::Labelled { action, .. } => {
+                substitute_action_modes(std::slice::from_mut(action.as_mut()), substitutions)?;
+            }
+            Action::Handled { handler, .. } => {
+                for alternative in &mut handler.alternatives {
+                    substitute_action_modes(&mut alternative.actions, substitutions)?;
+                }
+                if let Some(actions) = &mut handler.else_actions {
+                    substitute_action_modes(actions, substitutions)?;
+                }
+            }
+            Action::Module(module) => substitute_module_modes(module, substitutions)?,
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn expand_module_generics(module: &mut Module) -> Result<(), Error> {

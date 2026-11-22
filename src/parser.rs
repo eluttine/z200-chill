@@ -90,6 +90,8 @@ impl<'a> Parser<'a> {
     fn parse_program(&mut self) -> Result<Program, Error> {
         let mut modules = Vec::new();
         let mut remotes = Vec::new();
+        let mut generic_modules = Vec::new();
+        let mut generic_module_instances = Vec::new();
         while !self.at_end() {
             if self.at_context_module_remote() {
                 remotes.push(self.parse_context_module_remote()?);
@@ -100,12 +102,27 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let contexts = self.parse_context_list()?;
-            modules.push(self.parse_module(contexts)?);
+            if self.at_generic_module_template() {
+                generic_modules.push(self.parse_generic_module_template(contexts)?);
+            } else if self.at_generic_module_instance() {
+                generic_module_instances.push(self.parse_generic_module_instance()?);
+            } else {
+                modules.push(self.parse_module(contexts)?);
+            }
         }
-        if modules.is_empty() && remotes.is_empty() {
+        if modules.is_empty()
+            && remotes.is_empty()
+            && generic_modules.is_empty()
+            && generic_module_instances.is_empty()
+        {
             return Err(self.error_here("expected a module"));
         }
-        Ok(Program { modules, remotes })
+        Ok(Program {
+            modules,
+            remotes,
+            generic_modules,
+            generic_module_instances,
+        })
     }
 
     fn at_context_module_remote(&self) -> bool {
@@ -266,6 +283,101 @@ impl<'a> Parser<'a> {
             });
         }
         Ok(contexts)
+    }
+
+    fn at_generic_module_template(&self) -> bool {
+        self.at_identifier()
+            && self.kind_at(1) == Some(&TokenKind::Colon)
+            && self.kind_at(2) == Some(&TokenKind::Keyword(Keyword::Generic))
+    }
+
+    fn at_generic_module_instance(&self) -> bool {
+        self.at_identifier()
+            && self.kind_at(1) == Some(&TokenKind::Colon)
+            && self.kind_at(2) == Some(&TokenKind::Keyword(Keyword::Module))
+            && self.kind_at(3) == Some(&TokenKind::Eq)
+    }
+
+    fn parse_generic_module_template(
+        &mut self,
+        contexts: Vec<Context>,
+    ) -> Result<GenericModuleTemplate, Error> {
+        let start = self.current_span();
+        let (name, _) = self.expect_identifier()?;
+        self.expect_colon()?;
+        self.expect_keyword(Keyword::Generic)?;
+        let mut formal_modes = Vec::new();
+        while self.at_keyword(Keyword::Mode) {
+            self.advance();
+            loop {
+                let (formal, _) = self.expect_identifier()?;
+                formal_modes.push(formal);
+                if self.at_comma() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect_semicolon()?;
+        }
+        if self.at_keyword(Keyword::Syn) || self.at_keyword(Keyword::SynMode) {
+            return Err(
+                self.error_here_code("E0206", "generic SYN parameters are not implemented yet")
+            );
+        }
+        if !contexts.is_empty() {
+            return Err(self.error_here_code(
+                "E0206",
+                "contexts on generic module templates are not implemented yet",
+            ));
+        }
+        let module = self.parse_module_named(contexts, Some(name.clone()))?;
+        Ok(GenericModuleTemplate {
+            name,
+            formal_modes,
+            span: Span::new(self.source, start.start, module.span.end),
+            module,
+        })
+    }
+
+    fn parse_generic_module_instance(&mut self) -> Result<GenericModuleInstance, Error> {
+        let start = self.current_span();
+        let (name, _) = self.expect_identifier()?;
+        self.expect_colon()?;
+        self.expect_keyword(Keyword::Module)?;
+        self.expect_equal()?;
+        self.expect_keyword(Keyword::New)?;
+        let (template, _) = self.expect_identifier()?;
+        self.expect_lparen()?;
+        let mut actual_modes = Vec::new();
+        if !self.at_rparen() {
+            loop {
+                actual_modes.push(self.parse_mode_ref()?);
+                if self.at_comma() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect_rparen()?;
+        self.expect_keyword(Keyword::End)?;
+        if let Some(TokenKind::Identifier(trailing)) = self.kind() {
+            if trailing != &name {
+                return Err(self.error_here_code(
+                    "E0202",
+                    format!("generic module end name `{trailing}` does not match `{name}`"),
+                ));
+            }
+            self.advance();
+        }
+        let end = self.expect_semicolon()?;
+        Ok(GenericModuleInstance {
+            name,
+            template,
+            actual_modes,
+            span: Span::new(self.source, start.start, end.end),
+        })
     }
 
     fn parse_module(&mut self, contexts: Vec<Context>) -> Result<Module, Error> {

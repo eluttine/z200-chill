@@ -129,7 +129,9 @@ all existing tests pass with no new special cases.
 - [x] Named `SET (...)` modes with unnumbered and numbered elements.
 - [x] Generic procedure templates parameterized by `MODE`, with
       `name: PROC = NEW template (modes) END;` instantiation.
-- [ ] Moreta modes; generic `SYN`/`PROC` parameters and module/region/process templates.
+- [x] Generic module templates parameterized by `MODE`, with
+      `name: MODULE = NEW template (modes) END;` instantiation.
+- [ ] Moreta modes; generic `SYN`/`PROC` parameters and region/process templates.
 - [ ] Processes/signals/timers: deferred pending a resumable/concurrent runtime.
 
 ## 8. Cleanup

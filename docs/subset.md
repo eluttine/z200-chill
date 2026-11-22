@@ -592,7 +592,24 @@ IdentityInt: PROC = NEW Identity (INT) END;
 - Local declarations, parameters, results, and nested procedure signatures are substituted.
 - Instantiation syntax is `name: PROC = NEW template (actual-modes) END;`.
 - The current subset supports `MODE` parameters only; generic `SYN` and `PROC`
-  parameters and generic module/region/process templates are not implemented yet.
+  parameters are not implemented yet.
+
+Generic module templates use the same mechanism:
+
+```chill
+Pair: GENERIC
+  MODE T;
+  MODULE
+    DCL first T;
+    DCL second T;
+  END Pair;
+
+PairInt: MODULE = NEW Pair (INT) END;
+```
+
+- Instantiated modules are cloned with formal modes substituted through declarations,
+  contexts, nested modules, actions, and handlers.
+- Generic region and process templates are not implemented yet.
 
 ## 7. Modules and visibility
 

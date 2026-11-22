@@ -5,6 +5,24 @@ pub struct Program {
     pub modules: Vec<Module>,
     /// Remote program units parsed from `REMOTE`/`SPEC REMOTE`.
     pub remotes: Vec<RemoteUnit>,
+    pub generic_modules: Vec<GenericModuleTemplate>,
+    pub generic_module_instances: Vec<GenericModuleInstance>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericModuleTemplate {
+    pub name: String,
+    pub formal_modes: Vec<String>,
+    pub module: Module,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericModuleInstance {
+    pub name: String,
+    pub template: String,
+    pub actual_modes: Vec<ModeRef>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

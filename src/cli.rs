@@ -239,6 +239,8 @@ fn load_package(target: &Path, link_grant_sources: bool) -> Result<LoadedPackage
         program: Program {
             modules: loader.modules,
             remotes: Vec::new(),
+            generic_modules: Vec::new(),
+            generic_module_instances: Vec::new(),
         },
         external: loader.external,
     })
