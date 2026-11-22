@@ -1,4 +1,4 @@
-use crate::ast::{ArrayBounds, ModeRef};
+use crate::ast::{ArrayBounds, ModeRef, Passing};
 use crate::manifest::WidthProfile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -195,6 +195,7 @@ pub enum Type {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcType {
     pub params: Vec<Type>,
+    pub passing: Vec<Passing>,
     pub result: Option<Type>,
     /// Exceptions that may escape to the caller. `None` means the set is not
     /// statically known (for example an interface loaded from a grant file).

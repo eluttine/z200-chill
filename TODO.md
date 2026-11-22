@@ -151,6 +151,8 @@ deferred.
       mode ID.
 - [x] Generic `SYN` value parameters and generic `PROC` parameters in procedure and
       module templates.
+- [x] `OUT`, `INOUT`, and `LOC` parameter passing for procedures and moreta
+      methods, including copy-back and grant-interface encoding.
 - [ ] Moreta constructors/destructors, `SELF`, task/region object modes; generic
       region/process templates.
 - [ ] Faithful processes/signals/timers and region mutual exclusion: deferred pending

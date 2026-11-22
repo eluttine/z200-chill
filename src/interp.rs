@@ -225,6 +225,19 @@ pub fn run_checked(
     Ok(())
 }
 
+type CallUpdates = Vec<(Box<ir::AssignTarget>, Value)>;
+
+#[derive(Clone)]
+enum CallArgument {
+    Value(Value),
+    Target(Box<ir::AssignTarget>),
+    InOut {
+        target: Box<ir::AssignTarget>,
+        value: Value,
+    },
+    Location(VarCell),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Value {
     Undefined,
@@ -2157,14 +2170,13 @@ impl<'a> Interpreter<'a> {
                 object,
                 proc_span,
                 args,
+                passing,
+                targets,
                 span,
                 ..
             } => {
-                let mut values = Vec::with_capacity(args.len());
-                for arg in args {
-                    values.push(self.eval_ir(arg)?);
-                }
-                self.call_method(object, *proc_span, values, *span)
+                let call_args = self.prepare_call_args(args, passing, targets, *span)?;
+                self.call_method(object, *proc_span, call_args, *span)
             }
             ir::Expr::Association {
                 op,
@@ -2282,7 +2294,12 @@ impl<'a> Interpreter<'a> {
                 self.make_int(value, Some(*kind), *span)
             }
             ir::Expr::Call {
-                name, args, span, ..
+                name,
+                args,
+                passing,
+                targets,
+                ty: _,
+                span,
             } => {
                 let Some(proc_ref) = self.lookup_proc(name) else {
                     return Err(Error::coded(
@@ -2303,11 +2320,8 @@ impl<'a> Interpreter<'a> {
                     ));
                 }
 
-                let mut values = Vec::with_capacity(args.len());
-                for arg in args {
-                    values.push(self.eval_ir(arg)?);
-                }
-                self.call_proc(proc_ref, values, *span)
+                let call_args = self.prepare_call_args(args, passing, targets, *span)?;
+                self.call_proc(proc_ref, call_args, *span)
             }
             ir::Expr::Unary {
                 op,
@@ -2401,11 +2415,68 @@ impl<'a> Interpreter<'a> {
             .unwrap_or_default()
     }
 
+    fn prepare_call_args(
+        &mut self,
+        args: &[ir::Node],
+        passing: &[Passing],
+        targets: &[Option<ir::AssignTarget>],
+        span: Span,
+    ) -> Result<Vec<CallArgument>, Error> {
+        let mut call_args = Vec::with_capacity(args.len());
+        for ((arg, passing), target) in args.iter().zip(passing).zip(targets) {
+            match passing {
+                Passing::In => call_args.push(CallArgument::Value(self.eval_ir(arg)?)),
+                Passing::Out => {
+                    let Some(target) = target else {
+                        return Err(Error::coded(
+                            "E0500",
+                            span,
+                            "internal: missing OUT argument location",
+                        ));
+                    };
+                    call_args.push(CallArgument::Target(Box::new(target.clone())));
+                }
+                Passing::InOut => {
+                    let Some(target) = target else {
+                        return Err(Error::coded(
+                            "E0500",
+                            span,
+                            "internal: missing INOUT argument location",
+                        ));
+                    };
+                    let value = self.read_target(target, arg.span())?;
+                    call_args.push(CallArgument::InOut {
+                        target: Box::new(target.clone()),
+                        value,
+                    });
+                }
+                Passing::Loc => {
+                    let Some(ir::AssignTarget::Var(name)) = target else {
+                        return Err(Error::coded(
+                            "E0500",
+                            span,
+                            "internal: LOC argument is not a variable",
+                        ));
+                    };
+                    let Some(cell) = self.find_var_cell(name) else {
+                        return Err(Error::coded(
+                            "E0505",
+                            span,
+                            format!("unknown variable `{name}`"),
+                        ));
+                    };
+                    call_args.push(CallArgument::Location(cell));
+                }
+            }
+        }
+        Ok(call_args)
+    }
+
     fn call_method(
         &mut self,
         object_name: &str,
         proc_span: Span,
-        args: Vec<Value>,
+        args: Vec<CallArgument>,
         span: Span,
     ) -> Result<Value, Error> {
         if self.depth >= 1024 {
@@ -2450,15 +2521,15 @@ impl<'a> Interpreter<'a> {
                 }
             }
         }
-        let result = (|| {
+        let outcome = (|| {
             self.check_moreta_invariants(id, span)?;
-            let result = self.call_proc_inner(proc_def, args, span)?;
+            let outcome = self.call_proc_inner(proc_def, args, span)?;
             self.check_moreta_invariants(id, span)?;
-            Ok(result)
+            Ok(outcome)
         })();
         self.depth -= 1;
         self.call_bases.pop();
-        let updated = if result.is_ok() {
+        let updated = if outcome.is_ok() {
             let mut updated = components;
             let scope = self.locals.last().expect("method scope");
             for (name, value) in &mut updated {
@@ -2474,13 +2545,17 @@ impl<'a> Interpreter<'a> {
         if let Some(updated) = updated {
             self.assign_var(object_name, updated, span)?;
         }
-        result
+        let (result, updates) = outcome?;
+        for (target, value) in updates {
+            self.assign_target(&target, value, span)?;
+        }
+        Ok(result)
     }
 
     fn call_proc(
         &mut self,
         proc_ref: ProcRef<'a>,
-        args: Vec<Value>,
+        args: Vec<CallArgument>,
         span: Span,
     ) -> Result<Value, Error> {
         if self.depth >= 1024 {
@@ -2495,25 +2570,71 @@ impl<'a> Interpreter<'a> {
         self.call_bases.push(self.locals.len() - 1);
         self.depth += 1;
 
-        let result = self.call_proc_inner(proc_ref.def, args, span);
+        let outcome = self.call_proc_inner(proc_ref.def, args, span);
 
         self.depth -= 1;
         self.call_bases.pop();
         self.locals.pop();
         self.active_module = previous_module;
         self.active_scope_key = previous_scope;
-        result
+
+        let (result, updates) = outcome?;
+        for (target, value) in updates {
+            self.assign_target(&target, value, span)?;
+        }
+        Ok(result)
     }
 
     fn call_proc_inner(
         &mut self,
         proc_def: &'a ProcDef,
-        args: Vec<Value>,
+        args: Vec<CallArgument>,
         span: Span,
-    ) -> Result<Value, Error> {
+    ) -> Result<(Value, CallUpdates), Error> {
+        let mut writebacks: Vec<(String, Box<ir::AssignTarget>, bool)> = Vec::new();
         for (param, arg) in proc_def.params.iter().zip(args) {
             let ty = self.resolve_mode(&param.mode)?;
-            let value = self.convert(arg, ty, param.span)?;
+            let value = match (param.passing, arg) {
+                (Passing::In, CallArgument::Value(value)) => self.convert(value, ty, param.span)?,
+                (Passing::Out, CallArgument::Target(target)) => {
+                    writebacks.push((param.name.clone(), target, true));
+                    Value::Undefined
+                }
+                (Passing::InOut, CallArgument::InOut { target, value }) => {
+                    writebacks.push((param.name.clone(), target, false));
+                    self.convert(value, ty, param.span)?
+                }
+                (Passing::Loc, CallArgument::Location(cell)) => {
+                    if cell.borrow().ty != ty {
+                        return Err(Error::coded(
+                            "E0507",
+                            param.span,
+                            format!("LOC argument for `{}` has the wrong mode", param.name),
+                        ));
+                    }
+                    let scope = self.locals.last_mut().expect("local scope");
+                    if scope.vars.contains_key(&param.name) || scope.procs.contains_key(&param.name)
+                    {
+                        return Err(Error::coded(
+                            "E0508",
+                            param.span,
+                            format!("duplicate declaration of `{}`", param.name),
+                        ));
+                    }
+                    scope.vars.insert(param.name.clone(), cell);
+                    continue;
+                }
+                _ => {
+                    return Err(Error::coded(
+                        "E0500",
+                        param.span,
+                        format!(
+                            "internal: wrong argument kind for parameter `{}`",
+                            param.name
+                        ),
+                    ));
+                }
+            };
             let scope = self.locals.last_mut().expect("local scope");
             if scope.vars.contains_key(&param.name) || scope.procs.contains_key(&param.name) {
                 return Err(Error::coded(
@@ -2559,16 +2680,43 @@ impl<'a> Interpreter<'a> {
             }
         }
 
-        match result_type {
+        let result = match result_type {
             Some(_) => frame.result.ok_or_else(|| {
                 Error::coded(
                     "E0506",
                     span,
                     format!("procedure `{}` returned no result", proc_def.name),
                 )
-            }),
-            None => Ok(Value::Undefined),
+            })?,
+            None => Value::Undefined,
+        };
+
+        let mut updates = Vec::with_capacity(writebacks.len());
+        {
+            let scope = self.locals.last().expect("local scope");
+            for (name, target, is_out) in writebacks {
+                let value = scope
+                    .vars
+                    .get(&name)
+                    .map(|cell| cell.borrow().value.clone())
+                    .ok_or_else(|| {
+                        Error::coded(
+                            "E0500",
+                            span,
+                            format!("internal: missing parameter `{name}`"),
+                        )
+                    })?;
+                if is_out && matches!(value, Value::Undefined) {
+                    return Err(Error::coded(
+                        "E0504",
+                        span,
+                        format!("OUT parameter `{name}` was not assigned"),
+                    ));
+                }
+                updates.push((target, value));
+            }
         }
+        Ok((result, updates))
     }
 
     fn apply_binary(

@@ -37,21 +37,21 @@ Current scope includes:
 - `DCL` declarations and `INIT :=` initialization;
 - expressions, mode conversions, and assignment;
 - `IF`, `DO`, `CASE`, `EXIT`, `BEGIN … END`, `ASSERT`, `CAUSE`, handlers;
-- procedures and calls (`IN` parameters, `RETURNS`, `RESULT`/`RETURN`);
+- procedures and calls (`IN`, `OUT`, `INOUT`, and `LOC` parameters, `RETURNS`,
+  `RESULT`/`RETURN`);
 - modules, nested modulions, `GRANT`/`SEIZE`, specs, contexts, regions, remote pieces;
 - arrays including slices, multidimensional arrays, literals, and arrays of structures;
 - text modes, text I/O, format codes, associations/access modes;
-- generic procedure/module templates over `MODE` and `SYN`;
+- generic procedure/module templates over `MODE`, `SYN`, and `PROC`;
 - moreta module-body objects in the documented subset.
 
 Explicitly **deferred**:
 
 - faithful processes/signals/timers and region mutual exclusion (single-threaded first
   release);
-- `OUT`/`INOUT`/`LOC` parameter passing;
 - `WCHARS`, references/rows, `ALLOCATE`/`TERMINATE`, bit strings;
 - constructors/destructors, `SELF`, task/region object modes, and the rest of moreta;
-- generic `PROC` parameters and generic region/process templates;
+- generic region/process templates;
 - grant encoding for named set modes and moreta module modes;
 - full association/access attribute modification and arbitrary file models.
 
@@ -104,7 +104,7 @@ Implemented in `z200c`:
   control clauses;
 - simplified text-file associations/access modes with indexed access;
 - powersets and named set modes;
-- generic procedure/module templates over `MODE` and `SYN`;
+- generic procedure/module templates over `MODE`, `SYN`, and `PROC`;
 - moreta module-body objects with methods, inheritance, specs, initializers, and
   invariants (see [moreta.md](moreta.md));
 - a tree-walking interpreter, so `z200c run examples/hello` executes the example and
@@ -114,12 +114,11 @@ Not implemented yet (rejected or deferred with a diagnostic):
 
 - interface-only external dependencies for `run`;
 - multiple `CASE` selectors and non-integer `CASE` labels;
-- `OUT` / `INOUT` / `LOC` parameter passing;
 - region concurrency/mutual exclusion;
 - faithful processes/signals/timers (first release is single-threaded);
 - `WCHARS`, references/rows, `ALLOCATE`/`TERMINATE`, and bit strings;
 - moreta constructors/destructors, `SELF`, and task/region object modes;
-- generic `PROC` parameters and generic region/process templates;
+- generic region/process templates;
 - grant encoding for named set modes and moreta module modes.
 
 The interpreter is a bootstrap for validating semantics; native code generation is a
@@ -578,7 +577,10 @@ END name ;
 ```
 
 - Parameters: `name mode [IN|OUT|INOUT|LOC]`. The default is pass-by-value (`IN`).
-  `OUT` does not copy in; `INOUT` copies in and back; `LOC` passes a location.
+  `OUT` does not copy in and must be assigned before the procedure returns; `INOUT`
+  copies in and back; `LOC` passes a location (currently a simple variable). Actual
+  `OUT`/`INOUT` arguments must be locations with the declared mode, and `LOC`
+  arguments must be variables of the declared mode.
 - `RETURNS (mode)` makes a value procedure; without it the procedure delivers no result.
 - `RESULT value;` establishes the result without returning; `RETURN [value];` returns.
   `RETURN value` is derived syntax for `DO RESULT value; RETURN; OD` (§6.8).

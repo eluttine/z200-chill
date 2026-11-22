@@ -53,6 +53,7 @@ pub enum ExportInfoKind {
     Var(ExternalType),
     Proc {
         params: Vec<ExternalType>,
+        passing: Vec<crate::ast::Passing>,
         result: Option<ExternalType>,
     },
     Mode(ModeInfo),
@@ -228,11 +229,16 @@ pub fn add_external_exports(
         for info in &interface.exports {
             let kind = match &info.kind {
                 ExportInfoKind::Var(ty) => ExportKind::Var(resolve_external_type(ty, ids)?),
-                ExportInfoKind::Proc { params, result } => ExportKind::Proc(ProcType {
+                ExportInfoKind::Proc {
+                    params,
+                    passing,
+                    result,
+                } => ExportKind::Proc(ProcType {
                     params: params
                         .iter()
                         .map(|ty| resolve_external_type(ty, ids))
                         .collect::<Result<_, _>>()?,
+                    passing: passing.clone(),
                     result: match result {
                         Some(ty) => Some(resolve_external_type(ty, ids)?),
                         None => None,

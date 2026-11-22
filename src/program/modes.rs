@@ -1,4 +1,4 @@
-use crate::ast::{Declaration, ModeRef, Module, Param, Passing, Program, VisibilityKind};
+use crate::ast::{Declaration, ModeRef, Module, Param, Program, VisibilityKind};
 use crate::lexer::Span;
 use crate::modes::{FieldInfo, ModeTable, StructMode};
 use crate::types::{self, ModeId, ProcType, Type};
@@ -422,18 +422,11 @@ pub fn signature_from_params_with(
     mode_names: &HashMap<String, Type>,
 ) -> Result<ProcType, Error> {
     let mut param_types = Vec::with_capacity(params.len());
+    let mut passing = Vec::with_capacity(params.len());
     let mut seen = HashSet::new();
 
     for param in params {
-        if param.passing != Passing::In {
-            return Err(Error::new(
-                param.span,
-                format!(
-                    "parameter passing mode `{:?}` is not implemented yet",
-                    param.passing
-                ),
-            ));
-        }
+        passing.push(param.passing);
         if !seen.insert(param.name.as_str()) {
             return Err(Error::new(
                 param.span,
@@ -450,6 +443,7 @@ pub fn signature_from_params_with(
 
     Ok(ProcType {
         params: param_types,
+        passing,
         result: result_type,
         exceptions: Some(exceptions.to_vec()),
     })

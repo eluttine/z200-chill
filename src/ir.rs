@@ -1,5 +1,5 @@
 use crate::ast::{
-    Action, CaseLabel, Declaration, DoControl, Expr as AstExpr, Module, Program, UnaryOp,
+    Action, CaseLabel, Declaration, DoControl, Expr as AstExpr, Module, Passing, Program, UnaryOp,
 };
 use crate::lexer::Span;
 use crate::sema::{ApplyResolution, CheckResult};
@@ -67,6 +67,8 @@ pub enum Expr {
     Call {
         name: String,
         args: Vec<Node>,
+        passing: Vec<Passing>,
+        targets: Vec<Option<AssignTarget>>,
         ty: Option<Type>,
         span: Span,
     },
@@ -145,6 +147,8 @@ pub enum Expr {
         object: String,
         proc_span: Span,
         args: Vec<Node>,
+        passing: Vec<Passing>,
+        targets: Vec<Option<AssignTarget>>,
         ty: Option<Type>,
         span: Span,
     },
@@ -219,7 +223,7 @@ impl Expr {
 }
 
 /// An assignment location: a variable, or a field path rooted at a variable.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AssignTarget {
     Var(String),
     Field {
@@ -860,12 +864,28 @@ impl Lowerer<'_> {
                         span,
                     })
                 }
-                Some(ApplyResolution::Procedure) => Rc::new(Expr::Call {
-                    name: name.clone(),
-                    args,
-                    ty,
-                    span,
-                }),
+                Some(ApplyResolution::Procedure(signature)) => {
+                    let targets = signature
+                        .passing
+                        .iter()
+                        .zip(ast_args)
+                        .map(|(passing, arg)| {
+                            if *passing == Passing::In {
+                                Ok(None)
+                            } else {
+                                Ok(Some(self.lower_target(arg)?))
+                            }
+                        })
+                        .collect::<Result<Vec<_>, Error>>()?;
+                    Rc::new(Expr::Call {
+                        name: name.clone(),
+                        args,
+                        passing: signature.passing.clone(),
+                        targets,
+                        ty,
+                        span,
+                    })
+                }
                 Some(ApplyResolution::TextIo {
                     kind,
                     format,
@@ -1150,14 +1170,28 @@ impl Lowerer<'_> {
                         "internal: method call object is not a name",
                     ));
                 };
-                let Some(ApplyResolution::Method { proc_span, result }) =
-                    self.check.resolutions.get(call_span)
+                let Some(ApplyResolution::Method {
+                    proc_span,
+                    result,
+                    passing,
+                }) = self.check.resolutions.get(call_span)
                 else {
                     return Err(Error::new(
                         *call_span,
                         "internal: method call has no resolution",
                     ));
                 };
+                let targets = passing
+                    .iter()
+                    .zip(args)
+                    .map(|(passing, arg)| {
+                        if *passing == Passing::In {
+                            Ok(None)
+                        } else {
+                            Ok(Some(self.lower_target(arg)?))
+                        }
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
                 let args = args
                     .iter()
                     .map(|arg| self.lower_expr(arg))
@@ -1166,6 +1200,8 @@ impl Lowerer<'_> {
                     object: object.clone(),
                     proc_span: *proc_span,
                     args,
+                    passing: passing.clone(),
+                    targets,
                     ty: *result,
                     span: *call_span,
                 })

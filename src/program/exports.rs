@@ -153,6 +153,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                         .into_iter()
                         .map(|ty| portable_type(ty, &modes))
                         .collect(),
+                    passing: signature.passing,
                     result: signature.result.map(|ty| portable_type(ty, &modes)),
                 },
                 ExportKind::Mode(id) => {

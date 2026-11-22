@@ -44,7 +44,7 @@ impl std::error::Error for Error {}
 pub enum ApplyResolution {
     Conversion(IntKind),
     FloatConversion,
-    Procedure,
+    Procedure(ProcType),
     ArrayIndex(Type),
     Builtin(crate::builtins::Builtin),
     TextIo {
@@ -64,6 +64,7 @@ pub enum ApplyResolution {
     Method {
         proc_span: Span,
         result: Option<Type>,
+        passing: Vec<Passing>,
     },
 }
 
@@ -1291,6 +1292,7 @@ impl Checker {
         span: Span,
     ) -> Result<ProcType, Error> {
         let mut param_types = Vec::with_capacity(params.len());
+        let mut passing = Vec::with_capacity(params.len());
         let mut seen = HashSet::new();
         for param in params {
             if !seen.insert(param.name.clone()) {
@@ -1301,6 +1303,7 @@ impl Checker {
                 ));
             }
             param_types.push(self.resolve_mode(&param.mode)?);
+            passing.push(param.passing);
         }
         let result = match result {
             Some(mode) => Some(self.resolve_mode(mode)?),
@@ -1318,6 +1321,7 @@ impl Checker {
         }
         Ok(ProcType {
             params: param_types,
+            passing,
             result,
             exceptions: Some(exceptions.to_vec()),
         })
@@ -1968,15 +1972,60 @@ impl Checker {
                 ),
             ));
         }
-        for (arg, param_ty) in args.iter().zip(&signature.params) {
-            let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
-            self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
+        for (arg, (param_ty, passing)) in args
+            .iter()
+            .zip(signature.params.iter().zip(&signature.passing))
+        {
+            match passing {
+                Passing::In => {
+                    let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
+                    self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
+                }
+                Passing::Out | Passing::InOut => {
+                    let target_ty = self.location_type(arg)?;
+                    self.types.insert(arg.span(), target_ty);
+                    if target_ty != *param_ty {
+                        return Err(Error::coded(
+                            "E0404",
+                            arg.span(),
+                            format!(
+                                "argument for {passing:?} parameter must have mode {}, found {}",
+                                param_ty.describe(),
+                                target_ty.describe()
+                            ),
+                        ));
+                    }
+                }
+                Passing::Loc => {
+                    if !matches!(arg, Expr::Name { .. }) {
+                        return Err(Error::coded(
+                            "E0409",
+                            arg.span(),
+                            "LOC arguments currently require a simple variable",
+                        ));
+                    }
+                    let target_ty = self.location_type(arg)?;
+                    self.types.insert(arg.span(), target_ty);
+                    if target_ty != *param_ty {
+                        return Err(Error::coded(
+                            "E0404",
+                            arg.span(),
+                            format!(
+                                "LOC argument must have mode {}, found {}",
+                                param_ty.describe(),
+                                target_ty.describe()
+                            ),
+                        ));
+                    }
+                }
+            }
         }
         self.resolutions.insert(
             span,
             ApplyResolution::Method {
                 proc_span,
                 result: signature.result,
+                passing: signature.passing.clone(),
             },
         );
         if require_result && signature.result.is_none() {
@@ -2937,7 +2986,8 @@ impl Checker {
                 format!("unknown name `{name}`"),
             ));
         };
-        self.resolutions.insert(span, ApplyResolution::Procedure);
+        self.resolutions
+            .insert(span, ApplyResolution::Procedure(signature.clone()));
         if let Some(exceptions) = &signature.exceptions {
             self.record_exceptions(exceptions.iter().cloned());
         }
@@ -2954,9 +3004,53 @@ impl Checker {
             ));
         }
 
-        for (arg, param_ty) in args.iter().zip(&signature.params) {
-            let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
-            self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
+        for (arg, (param_ty, passing)) in args
+            .iter()
+            .zip(signature.params.iter().zip(&signature.passing))
+        {
+            match passing {
+                Passing::In => {
+                    let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
+                    self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
+                }
+                Passing::Out | Passing::InOut => {
+                    let target_ty = self.location_type(arg)?;
+                    self.types.insert(arg.span(), target_ty);
+                    if target_ty != *param_ty {
+                        return Err(Error::coded(
+                            "E0404",
+                            arg.span(),
+                            format!(
+                                "argument for {passing:?} parameter must have mode {}, found {}",
+                                param_ty.describe(),
+                                target_ty.describe()
+                            ),
+                        ));
+                    }
+                }
+                Passing::Loc => {
+                    if !matches!(arg, Expr::Name { .. }) {
+                        return Err(Error::coded(
+                            "E0409",
+                            arg.span(),
+                            "LOC arguments currently require a simple variable",
+                        ));
+                    }
+                    let target_ty = self.location_type(arg)?;
+                    self.types.insert(arg.span(), target_ty);
+                    if target_ty != *param_ty {
+                        return Err(Error::coded(
+                            "E0404",
+                            arg.span(),
+                            format!(
+                                "LOC argument must have mode {}, found {}",
+                                param_ty.describe(),
+                                target_ty.describe()
+                            ),
+                        ));
+                    }
+                }
+            }
         }
 
         if require_result && signature.result.is_none() {
@@ -3460,7 +3554,7 @@ END M;
         assert!(result
             .resolutions
             .values()
-            .any(|resolution| matches!(resolution, ApplyResolution::Procedure)));
+            .any(|resolution| matches!(resolution, ApplyResolution::Procedure(_))));
     }
 
     #[test]

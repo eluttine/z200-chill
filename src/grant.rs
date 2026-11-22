@@ -1,4 +1,4 @@
-use crate::ast::Program;
+use crate::ast::{Passing, Program};
 use crate::manifest::Manifest;
 use crate::program::{self, ExportInfo, ExportInfoKind};
 use crate::types::{self, Type};
@@ -61,6 +61,9 @@ pub struct GrantExport {
     pub mode: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<String>,
+    /// Parameter passing modes, in `params` order. Empty means all `in`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub passing: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -135,11 +138,16 @@ impl GrantFile {
                     kind: GrantKind::Variable,
                     mode: Some(external_type_name(&ty)),
                     params: Vec::new(),
+                    passing: Vec::new(),
                     result: None,
                     forbid: Vec::new(),
                     friends,
                 }),
-                ExportInfoKind::Proc { params, result } => entries.push(GrantExport {
+                ExportInfoKind::Proc {
+                    params,
+                    passing,
+                    result,
+                } => entries.push(GrantExport {
                     name,
                     module: module_name,
                     package: package_name,
@@ -147,6 +155,10 @@ impl GrantFile {
                     kind: GrantKind::Procedure,
                     mode: None,
                     params: params.iter().map(external_type_name).collect(),
+                    passing: passing
+                        .iter()
+                        .map(|passing| passing_name(*passing).to_owned())
+                        .collect(),
                     result: result.as_ref().map(external_type_name),
                     forbid: Vec::new(),
                     friends,
@@ -159,6 +171,7 @@ impl GrantFile {
                     kind: GrantKind::Mode,
                     mode: Some(mode.symbol()),
                     params: Vec::new(),
+                    passing: Vec::new(),
                     result: None,
                     forbid: mode.forbidden.clone(),
                     friends,
@@ -248,7 +261,20 @@ impl GrantFile {
                         Some(mode) => Some(parse_external_type(mode, &definitions)?),
                         None => None,
                     };
-                    ExportInfoKind::Proc { params, result }
+                    let passing = export
+                        .params
+                        .iter()
+                        .enumerate()
+                        .map(|(index, _)| match export.passing.get(index) {
+                            Some(name) => parse_passing(name),
+                            None => Ok(Passing::In),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    ExportInfoKind::Proc {
+                        params,
+                        passing,
+                        result,
+                    }
                 }
                 GrantKind::Mode => {
                     let symbol = export.mode.as_deref().ok_or_else(|| {
@@ -280,6 +306,25 @@ impl GrantFile {
     }
 }
 
+fn passing_name(passing: Passing) -> &'static str {
+    match passing {
+        Passing::In => "in",
+        Passing::Out => "out",
+        Passing::InOut => "inout",
+        Passing::Loc => "loc",
+    }
+}
+
+fn parse_passing(name: &str) -> Result<Passing, String> {
+    match name {
+        "in" => Ok(Passing::In),
+        "out" => Ok(Passing::Out),
+        "inout" => Ok(Passing::InOut),
+        "loc" => Ok(Passing::Loc),
+        other => Err(format!("unknown parameter passing mode `{other}`")),
+    }
+}
+
 fn validate_exports(
     exports: &[program::ExportInfo],
     modes: &crate::modes::ModeTable,
@@ -287,7 +332,19 @@ fn validate_exports(
     for export in exports {
         match &export.kind {
             program::ExportInfoKind::Var(ty) => validate_external_type(ty)?,
-            program::ExportInfoKind::Proc { params, result } => {
+            program::ExportInfoKind::Proc {
+                params,
+                passing,
+                result,
+            } => {
+                if passing.len() != params.len() {
+                    return Err(format!(
+                        "procedure export `{}` has {} parameter mode(s) but {} passing mode(s)",
+                        export.name,
+                        params.len(),
+                        passing.len()
+                    ));
+                }
                 for ty in params {
                     validate_external_type(ty)?;
                 }
@@ -672,7 +729,7 @@ END A;
         let bump = infos.iter().find(|info| info.name == "Bump").unwrap();
         assert!(matches!(
             &bump.kind,
-            ExportInfoKind::Proc { params, result } if params.is_empty() && result.is_none()
+            ExportInfoKind::Proc { params, result, .. } if params.is_empty() && result.is_none()
         ));
     }
 
@@ -950,6 +1007,47 @@ END M;
         let text = external_type_name(&ty);
         assert_eq!(text, "ARRAY(0:1) pkg!M!Point");
         assert_eq!(parse_external_type(&text, &definitions).unwrap(), ty);
+    }
+
+    #[test]
+    fn records_parameter_passing() {
+        let manifest = Manifest::parse(
+            r#"
+[package]
+name = "passing"
+
+[build]
+entry = "src/main.ch"
+"#,
+        )
+        .unwrap();
+        let tokens = lexer::tokenize(
+            r#"
+M: MODULE
+  GRANT F;
+  F: PROC (a INT, b INT OUT, c INT INOUT, d INT LOC);
+  END F;
+END M;
+"#,
+        )
+        .unwrap();
+        let mut program = parser::parse(&tokens).unwrap();
+        for module in &mut program.modules {
+            module.package_name = Some(manifest.package.name.clone());
+        }
+        let grant = GrantFile::from_package(&manifest, &program).unwrap();
+        let export = grant.exports.iter().find(|e| e.name == "F").unwrap();
+        assert_eq!(export.passing, ["in", "out", "inout", "loc"]);
+        let parsed = GrantFile::from_toml(&grant.to_toml().unwrap()).unwrap();
+        let interface = parsed.to_interface().unwrap();
+        let proc_ty = match &interface.exports[0].kind {
+            ExportInfoKind::Proc { passing, .. } => passing,
+            other => panic!("expected procedure export, found {other:?}"),
+        };
+        assert_eq!(
+            proc_ty,
+            &[Passing::In, Passing::Out, Passing::InOut, Passing::Loc]
+        );
     }
 
     #[test]
