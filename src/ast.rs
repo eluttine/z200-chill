@@ -306,6 +306,8 @@ pub struct ModeRef {
     pub reference: bool,
     /// True for a `ROW mode` row mode.
     pub row: bool,
+    /// Element mode of a `BUFFER` mode.
+    pub buffer_element: Option<Box<ModeRef>>,
     /// True when ACCESS declares an index mode.
     pub access_indexed: bool,
     /// Literal index range for an indexed ACCESS mode, if specified.

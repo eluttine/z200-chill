@@ -204,6 +204,7 @@ fn build_mode_definition(
                     powerset: false,
                     reference: false,
                     row: false,
+                    buffer_element: None,
                     access_indexed: false,
                     access_index: None,
                     span: mode_def.span,

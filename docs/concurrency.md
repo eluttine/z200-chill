@@ -10,7 +10,10 @@
 - `EVENT` and `EVENT(n)` synchronization modes.
 - `DELAY event [PRIORITY expr];` and `CONTINUE event;`.
 - `SIGNAL name [= (modes)];` declarations.
-- `SEND signal [(values)];`.
+- `SEND signal [(values)];` when the target is a signal.
+- `BUFFER [(length)] element-mode` synchronization modes.
+- `SEND buffer(value);` and `(buffer IN name)` receive alternatives.
+- Buffer capacity limits park sending processes until space is available.
 - `RECEIVE CASE (signal [IN names]): actions ... [ELSE actions] ESAC;`.
 - Pending signals are queued; waiting receivers are parked on every alternative and
   woken when a matching signal arrives.
@@ -48,7 +51,8 @@
 - `SEND ... TO` process targeting and process instance values.
 - `RECEIVE CASE SET` instance locations.
 - signal priorities.
-- buffer modes and buffer send/receive.
+- buffer send/receive priorities (buffer values currently use FIFO/priority 0).
+- buffer element modes beyond scalar grant encoding.
 - region locations (region object modes), task modes, and critical procedures on
   region objects.
 - process handlers and full exception termination semantics.

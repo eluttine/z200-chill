@@ -185,9 +185,12 @@ deferred.
       blocking `DELAY`/`RECEIVE` waits.
 - [x] `DELAY CASE` with multiple event alternatives, priority selection, and timeout
       cancellation inside relative timing actions.
+- [x] `BUFFER [(length)] element-mode` locations, buffered send/receive, capacity
+      blocking, delayed senders, buffer receive timeouts, and grant encoding for scalar
+      buffer elements.
 - [ ] Absolute/cyclic timing actions, signal `TO` targeting, receive `SET` instance
-      locations, buffer modes, region/task object modes, process handlers/instances,
-      and process `LOC`/`OUT`/`INOUT` parameters.
+      locations, buffer priorities, region/task object modes, process
+      handlers/instances, and process `LOC`/`OUT`/`INOUT` parameters.
 
 ## 8. Cleanup
 

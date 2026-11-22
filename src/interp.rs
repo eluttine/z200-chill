@@ -260,74 +260,110 @@ pub fn run_checked(
         };
         CURRENT_YIELDER.with(|slot| slot.set(runnable.entry.yielder.get()));
         match runnable.entry.coroutine.resume(runnable.input) {
-            corosensei::CoroutineResult::Yield(yielded) => match yielded {
-                ProcessYield::Tick => scheduler.borrow_mut().ready.push_back(Runnable {
-                    input: ProcessInput::None,
-                    entry: runnable.entry,
-                }),
-                ProcessYield::Delay {
-                    event,
-                    priority,
-                    deadline,
-                } => {
-                    let entry = runnable.entry;
-                    let waiter = EventWaiter {
-                        id: entry.id,
+            corosensei::CoroutineResult::Yield(yielded) => {
+                match yielded {
+                    ProcessYield::Tick => scheduler.borrow_mut().ready.push_back(Runnable {
+                        input: ProcessInput::None,
+                        entry: runnable.entry,
+                    }),
+                    ProcessYield::Delay {
+                        event,
                         priority,
                         deadline,
-                        slot: Rc::new(RefCell::new(Some(entry))),
-                    };
-                    scheduler
-                        .borrow_mut()
-                        .event_waiters
-                        .entry(event)
-                        .or_default()
-                        .push(waiter);
-                }
-                ProcessYield::DelayCase {
-                    events,
-                    priority,
-                    deadline,
-                } => {
-                    let entry = runnable.entry;
-                    let id = entry.id;
-                    let slot = Rc::new(RefCell::new(Some(entry)));
-                    let mut state = scheduler.borrow_mut();
-                    for event in events {
-                        state
+                    } => {
+                        let entry = runnable.entry;
+                        let waiter = EventWaiter {
+                            id: entry.id,
+                            priority,
+                            deadline,
+                            slot: Rc::new(RefCell::new(Some(entry))),
+                        };
+                        scheduler
+                            .borrow_mut()
                             .event_waiters
                             .entry(event)
                             .or_default()
-                            .push(EventWaiter {
+                            .push(waiter);
+                    }
+                    ProcessYield::DelayCase {
+                        events,
+                        priority,
+                        deadline,
+                    } => {
+                        let entry = runnable.entry;
+                        let id = entry.id;
+                        let slot = Rc::new(RefCell::new(Some(entry)));
+                        let mut state = scheduler.borrow_mut();
+                        for event in events {
+                            state
+                                .event_waiters
+                                .entry(event)
+                                .or_default()
+                                .push(EventWaiter {
+                                    id,
+                                    priority,
+                                    deadline,
+                                    slot: Rc::clone(&slot),
+                                });
+                        }
+                    }
+                    ProcessYield::Receive {
+                        signals,
+                        buffers,
+                        deadline,
+                    } => {
+                        let entry = runnable.entry;
+                        let id = entry.id;
+                        let slot = Rc::new(RefCell::new(Some(entry)));
+                        let mut state = scheduler.borrow_mut();
+                        for signal in signals {
+                            state.receivers.entry(signal.name).or_default().push((
                                 id,
-                                priority,
+                                Rc::clone(&slot),
                                 deadline,
-                                slot: Rc::clone(&slot),
+                            ));
+                        }
+                        for buffer in buffers {
+                            state.buffers.entry(buffer).or_default().receivers.push(
+                                BufferReceiver {
+                                    id,
+                                    deadline,
+                                    slot: Rc::clone(&slot),
+                                },
+                            );
+                        }
+                    }
+                    ProcessYield::SendBuffer {
+                        buffer,
+                        priority,
+                        values,
+                        deadline,
+                    } => {
+                        let entry = runnable.entry;
+                        let mut state = scheduler.borrow_mut();
+                        state
+                            .buffers
+                            .entry(buffer)
+                            .or_default()
+                            .senders
+                            .push(BufferSender {
+                                id: entry.id,
+                                priority,
+                                values,
+                                deadline,
+                                slot: Rc::new(RefCell::new(Some(entry))),
                             });
                     }
-                }
-                ProcessYield::Receive { signals, deadline } => {
-                    let entry = runnable.entry;
-                    let id = entry.id;
-                    let slot = Rc::new(RefCell::new(Some(entry)));
-                    let mut state = scheduler.borrow_mut();
-                    for signal in signals {
-                        state.receivers.entry(signal.name).or_default().push((
-                            id,
-                            Rc::clone(&slot),
-                            deadline,
-                        ));
+                    ProcessYield::AcquireRegion { region } => {
+                        scheduler
+                            .borrow_mut()
+                            .region_waiters
+                            .entry(region)
+                            .or_default()
+                            .push(runnable.entry);
                     }
                 }
-                ProcessYield::AcquireRegion { region } => {
-                    scheduler
-                        .borrow_mut()
-                        .region_waiters
-                        .entry(region)
-                        .or_default()
-                        .push(runnable.entry);
-                }
-            },
+            }
             corosensei::CoroutineResult::Return(result) => {
                 CURRENT_YIELDER.with(|slot| slot.set(std::ptr::null()));
                 result?;
@@ -345,6 +381,16 @@ pub fn run_checked(
             .receivers
             .values()
             .any(|receivers| receivers.iter().any(|(_, slot, _)| slot.borrow().is_some()))
+        || scheduler.borrow().buffers.values().any(|buffer| {
+            buffer
+                .senders
+                .iter()
+                .any(|sender| sender.slot.borrow().is_some())
+                || buffer
+                    .receivers
+                    .iter()
+                    .any(|receiver| receiver.slot.borrow().is_some())
+        })
     {
         return Err(Error::coded(
             "E0500",
@@ -465,6 +511,13 @@ enum ProcessYield {
     },
     Receive {
         signals: Vec<ReceiverSignal>,
+        buffers: Vec<usize>,
+        deadline: Option<Instant>,
+    },
+    SendBuffer {
+        buffer: usize,
+        priority: i128,
+        values: Vec<Value>,
         deadline: Option<Instant>,
     },
     DelayCase {
@@ -488,6 +541,7 @@ enum ProcessInput {
     Timeout,
     Delay { event: usize },
     Signal { name: String, values: Vec<Value> },
+    Buffer { name: String, values: Vec<Value> },
 }
 
 type ProcessCoroutine = Coroutine<ProcessInput, ProcessYield, Result<(), Error>, DefaultStack>;
@@ -498,6 +552,32 @@ struct EventWaiter {
     priority: i128,
     deadline: Option<Instant>,
     slot: ReceiverSlot,
+}
+
+struct BufferMessage {
+    priority: i128,
+    values: Vec<Value>,
+}
+
+struct BufferSender {
+    id: usize,
+    priority: i128,
+    values: Vec<Value>,
+    deadline: Option<Instant>,
+    slot: ReceiverSlot,
+}
+
+struct BufferReceiver {
+    id: usize,
+    deadline: Option<Instant>,
+    slot: ReceiverSlot,
+}
+
+#[derive(Default)]
+struct BufferState {
+    messages: VecDeque<BufferMessage>,
+    senders: Vec<BufferSender>,
+    receivers: Vec<BufferReceiver>,
 }
 
 struct ProcessEntry {
@@ -518,6 +598,7 @@ struct ScheduleState {
     event_waiters: HashMap<usize, Vec<EventWaiter>>,
     signals: HashMap<String, VecDeque<Vec<Value>>>,
     receivers: HashMap<String, Vec<(usize, ReceiverSlot, Option<Instant>)>>,
+    buffers: HashMap<usize, BufferState>,
     region_owner: HashMap<usize, usize>,
     region_waiters: HashMap<usize, Vec<ProcessEntry>>,
 }
@@ -604,8 +685,35 @@ fn cooperative_delay_case(
     })
 }
 
+fn cooperative_send_buffer(
+    buffer: usize,
+    priority: i128,
+    values: Vec<Value>,
+    deadline: Option<Instant>,
+) -> Result<ProcessInput, Error> {
+    CURRENT_YIELDER.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            return Err(Error::coded(
+                "E0500",
+                Span::new(SourceId(0), 0, 0),
+                "buffer send outside a process",
+            ));
+        }
+        Ok(unsafe {
+            (*ptr).suspend(ProcessYield::SendBuffer {
+                buffer,
+                priority,
+                values,
+                deadline,
+            })
+        })
+    })
+}
+
 fn cooperative_receive(
     signals: Vec<String>,
+    buffers: Vec<usize>,
     deadline: Option<Instant>,
 ) -> Result<ProcessInput, Error> {
     CURRENT_YIELDER.with(|slot| {
@@ -623,6 +731,7 @@ fn cooperative_receive(
                     .into_iter()
                     .map(|name| ReceiverSignal { name })
                     .collect(),
+                buffers,
                 deadline,
             })
         })
@@ -641,11 +750,26 @@ fn next_timed_deadline(scheduler: &Rc<RefCell<ScheduleState>>) -> Option<Instant
         .values()
         .flat_map(|receivers| receivers.iter().filter_map(|(_, _, deadline)| *deadline))
         .min();
-    match (waiting_deadline, receiver_deadline) {
-        (Some(left), Some(right)) => Some(left.min(right)),
-        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
-        (None, None) => None,
-    }
+    let buffer_deadline = state
+        .buffers
+        .values()
+        .flat_map(|buffer| {
+            buffer
+                .senders
+                .iter()
+                .filter_map(|sender| sender.deadline)
+                .chain(
+                    buffer
+                        .receivers
+                        .iter()
+                        .filter_map(|receiver| receiver.deadline),
+                )
+        })
+        .min();
+    [waiting_deadline, receiver_deadline, buffer_deadline]
+        .into_iter()
+        .flatten()
+        .min()
 }
 
 fn expire_timed_waiters(scheduler: &Rc<RefCell<ScheduleState>>) {
@@ -708,6 +832,56 @@ fn expire_timed_waiters(scheduler: &Rc<RefCell<ScheduleState>>) {
     }
     for receivers in state.receivers.values_mut() {
         receivers.retain(|(id, _, _)| !expired_ids.contains(id));
+    }
+    for buffer in state.buffers.values_mut() {
+        let mut index = 0;
+        while index < buffer.senders.len() {
+            let expired_entry = buffer.senders[index]
+                .deadline
+                .is_some_and(|deadline| deadline <= now)
+                && buffer.senders[index].slot.borrow().is_some();
+            if expired_entry {
+                let id = buffer.senders[index].id;
+                let entry = buffer.senders[index].slot.borrow_mut().take();
+                buffer.senders.remove(index);
+                expired_ids.push(id);
+                if let Some(entry) = entry {
+                    expired.push(Runnable {
+                        input: ProcessInput::Timeout,
+                        entry,
+                    });
+                }
+            } else {
+                index += 1;
+            }
+        }
+        let mut index = 0;
+        while index < buffer.receivers.len() {
+            let expired_entry = buffer.receivers[index]
+                .deadline
+                .is_some_and(|deadline| deadline <= now)
+                && buffer.receivers[index].slot.borrow().is_some();
+            if expired_entry {
+                let id = buffer.receivers[index].id;
+                let entry = buffer.receivers[index].slot.borrow_mut().take();
+                buffer.receivers.remove(index);
+                expired_ids.push(id);
+                if let Some(entry) = entry {
+                    expired.push(Runnable {
+                        input: ProcessInput::Timeout,
+                        entry,
+                    });
+                }
+            } else {
+                index += 1;
+            }
+        }
+        buffer
+            .receivers
+            .retain(|receiver| !expired_ids.contains(&receiver.id));
+        buffer
+            .senders
+            .retain(|sender| !expired_ids.contains(&sender.id));
     }
     for runnable in expired {
         state.ready.push_back(runnable);
@@ -1545,7 +1719,7 @@ impl<'a> Interpreter<'a> {
                     match cooperative_delay(key, priority, self.deadline)? {
                         ProcessInput::Timeout => return Ok(Flow::Timeout),
                         ProcessInput::Delay { .. } | ProcessInput::None => {}
-                        ProcessInput::Signal { .. } => {
+                        ProcessInput::Signal { .. } | ProcessInput::Buffer { .. } => {
                             return Err(Error::coded(
                                 "E0500",
                                 *span,
@@ -1591,6 +1765,75 @@ impl<'a> Interpreter<'a> {
                     values,
                     span,
                 } => {
+                    if self.lookup_signal_modes(signal).is_none() {
+                        let (key, length, mode) = self.buffer_location(signal, *span)?;
+                        if values.len() != 1 {
+                            return Err(Error::coded(
+                                "E0507",
+                                *span,
+                                format!("buffer `{signal}` expects exactly one value"),
+                            ));
+                        }
+                        let value = self.eval_ir(&values[0])?;
+                        let value = self.convert(value, mode, *span)?;
+                        let mut scheduler = self.scheduler.borrow_mut();
+                        let receiver = scheduler.buffers.get(&key).and_then(|buffer| {
+                            buffer
+                                .receivers
+                                .iter()
+                                .enumerate()
+                                .find_map(|(index, receiver)| {
+                                    receiver
+                                        .slot
+                                        .borrow()
+                                        .is_some()
+                                        .then_some((index, receiver.id))
+                                })
+                        });
+                        if let Some((index, id)) = receiver {
+                            let state = scheduler.buffers.get_mut(&key).expect("buffer");
+                            let slot = Rc::clone(&state.receivers[index].slot);
+                            state.receivers.remove(index);
+                            for buffer in scheduler.buffers.values_mut() {
+                                buffer.receivers.retain(|receiver| receiver.id != id);
+                            }
+                            let entry = slot.borrow_mut().take().expect("buffer receiver");
+                            scheduler.ready.push_back(Runnable {
+                                input: ProcessInput::Buffer {
+                                    name: signal.clone(),
+                                    values: vec![value],
+                                },
+                                entry,
+                            });
+                        } else {
+                            let full = length.is_some_and(|length| {
+                                scheduler
+                                    .buffers
+                                    .get(&key)
+                                    .map(|buffer| buffer.messages.len() >= length)
+                                    .unwrap_or(false)
+                            });
+                            if full {
+                                drop(scheduler);
+                                if let ProcessInput::Timeout =
+                                    cooperative_send_buffer(key, 0, vec![value], self.deadline)?
+                                {
+                                    return Ok(Flow::Timeout);
+                                }
+                            } else {
+                                scheduler
+                                    .buffers
+                                    .entry(key)
+                                    .or_default()
+                                    .messages
+                                    .push_back(BufferMessage {
+                                        priority: 0,
+                                        values: vec![value],
+                                    });
+                            }
+                        }
+                        continue;
+                    }
                     let modes = self.lookup_signal_modes(signal).ok_or_else(|| {
                         Error::coded("E0505", *span, format!("unknown signal `{signal}`"))
                     })?;
@@ -1645,14 +1888,20 @@ impl<'a> Interpreter<'a> {
                     span,
                 } => {
                     let mut pending = None;
-                    {
-                        let mut scheduler = self.scheduler.borrow_mut();
-                        for alternative in alternatives {
+                    for alternative in alternatives {
+                        {
+                            let mut scheduler = self.scheduler.borrow_mut();
                             if let Some(queue) = scheduler.signals.get_mut(&alternative.signal) {
                                 if let Some(values) = queue.pop_front() {
                                     pending = Some((alternative.signal.clone(), values));
                                     break;
                                 }
+                            }
+                        }
+                        if let Ok((key, _, _)) = self.buffer_location(&alternative.signal, *span) {
+                            if let Some(values) = self.take_buffer_value(&alternative.signal, key) {
+                                pending = Some((alternative.signal.clone(), values));
+                                break;
                             }
                         }
                     }
@@ -1661,18 +1910,26 @@ impl<'a> Interpreter<'a> {
                     } else if let Some(else_actions) = else_actions {
                         return self.exec_stmts(else_actions, frame);
                     } else {
-                        let names = alternatives
-                            .iter()
-                            .map(|alternative| alternative.signal.clone())
-                            .collect();
-                        match cooperative_receive(names, self.deadline)? {
-                            ProcessInput::Signal { name, values } => (name, values),
+                        let mut signals = Vec::new();
+                        let mut buffers = Vec::new();
+                        for alternative in alternatives {
+                            if self.lookup_signal_modes(&alternative.signal).is_some() {
+                                signals.push(alternative.signal.clone());
+                            } else {
+                                let (key, _, _) =
+                                    self.buffer_location(&alternative.signal, *span)?;
+                                buffers.push(key);
+                            }
+                        }
+                        match cooperative_receive(signals, buffers, self.deadline)? {
+                            ProcessInput::Signal { name, values }
+                            | ProcessInput::Buffer { name, values } => (name, values),
                             ProcessInput::Timeout => return Ok(Flow::Timeout),
                             ProcessInput::Delay { .. } | ProcessInput::None => {
                                 return Err(Error::coded(
                                     "E0500",
                                     *span,
-                                    "internal: receive resumed without a signal",
+                                    "internal: receive resumed without a value",
                                 ));
                             }
                         }
@@ -1681,21 +1938,14 @@ impl<'a> Interpreter<'a> {
                         .iter()
                         .find(|alternative| alternative.signal == received.0)
                         .ok_or_else(|| {
-                            Error::coded(
-                                "E0500",
-                                *span,
-                                "internal: received unknown signal alternative",
-                            )
+                            Error::coded("E0500", *span, "internal: received unknown alternative")
                         })?;
-                    let modes = self
-                        .lookup_signal_modes(&alternative.signal)
-                        .ok_or_else(|| {
-                            Error::coded(
-                                "E0505",
-                                *span,
-                                format!("unknown signal `{}`", alternative.signal),
-                            )
-                        })?;
+                    let modes = if let Some(modes) = self.lookup_signal_modes(&alternative.signal) {
+                        modes
+                    } else {
+                        let (_, _, mode) = self.buffer_location(&alternative.signal, *span)?;
+                        vec![mode]
+                    };
                     self.locals.push(Scope::default());
                     let setup = (|| {
                         for ((name, mode), value) in alternative
@@ -1713,7 +1963,10 @@ impl<'a> Interpreter<'a> {
                         self.exec_stmts(&alternative.actions, frame)
                     })();
                     self.locals.pop();
-                    return setup;
+                    let flow = setup?;
+                    if !matches!(flow, Flow::Normal) {
+                        return Ok(flow);
+                    }
                 }
                 ir::Stmt::Start {
                     process,
@@ -4228,10 +4481,10 @@ impl<'a> Interpreter<'a> {
                 Value::Ref(_) => Ok(value),
                 _ => Err(Error::coded("E0507", span, "expected a reference value")),
             },
-            Type::Event { .. } => Err(Error::coded(
+            Type::Event { .. } | Type::Buffer { .. } => Err(Error::coded(
                 "E0507",
                 span,
-                "event locations do not have values",
+                "synchronization locations do not have values",
             )),
             Type::Duration => match value {
                 Value::Duration(value) => Ok(Value::Duration(value)),
@@ -4403,6 +4656,23 @@ impl<'a> Interpreter<'a> {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        if mode.name == "BUFFER" {
+            let element = mode.buffer_element.as_deref().ok_or_else(|| {
+                Error::coded("E0400", mode.span, "BUFFER requires an element mode")
+            })?;
+            let element = self.resolve_mode(element)?;
+            let Some(element) = crate::types::RefTarget::from_type(element) else {
+                return Err(Error::coded(
+                    "E0400",
+                    mode.span,
+                    "BUFFER element must be a value mode",
+                ));
+            };
+            return Ok(Type::Buffer {
+                length: mode.string_length,
+                element,
+            });
+        }
         if mode.name == "EVENT" {
             return Ok(Type::Event {
                 length: mode.string_length,
@@ -4437,6 +4707,7 @@ impl<'a> Interpreter<'a> {
                     powerset: false,
                     reference: false,
                     row: false,
+                    buffer_element: None,
                     access_indexed: false,
                     access_index: None,
                     span: mode.span,
@@ -4478,6 +4749,7 @@ impl<'a> Interpreter<'a> {
                 powerset: mode.powerset,
                 reference: mode.reference,
                 row: mode.row,
+                buffer_element: None,
                 access_indexed: mode.access_indexed,
                 access_index: mode.access_index,
                 span: mode.span,
@@ -4774,6 +5046,78 @@ impl<'a> Interpreter<'a> {
             }
         }
         scheduler.region_owner.remove(&region);
+    }
+
+    fn buffer_location(
+        &self,
+        name: &str,
+        span: Span,
+    ) -> Result<(usize, Option<usize>, Type), Error> {
+        let cell = self
+            .find_var_cell(name)
+            .ok_or_else(|| Error::coded("E0505", span, format!("unknown buffer `{name}`")))?;
+        let ty = cell.borrow().ty;
+        let Type::Buffer { length, element } = ty else {
+            return Err(Error::coded(
+                "E0507",
+                span,
+                format!("`{name}` is not a BUFFER location"),
+            ));
+        };
+        Ok((Rc::as_ptr(&cell) as usize, length, element.ty()))
+    }
+
+    fn take_buffer_value(&mut self, name: &str, key: usize) -> Option<Vec<Value>> {
+        let mut scheduler = self.scheduler.borrow_mut();
+        let state = scheduler.buffers.get_mut(&key)?;
+        let message_index = state
+            .messages
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, message)| message.priority)
+            .map(|(index, _)| index);
+        let (received, sender_entry) = if let Some(index) = message_index {
+            let message = state.messages.remove(index)?;
+            let mut sender_entry = None;
+            if let Some(sender_index) = state
+                .senders
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, sender)| sender.priority)
+                .map(|(index, _)| index)
+            {
+                let sender = state.senders.remove(sender_index);
+                let slot = Rc::clone(&sender.slot);
+                let entry = slot.borrow_mut().take();
+                if let Some(entry) = entry {
+                    state.messages.push_back(BufferMessage {
+                        priority: sender.priority,
+                        values: sender.values,
+                    });
+                    sender_entry = Some(entry);
+                }
+            }
+            (message.values, sender_entry)
+        } else {
+            let sender_index = state
+                .senders
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, sender)| sender.priority)
+                .map(|(index, _)| index)?;
+            let sender = state.senders.remove(sender_index);
+            let slot = Rc::clone(&sender.slot);
+            let entry = slot.borrow_mut().take()?;
+            (sender.values, Some(entry))
+        };
+        if let Some(entry) = sender_entry {
+            scheduler.ready.push_back(Runnable {
+                input: ProcessInput::None,
+                entry,
+            });
+        }
+        let _ = name;
+        Some(received)
     }
 
     fn event_location(&self, name: &str, span: Span) -> Result<(usize, Option<usize>), Error> {

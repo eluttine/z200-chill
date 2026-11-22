@@ -566,6 +566,25 @@ fn validate_external_type(ty: &program::ExternalType) -> Result<(), String> {
         program::ExternalType::Builtin(Type::Ref(_) | Type::Ptr | Type::Row(_) | Type::Null) => {
             Err("reference and row modes are not supported in grant interfaces yet".to_owned())
         }
+        program::ExternalType::Builtin(Type::Buffer { element, .. })
+            if !matches!(
+                element,
+                crate::types::RefTarget::Int(_)
+                    | crate::types::RefTarget::Float
+                    | crate::types::RefTarget::Bool
+                    | crate::types::RefTarget::Char
+                    | crate::types::RefTarget::String
+                    | crate::types::RefTarget::BoundedString { .. }
+                    | crate::types::RefTarget::WChar
+                    | crate::types::RefTarget::WString
+                    | crate::types::RefTarget::WBoundedString { .. }
+                    | crate::types::RefTarget::Bits
+                    | crate::types::RefTarget::BoundedBits { .. }
+                    | crate::types::RefTarget::Text { .. }
+            ) =>
+        {
+            Err("buffer element modes in grant interfaces must be scalar".to_owned())
+        }
         program::ExternalType::Array { element, .. }
         | program::ExternalType::MultiArray { element, .. } => validate_external_type(element),
         _ => Ok(()),
@@ -672,6 +691,47 @@ fn parse_external_type(
             }
         };
         return Ok(program::ExternalType::Builtin(Type::Access(access)));
+    }
+    if let Some(rest) = name.strip_prefix("BUFFER(") {
+        let (length, element) = rest
+            .split_once(')')
+            .ok_or_else(|| format!("invalid buffer mode `{name}` in grant file"))?;
+        let length = length
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| format!("invalid buffer length in `{name}`"))?;
+        let element = parse_external_type(element.trim(), definitions)?;
+        let program::ExternalType::Builtin(element) = element else {
+            return Err(format!(
+                "buffer element mode in `{name}` must be a value mode"
+            ));
+        };
+        let Some(element) = types::RefTarget::from_type(element) else {
+            return Err(format!(
+                "buffer element mode in `{name}` must be a value mode"
+            ));
+        };
+        return Ok(program::ExternalType::Builtin(Type::Buffer {
+            length: Some(length),
+            element,
+        }));
+    }
+    if let Some(rest) = name.strip_prefix("BUFFER ") {
+        let element = parse_external_type(rest.trim(), definitions)?;
+        let program::ExternalType::Builtin(element) = element else {
+            return Err(format!(
+                "buffer element mode in `{name}` must be a value mode"
+            ));
+        };
+        let Some(element) = types::RefTarget::from_type(element) else {
+            return Err(format!(
+                "buffer element mode in `{name}` must be a value mode"
+            ));
+        };
+        return Ok(program::ExternalType::Builtin(Type::Buffer {
+            length: None,
+            element,
+        }));
     }
     if let Some(rest) = name.strip_prefix("EVENT(") {
         let length = rest
@@ -833,6 +893,10 @@ fn type_name(ty: Type) -> String {
             length: Some(length),
         } => format!("EVENT({length})"),
         Type::Event { length: None } => "EVENT".to_owned(),
+        Type::Buffer { length, element } => match length {
+            Some(length) => format!("BUFFER({length}) {}", type_name(element.ty())),
+            None => format!("BUFFER {}", type_name(element.ty())),
+        },
         Type::Duration => "DURATION".to_owned(),
         Type::Bits => "BOOLS".to_owned(),
         Type::BoundedBits {

@@ -89,6 +89,7 @@ impl ArrayElement {
             | Type::ArrayTuple
             | Type::Text { .. }
             | Type::Event { .. }
+            | Type::Buffer { .. }
             | Type::Duration
             | Type::Ref(_)
             | Type::Ptr
@@ -233,6 +234,7 @@ impl RefTarget {
             Type::IntLiteral
             | Type::ArrayTuple
             | Type::Event { .. }
+            | Type::Buffer { .. }
             | Type::Duration
             | Type::Null
             | Type::Ref(_)
@@ -312,6 +314,11 @@ pub enum Type {
     Event {
         length: Option<usize>,
     },
+    /// `BUFFER [(length)] element-mode`.
+    Buffer {
+        length: Option<usize>,
+        element: RefTarget,
+    },
     /// A duration value, represented in milliseconds.
     Duration,
     /// A bound reference mode `REF M`.
@@ -388,6 +395,7 @@ impl Type {
             | Self::ArrayTuple
             | Self::Text { .. }
             | Self::Event { .. }
+            | Self::Buffer { .. }
             | Self::Duration
             | Self::Ref(_)
             | Self::Ptr
@@ -432,6 +440,7 @@ impl Type {
             Self::Text { wide: true, .. } => "wide text",
             Self::Text { .. } => "text",
             Self::Event { .. } => "event",
+            Self::Buffer { .. } => "buffer",
             Self::Duration => "duration",
             Self::Ref(target) => match target {
                 RefTarget::Struct(_) => "bound reference",
@@ -521,6 +530,14 @@ pub fn resolve_mode_ref(
                 high: bounds.high,
             }),
         }));
+    }
+    if mode.name == "BUFFER" {
+        let element = mode.buffer_element.as_ref()?;
+        let element = resolve_mode_ref(element, mode_names)?;
+        return Some(Type::Buffer {
+            length: mode.string_length,
+            element: RefTarget::from_type(element)?,
+        });
     }
     if mode.name == "EVENT" {
         return Some(Type::Event {

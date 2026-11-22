@@ -1425,6 +1425,7 @@ impl<'a> Parser<'a> {
                 powerset: false,
                 reference: false,
                 row: false,
+                buffer_element: None,
                 access_indexed,
                 access_index,
                 span: Span::new(self.source, start.start, record.span.end),
@@ -1454,6 +1455,7 @@ impl<'a> Parser<'a> {
                 powerset: true,
                 reference: false,
                 row: false,
+                buffer_element: None,
                 access_indexed: false,
                 access_index: None,
                 span: Span::new(self.source, start.start, element.span.end),
@@ -1510,6 +1512,7 @@ impl<'a> Parser<'a> {
                 powerset: false,
                 reference: false,
                 row: false,
+                buffer_element: None,
                 access_indexed: false,
                 access_index: None,
                 span: Span::new(self.source, start.start, element.span.end),
@@ -1569,6 +1572,7 @@ impl<'a> Parser<'a> {
                 powerset: false,
                 reference: false,
                 row: false,
+                buffer_element: None,
                 access_indexed: false,
                 access_index: None,
                 span,
@@ -1609,6 +1613,41 @@ impl<'a> Parser<'a> {
                 powerset: false,
                 reference: false,
                 row: false,
+                buffer_element: None,
+                access_indexed: false,
+                access_index: None,
+                span,
+            });
+        }
+        if self.at_keyword(Keyword::Buffer) {
+            let span = self.current_span();
+            self.advance();
+            let length = if self.at_lparen() {
+                self.advance();
+                let length = self.parse_mode_integer()?;
+                self.expect_rparen()?;
+                if length < 0 {
+                    return Err(Error::coded(
+                        "E0205",
+                        span,
+                        "buffer length must be non-negative",
+                    ));
+                }
+                Some(length as usize)
+            } else {
+                None
+            };
+            let element = self.parse_mode_ref()?;
+            return Ok(ModeRef {
+                name: "BUFFER".to_owned(),
+                arrays: Vec::new(),
+                string_length: length,
+                varying: false,
+                access: false,
+                powerset: false,
+                reference: false,
+                row: false,
+                buffer_element: Some(Box::new(element)),
                 access_indexed: false,
                 access_index: None,
                 span,
@@ -1637,6 +1676,7 @@ impl<'a> Parser<'a> {
                 powerset: false,
                 reference: false,
                 row: false,
+                buffer_element: None,
                 access_indexed: false,
                 access_index: None,
                 span,
@@ -1677,6 +1717,7 @@ impl<'a> Parser<'a> {
             powerset: false,
             reference: false,
             row: false,
+            buffer_element: None,
             access_indexed: false,
             access_index: None,
             span,

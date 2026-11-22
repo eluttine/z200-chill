@@ -1026,6 +1026,7 @@ impl Checker {
                             powerset: false,
                             reference: false,
                             row: false,
+                            buffer_element: None,
                             access_indexed: false,
                             access_index: None,
                             span: mode_def.span,
@@ -1094,6 +1095,7 @@ impl Checker {
                         powerset: false,
                         reference: false,
                         row: false,
+                        buffer_element: None,
                         access_indexed: false,
                         access_index: None,
                         span: mode_def.span,
@@ -1528,6 +1530,23 @@ impl Checker {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        if mode.name == "BUFFER" {
+            let element = mode.buffer_element.as_deref().ok_or_else(|| {
+                Error::coded("E0400", mode.span, "BUFFER requires an element mode")
+            })?;
+            let element = self.resolve_mode(element)?;
+            let Some(element) = crate::types::RefTarget::from_type(element) else {
+                return Err(Error::coded(
+                    "E0400",
+                    mode.span,
+                    "BUFFER element must be a value mode",
+                ));
+            };
+            return Ok(Type::Buffer {
+                length: mode.string_length,
+                element,
+            });
+        }
         if mode.name == "EVENT" {
             return Ok(Type::Event {
                 length: mode.string_length,
@@ -1588,6 +1607,7 @@ impl Checker {
                 powerset: mode.powerset,
                 reference: mode.reference,
                 row: mode.row,
+                buffer_element: None,
                 access_indexed: mode.access_indexed,
                 access_index: mode.access_index,
                 span: mode.span,
@@ -2023,28 +2043,48 @@ impl Checker {
                 values,
                 span,
             } => {
-                let Some(modes) = self.lookup_signal(signal) else {
+                if let Some(modes) = self.lookup_signal(signal) {
+                    if modes.len() != values.len() {
+                        return Err(Error::coded(
+                            "E0400",
+                            *span,
+                            format!(
+                                "signal `{signal}` expects {} value(s), found {}",
+                                modes.len(),
+                                values.len()
+                            ),
+                        ));
+                    }
+                    for (value, mode) in values.iter().zip(modes) {
+                        let value_ty = self.check_expr_for_mode(value, mode)?;
+                        self.ensure_assignable(mode, value_ty, value.span())?;
+                    }
+                    return Ok(());
+                }
+                let Some(ty) = self.lookup_var(signal) else {
                     return Err(Error::coded(
                         "E0403",
                         *span,
-                        format!("unknown signal `{signal}`"),
+                        format!("unknown signal or buffer `{signal}`"),
                     ));
                 };
-                if modes.len() != values.len() {
+                let Type::Buffer { element, .. } = ty else {
                     return Err(Error::coded(
                         "E0400",
                         *span,
-                        format!(
-                            "signal `{signal}` expects {} value(s), found {}",
-                            modes.len(),
-                            values.len()
-                        ),
+                        format!("SEND target `{signal}` is not a signal or BUFFER"),
+                    ));
+                };
+                if values.len() != 1 {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        format!("buffer `{signal}` expects exactly one value"),
                     ));
                 }
-                for (value, mode) in values.iter().zip(modes) {
-                    let value_ty = self.check_expr_for_mode(value, mode)?;
-                    self.ensure_assignable(mode, value_ty, value.span())?;
-                }
+                let mode = element.ty();
+                let value_ty = self.check_expr_for_mode(&values[0], mode)?;
+                self.ensure_assignable(mode, value_ty, values[0].span())?;
                 Ok(())
             }
             Action::DelayCase {
@@ -2126,11 +2166,17 @@ impl Checker {
                 span,
             } => {
                 for alternative in alternatives {
-                    let Some(modes) = self.lookup_signal(&alternative.signal) else {
+                    let modes = if let Some(modes) = self.lookup_signal(&alternative.signal) {
+                        modes
+                    } else if let Some(Type::Buffer { element, .. }) =
+                        self.lookup_var(&alternative.signal)
+                    {
+                        vec![element.ty()]
+                    } else {
                         return Err(Error::coded(
                             "E0403",
                             alternative.span,
-                            format!("unknown signal `{}`", alternative.signal),
+                            format!("unknown signal or buffer `{}`", alternative.signal),
                         ));
                     };
                     if alternative.bindings.len() != modes.len() {
@@ -2138,7 +2184,7 @@ impl Checker {
                             "E0400",
                             alternative.span,
                             format!(
-                                "signal `{}` carries {} value(s), but {} receive name(s) were given",
+                                "`{}` carries {} value(s), but {} receive name(s) were given",
                                 alternative.signal,
                                 modes.len(),
                                 alternative.bindings.len()
@@ -4027,7 +4073,7 @@ impl Checker {
             Type::WBoundedString { .. } => is_wide_string_type(value),
             Type::Text { wide: true, .. } => is_wide_string_type(value),
             Type::Text { wide: false, .. } => is_narrow_string_type(value),
-            Type::Event { .. } => false,
+            Type::Event { .. } | Type::Buffer { .. } => false,
             Type::Duration => value == Type::Duration,
             Type::Bits => is_bits_type(value),
             Type::BoundedBits { .. } => is_bits_type(value),
