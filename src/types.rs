@@ -58,7 +58,7 @@ impl ArrayElement {
             }
             Type::Struct(id) => Some(Self::Struct(id)),
             Type::Association
-            | Type::Access
+            | Type::Access(_)
             | Type::IntLiteral
             | Type::Array(_)
             | Type::MultiArray(_)
@@ -80,6 +80,12 @@ pub struct ArrayType {
     pub low: i128,
     pub high: i128,
     pub element: ArrayElement,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AccessType {
+    pub indexed: bool,
+    pub index: Option<ArrayDimension>,
 }
 
 pub const MAX_ARRAY_RANK: usize = 4;
@@ -156,7 +162,7 @@ pub enum Type {
     /// An opaque association-mode value.
     Association,
     /// An opaque access-mode value.
-    Access,
+    Access(AccessType),
     /// An array tuple before its target array mode is known.
     ArrayTuple,
 }
@@ -186,7 +192,7 @@ impl Type {
                 Some(Scalar::BoundedString { length, varying })
             }
             Self::Association
-            | Self::Access
+            | Self::Access(_)
             | Self::IntLiteral
             | Self::Struct(_)
             | Self::Array(_)
@@ -222,7 +228,7 @@ impl Type {
             Self::MultiArray(_) => "multidimensional array",
             Self::DynamicArray { .. } => "dynamic array slice",
             Self::Association => "association",
-            Self::Access => "access",
+            Self::Access(_) => "access",
             Self::ArrayTuple => "array literal",
         }
     }
@@ -270,7 +276,13 @@ pub fn resolve_mode_ref(
     mode_names: &std::collections::HashMap<String, Type>,
 ) -> Option<Type> {
     if mode.access {
-        return Some(Type::Access);
+        return Some(Type::Access(AccessType {
+            indexed: mode.access_indexed,
+            index: mode.access_index.map(|bounds| ArrayDimension {
+                low: bounds.low,
+                high: bounds.high,
+            }),
+        }));
     }
     let base = mode_names
         .get(&mode.name)

@@ -219,6 +219,10 @@ pub struct ModeRef {
     pub varying: bool,
     /// True for an `ACCESS` mode.
     pub access: bool,
+    /// True when ACCESS declares an index mode.
+    pub access_indexed: bool,
+    /// Literal index range for an indexed ACCESS mode, if specified.
+    pub access_index: Option<ArrayBounds>,
     pub span: Span,
 }
 

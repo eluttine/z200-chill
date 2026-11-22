@@ -502,12 +502,18 @@ implementation is an intentional simplification of Z.200 file handling:
 - `CREATE(association)` creates/truncates the associated file.
 - `DELETE(association)` removes the associated file.
 - `CONNECT(access, association)` connects an access location and resets its record
-  position to the beginning.
+  position to the beginning. Indexed access accepts an optional integer index:
+  `CONNECT(access, association, index)`.
 - `DISCONNECT(access)` clears the connection.
 - `WRITERECORD(access, text)` appends one line-based record.
 - `READRECORD(access)` returns the next line; `READRECORD(access, target)` stores it in
   a `CHARS` location.
-- Access is sequential only; there is no index mode, random access, or `MODIFY`.
+- Indexed access also supports `READRECORD(access, index [, target])` and
+  `WRITERECORD(access, index, text)`. Indexed writes replace the selected line.
+- Out-of-range indexed transfers raise `RANGEFAIL`.
+- `MODIFY(association)` validates the association and currently has no modifiable
+  parameters; passing parameters is rejected.
+- There is no random access outside an indexed `ACCESS` mode.
 
 The built-in routines raise implementation-defined `ASSOCIATEFAIL`, `NOTASSOCIATED`,
 `CREATEFAIL`, `DELETEFAIL`, `CONNECTFAIL`, `NOTCONNECTED`, `READFAIL`, and `WRITEFAIL`

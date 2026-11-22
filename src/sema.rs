@@ -90,7 +90,11 @@ pub enum ApplyResolution {
         format: Vec<crate::builtins::FormatOp>,
         indexed: bool,
     },
-    Association(crate::builtins::AssociationOp),
+    Association {
+        op: crate::builtins::AssociationOp,
+        index: bool,
+        target: bool,
+    },
 }
 
 /// The checker's result: diagnostics plus expression annotations that the
@@ -1194,7 +1198,15 @@ impl Checker {
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
         if mode.access {
-            return Ok(Type::Access);
+            return Ok(Type::Access(crate::types::AccessType {
+                indexed: mode.access_indexed,
+                index: mode
+                    .access_index
+                    .map(|bounds| crate::types::ArrayDimension {
+                        low: bounds.low,
+                        high: bounds.high,
+                    }),
+            }));
         }
         if !mode.arrays.is_empty() {
             let element_mode = ModeRef {
@@ -1203,6 +1215,8 @@ impl Checker {
                 string_length: mode.string_length,
                 varying: mode.varying,
                 access: mode.access,
+                access_indexed: mode.access_indexed,
+                access_index: mode.access_index,
                 span: mode.span,
             };
             let base = self.resolve_mode(&element_mode)?;
@@ -2043,19 +2057,22 @@ impl Checker {
                 }
                 Ok(())
             };
-            let access_arg = |checker: &mut Checker, arg: &Expr| -> Result<(), Error> {
-                let Expr::Name { span, .. } = arg else {
-                    return Err(Error::new(
-                        arg.span(),
-                        "association/access argument must be a location",
-                    ));
+            let access_type =
+                |checker: &mut Checker, arg: &Expr| -> Result<crate::types::AccessType, Error> {
+                    let Expr::Name { span, .. } = arg else {
+                        return Err(Error::new(
+                            arg.span(),
+                            "association/access argument must be a location",
+                        ));
+                    };
+                    let ty = checker.check_expr(arg)?;
+                    let Type::Access(access) = ty else {
+                        return Err(Error::new(*span, "expected an ACCESS location"));
+                    };
+                    Ok(access)
                 };
-                let ty = checker.check_expr(arg)?;
-                if ty != Type::Access {
-                    return Err(Error::new(*span, "expected an ACCESS location"));
-                }
-                Ok(())
-            };
+            let mut has_index = false;
+            let mut has_target = false;
             let result = match op {
                 AssociationOp::Associate => {
                     let [association, path] = args else {
@@ -2087,6 +2104,19 @@ impl Checker {
                     association_arg(self, association)?;
                     Some(Type::Bool)
                 }
+                AssociationOp::Modify => {
+                    let Some(association) = args.first() else {
+                        return Err(Error::new(span, "MODIFY takes an association location"));
+                    };
+                    association_arg(self, association)?;
+                    if args.len() > 1 {
+                        return Err(Error::new(
+                            span,
+                            "MODIFY parameters are not implemented yet",
+                        ));
+                    }
+                    None
+                }
                 AssociationOp::Dissociate | AssociationOp::Create | AssociationOp::Delete => {
                     let [association] = args else {
                         return Err(Error::new(
@@ -2098,60 +2128,151 @@ impl Checker {
                     None
                 }
                 AssociationOp::Connect => {
-                    let [access, association] = args else {
+                    if args.len() != 2 && args.len() != 3 {
                         return Err(Error::new(
                             span,
-                            "CONNECT takes an access and an association location",
+                            "CONNECT takes an access, an association, and an optional index",
                         ));
-                    };
-                    access_arg(self, access)?;
-                    association_arg(self, association)?;
+                    }
+                    let access = access_type(self, &args[0])?;
+                    association_arg(self, &args[1])?;
+                    if args.len() == 3 {
+                        if !access.indexed {
+                            return Err(Error::new(
+                                span,
+                                "CONNECT index requires an indexed ACCESS mode",
+                            ));
+                        }
+                        let index_ty = self.check_expr(&args[2])?;
+                        if !index_ty.is_int() {
+                            return Err(Error::new(
+                                args[2].span(),
+                                "CONNECT index must be an integer",
+                            ));
+                        }
+                        has_index = true;
+                    }
                     None
                 }
                 AssociationOp::Disconnect => {
                     let [access] = args else {
                         return Err(Error::new(span, "DISCONNECT takes an access location"));
                     };
-                    access_arg(self, access)?;
+                    access_type(self, access)?;
                     None
                 }
-                AssociationOp::ReadRecord => match args {
-                    [access] => {
-                        access_arg(self, access)?;
-                        Some(Type::String)
+                AssociationOp::ReadRecord => {
+                    let Some(access) = args.first() else {
+                        return Err(Error::new(span, "READRECORD takes an access location"));
+                    };
+                    let access = access_type(self, access)?;
+                    if access.indexed {
+                        match args {
+                            [_, _] => {
+                                let second_ty = self.check_expr(&args[1])?;
+                                if second_ty.is_int() {
+                                    has_index = true;
+                                    Some(Type::String)
+                                } else if is_string_type(second_ty)
+                                    && matches!(args[1], Expr::Name { .. })
+                                {
+                                    has_target = true;
+                                    None
+                                } else {
+                                    return Err(Error::new(
+                                        args[1].span(),
+                                        "READRECORD argument must be an index or CHARS location",
+                                    ));
+                                }
+                            }
+                            [_, _, _] => {
+                                let index_ty = self.check_expr(&args[1])?;
+                                if !index_ty.is_int() {
+                                    return Err(Error::new(
+                                        args[1].span(),
+                                        "READRECORD index must be an integer",
+                                    ));
+                                }
+                                let Expr::Name { .. } = &args[2] else {
+                                    return Err(Error::new(
+                                        args[2].span(),
+                                        "READRECORD target must be a CHARS location",
+                                    ));
+                                };
+                                let target_ty = self.check_expr(&args[2])?;
+                                if !is_string_type(target_ty) {
+                                    return Err(Error::new(
+                                        args[2].span(),
+                                        "READRECORD target must be a CHARS location",
+                                    ));
+                                }
+                                has_index = true;
+                                has_target = true;
+                                None
+                            }
+                            _ => {
+                                return Err(Error::new(
+                                    span,
+                                    "READRECORD takes an access, optional index, and optional target",
+                                ));
+                            }
+                        }
+                    } else {
+                        match args {
+                            [_] => Some(Type::String),
+                            [_, target] => {
+                                let Expr::Name { .. } = target else {
+                                    return Err(Error::new(
+                                        target.span(),
+                                        "READRECORD target must be a CHARS location",
+                                    ));
+                                };
+                                let target_ty = self.check_expr(target)?;
+                                if !is_string_type(target_ty) {
+                                    return Err(Error::new(
+                                        target.span(),
+                                        "READRECORD target must be a CHARS location",
+                                    ));
+                                }
+                                has_target = true;
+                                None
+                            }
+                            _ => {
+                                return Err(Error::new(
+                                    span,
+                                    "READRECORD takes an access location and optional target",
+                                ));
+                            }
+                        }
                     }
-                    [access, target] => {
-                        access_arg(self, access)?;
-                        let Expr::Name { .. } = target else {
+                }
+                AssociationOp::WriteRecord => {
+                    if args.len() != 2 && args.len() != 3 {
+                        return Err(Error::new(
+                            span,
+                            "WRITERECORD takes an access, an optional index, and a value",
+                        ));
+                    }
+                    let access = access_type(self, &args[0])?;
+                    let value = if args.len() == 3 {
+                        if !access.indexed {
                             return Err(Error::new(
-                                target.span(),
-                                "READRECORD target must be a CHARS location",
-                            ));
-                        };
-                        let target_ty = self.check_expr(target)?;
-                        if !is_string_type(target_ty) {
-                            return Err(Error::new(
-                                target.span(),
-                                "READRECORD target must be a CHARS location",
+                                span,
+                                "WRITERECORD index requires an indexed ACCESS mode",
                             ));
                         }
-                        None
-                    }
-                    _ => {
-                        return Err(Error::new(
-                            span,
-                            "READRECORD takes an access location and optional target",
-                        ))
-                    }
-                },
-                AssociationOp::WriteRecord => {
-                    let [access, value] = args else {
-                        return Err(Error::new(
-                            span,
-                            "WRITERECORD takes an access location and a value",
-                        ));
+                        let index_ty = self.check_expr(&args[1])?;
+                        if !index_ty.is_int() {
+                            return Err(Error::new(
+                                args[1].span(),
+                                "WRITERECORD index must be an integer",
+                            ));
+                        }
+                        has_index = true;
+                        &args[2]
+                    } else {
+                        &args[1]
                     };
-                    access_arg(self, access)?;
                     let value_ty = self.check_expr(value)?;
                     if !is_string_type(value_ty) {
                         return Err(Error::new(value.span(), "WRITERECORD value must be CHARS"));
@@ -2159,8 +2280,14 @@ impl Checker {
                     None
                 }
             };
-            self.resolutions
-                .insert(span, ApplyResolution::Association(op));
+            self.resolutions.insert(
+                span,
+                ApplyResolution::Association {
+                    op,
+                    index: has_index,
+                    target: has_target,
+                },
+            );
             return Ok(result);
         }
         if let Some(kind) = match name {
@@ -2645,7 +2772,7 @@ impl Checker {
             Type::BoundedString { .. } => is_string_type(value),
             Type::Struct(id) => value == Type::Struct(id),
             Type::Association => value == Type::Association,
-            Type::Access => value == Type::Access,
+            Type::Access(access) => value == Type::Access(access),
             Type::Array(array) => match value {
                 Type::Array(value_array) => value_array == array,
                 Type::DynamicArray { low, element } => low == array.low && element == array.element,

@@ -261,12 +261,15 @@ enum Value {
 struct AssociationState {
     path: String,
     existing: bool,
+    indexable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AccessState {
     association: Option<Rc<RefCell<AssociationState>>>,
-    position: usize,
+    indexed: bool,
+    index_range: Option<types::ArrayDimension>,
+    position: i128,
 }
 
 struct Var {
@@ -992,11 +995,13 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn exec_association(
         &mut self,
         op: crate::builtins::AssociationOp,
         first: &str,
         second: Option<&str>,
+        index: Option<&ir::Node>,
         value: Option<&ir::Node>,
         ty: Option<Type>,
         span: Span,
@@ -1030,6 +1035,7 @@ impl<'a> Interpreter<'a> {
                 var.value = Value::Association(Some(Rc::new(RefCell::new(AssociationState {
                     path,
                     existing,
+                    indexable: false,
                 }))));
                 Ok(Value::Undefined)
             }
@@ -1055,12 +1061,16 @@ impl<'a> Interpreter<'a> {
                     AssociationOp::Existing => state.existing,
                     AssociationOp::Readable => state.existing,
                     AssociationOp::Writeable => state.existing,
-                    AssociationOp::Indexable => false,
+                    AssociationOp::Indexable => state.indexable,
                     AssociationOp::Sequencible => true,
                     AssociationOp::Variable => false,
                     _ => unreachable!(),
                 };
                 Ok(Value::Bool(value))
+            }
+            AssociationOp::Modify => {
+                let _ = self.association_state(first, span)?;
+                Ok(Value::Undefined)
             }
             AssociationOp::Dissociate => {
                 let cell = self
@@ -1116,10 +1126,21 @@ impl<'a> Interpreter<'a> {
                     return Err(Error::new(span, "CONNECT requires an association"));
                 };
                 let association = self.association_state(second, span)?;
+                let position = match index {
+                    Some(index) => {
+                        let value = self.eval_ir(index)?;
+                        let (value, _) = self.expect_int(value, index.span())?;
+                        value
+                    }
+                    None => 0,
+                };
                 let cell = self
                     .find_var_cell(first)
                     .ok_or_else(|| Error::new(span, format!("unknown variable `{first}`")))?;
                 let mut var = cell.borrow_mut();
+                let Type::Access(access) = var.ty else {
+                    return Err(Error::new(span, "expected an ACCESS location"));
+                };
                 match &var.value {
                     Value::Access(None) => {}
                     Value::Access(Some(_)) => {
@@ -1131,9 +1152,13 @@ impl<'a> Interpreter<'a> {
                     }
                     _ => return Err(Error::new(span, "expected an ACCESS location")),
                 }
+                check_index_range(access.index, position, span)?;
+                association.borrow_mut().indexable = access.indexed;
                 var.value = Value::Access(Some(Rc::new(RefCell::new(AccessState {
                     association: Some(association),
-                    position: 0,
+                    indexed: access.indexed,
+                    index_range: access.index,
+                    position,
                 }))));
                 Ok(Value::Undefined)
             }
@@ -1156,7 +1181,7 @@ impl<'a> Interpreter<'a> {
             }
             AssociationOp::ReadRecord => {
                 let access = self.access_state(first, span)?;
-                let (association, position) = {
+                let (association, indexed, range, current) = {
                     let access = access.borrow();
                     let Some(association) = access.association.clone() else {
                         return Err(Error::exception(
@@ -1165,17 +1190,41 @@ impl<'a> Interpreter<'a> {
                             "NOTCONNECTED: access location is not connected",
                         ));
                     };
-                    (association, access.position)
+                    (
+                        association,
+                        access.indexed,
+                        access.index_range,
+                        access.position,
+                    )
                 };
+                let position = match index {
+                    Some(index) => {
+                        let value = self.eval_ir(index)?;
+                        let (value, _) = self.expect_int(value, index.span())?;
+                        check_index_range(range, value, span)?;
+                        value
+                    }
+                    None => current,
+                };
+                if indexed {
+                    check_index_range(range, position, span)?;
+                }
+                if position < 0 {
+                    return Err(Error::exception(
+                        "RANGEFAIL",
+                        span,
+                        "RANGEFAIL: negative record index",
+                    ));
+                }
                 let path = association.borrow().path.clone();
                 let contents = std::fs::read_to_string(&path).map_err(|error| {
                     Error::exception("READFAIL", span, format!("READFAIL: {error}"))
                 })?;
                 let lines: Vec<&str> = contents.lines().collect();
-                let Some(record) = lines.get(position) else {
+                let Some(record) = lines.get(position as usize) else {
                     return Err(Error::exception("READFAIL", span, "READFAIL: end of file"));
                 };
-                access.borrow_mut().position += 1;
+                access.borrow_mut().position = position + 1;
                 let record = Value::String((*record).to_owned());
                 if let Some(target) = second {
                     self.assign_var(target, record, span)?;
@@ -1194,7 +1243,7 @@ impl<'a> Interpreter<'a> {
                     return Err(Error::new(span, "WRITERECORD value must be CHARS"));
                 };
                 let access = self.access_state(first, span)?;
-                let association = {
+                let (association, indexed, range, current) = {
                     let access = access.borrow();
                     let Some(association) = access.association.clone() else {
                         return Err(Error::exception(
@@ -1203,20 +1252,48 @@ impl<'a> Interpreter<'a> {
                             "NOTCONNECTED: access location is not connected",
                         ));
                     };
-                    association
+                    (
+                        association,
+                        access.indexed,
+                        access.index_range,
+                        access.position,
+                    )
                 };
                 let path = association.borrow().path.clone();
-                use std::io::Write as _;
-                let mut file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .map_err(|error| {
+                if indexed || index.is_some() {
+                    let position = match index {
+                        Some(index) => {
+                            let value = self.eval_ir(index)?;
+                            let (value, _) = self.expect_int(value, index.span())?;
+                            value
+                        }
+                        None => current,
+                    };
+                    check_index_range(range, position, span)?;
+                    if position < 0 {
+                        return Err(Error::exception(
+                            "RANGEFAIL",
+                            span,
+                            "RANGEFAIL: negative record index",
+                        ));
+                    }
+                    write_line_at(&path, position as usize, &record).map_err(|error| {
                         Error::exception("WRITEFAIL", span, format!("WRITEFAIL: {error}"))
                     })?;
-                writeln!(file, "{record}").map_err(|error| {
-                    Error::exception("WRITEFAIL", span, format!("WRITEFAIL: {error}"))
-                })?;
+                    access.borrow_mut().position = position + 1;
+                } else {
+                    use std::io::Write as _;
+                    let mut file = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)
+                        .map_err(|error| {
+                            Error::exception("WRITEFAIL", span, format!("WRITEFAIL: {error}"))
+                        })?;
+                    writeln!(file, "{record}").map_err(|error| {
+                        Error::exception("WRITEFAIL", span, format!("WRITEFAIL: {error}"))
+                    })?;
+                }
                 Ok(Value::Undefined)
             }
         }
@@ -1959,10 +2036,19 @@ impl<'a> Interpreter<'a> {
                 op,
                 first,
                 second,
+                index,
                 value,
                 ty,
                 span,
-            } => self.exec_association(*op, first, second.as_deref(), value.as_ref(), *ty, *span),
+            } => self.exec_association(
+                *op,
+                first,
+                second.as_deref(),
+                index.as_ref(),
+                value.as_ref(),
+                *ty,
+                *span,
+            ),
             ir::Expr::LabelledArrayLiteral { entries, array, .. } => {
                 let element = array.element.ty();
                 let mut values =
@@ -2515,7 +2601,7 @@ impl<'a> Interpreter<'a> {
                 Value::Association(_) => Ok(value),
                 _ => Err(Error::new(span, "expected an ASSOCIATION value")),
             },
-            Type::Access => match value {
+            Type::Access(_) => match value {
                 Value::Access(_) => Ok(value),
                 _ => Err(Error::new(span, "expected an ACCESS value")),
             },
@@ -2526,7 +2612,15 @@ impl<'a> Interpreter<'a> {
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
         if mode.access {
-            return Ok(Type::Access);
+            return Ok(Type::Access(crate::types::AccessType {
+                indexed: mode.access_indexed,
+                index: mode
+                    .access_index
+                    .map(|bounds| crate::types::ArrayDimension {
+                        low: bounds.low,
+                        high: bounds.high,
+                    }),
+            }));
         }
         if !mode.arrays.is_empty() {
             let element_mode = ModeRef {
@@ -2535,6 +2629,8 @@ impl<'a> Interpreter<'a> {
                 string_length: mode.string_length,
                 varying: mode.varying,
                 access: mode.access,
+                access_indexed: mode.access_indexed,
+                access_index: mode.access_index,
                 span: mode.span,
             };
             let base = self.resolve_mode(&element_mode)?;
@@ -3208,6 +3304,36 @@ fn resolve_mode_with(mode: &ModeRef, mode_names: &HashMap<String, Type>) -> Resu
     })
 }
 
+fn check_index_range(
+    range: Option<types::ArrayDimension>,
+    index: i128,
+    span: Span,
+) -> Result<(), Error> {
+    let Some(range) = range else {
+        return Ok(());
+    };
+    if index < range.low || index > range.high {
+        return Err(Error::exception(
+            "RANGEFAIL",
+            span,
+            format!("RANGEFAIL: record index `{index}` is out of range"),
+        ));
+    }
+    Ok(())
+}
+
+fn write_line_at(path: &str, index: usize, record: &str) -> std::io::Result<()> {
+    let contents = std::fs::read_to_string(path).unwrap_or_default();
+    let mut lines: Vec<String> = contents.lines().map(str::to_owned).collect();
+    while lines.len() <= index {
+        lines.push(String::new());
+    }
+    lines[index] = record.to_owned();
+    let mut text = lines.join("\n");
+    text.push('\n');
+    std::fs::write(path, text)
+}
+
 fn textfail(span: Span, message: &str) -> Error {
     Error::exception("TEXTFAIL", span, format!("TEXTFAIL: {message}"))
 }
@@ -3675,7 +3801,7 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
             }
         }
         Type::Association => Value::Association(None),
-        Type::Access => Value::Access(None),
+        Type::Access(_) => Value::Access(None),
         Type::MultiArray(array) => {
             let element = array.element.ty();
             let value = if matches!(element, Type::Struct(_)) {

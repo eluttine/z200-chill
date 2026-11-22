@@ -866,12 +866,37 @@ impl<'a> Parser<'a> {
         if self.at_keyword(Keyword::Access) {
             let start = self.current_span();
             self.advance();
+            let mut access_indexed = false;
+            let mut access_index = None;
             if self.at_lparen() {
-                return Err(Error::coded(
-                    "E0205",
-                    start,
-                    "ACCESS index modes are not implemented yet",
-                ));
+                self.advance();
+                access_indexed = true;
+                if matches!(
+                    self.kind(),
+                    Some(TokenKind::Integer { .. } | TokenKind::Minus)
+                ) {
+                    let low = self.parse_mode_integer()?;
+                    self.expect_colon()?;
+                    let high = self.parse_mode_integer()?;
+                    if low > high {
+                        return Err(Error::coded(
+                            "E0205",
+                            start,
+                            "ACCESS index range lower bound exceeds upper bound",
+                        ));
+                    }
+                    access_index = Some(ArrayBounds { low, high });
+                } else {
+                    let (name, span) = self.expect_identifier()?;
+                    if !matches!(name.as_str(), "INT" | "SHORT_INT" | "LONG_INT") {
+                        return Err(Error::coded(
+                            "E0205",
+                            span,
+                            "ACCESS index mode must be an integer mode or literal range",
+                        ));
+                    }
+                }
+                self.expect_rparen()?;
             }
             let record = self.parse_mode_ref()?;
             if record.name != "CHARS" || !record.arrays.is_empty() {
@@ -887,6 +912,8 @@ impl<'a> Parser<'a> {
                 string_length: None,
                 varying: false,
                 access: true,
+                access_indexed,
+                access_index,
                 span: Span::new(self.source, start.start, record.span.end),
             });
         }
@@ -938,6 +965,8 @@ impl<'a> Parser<'a> {
                 string_length: element.string_length,
                 varying: element.varying,
                 access: false,
+                access_indexed: false,
+                access_index: None,
                 span: Span::new(self.source, start.start, element.span.end),
             });
         }
@@ -978,6 +1007,8 @@ impl<'a> Parser<'a> {
                 string_length: length,
                 varying,
                 access: false,
+                access_indexed: false,
+                access_index: None,
                 span,
             });
         }
@@ -988,6 +1019,8 @@ impl<'a> Parser<'a> {
             string_length: None,
             varying: false,
             access: false,
+            access_indexed: false,
+            access_index: None,
             span,
         })
     }

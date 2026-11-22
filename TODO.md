@@ -120,7 +120,9 @@ all existing tests pass with no new special cases.
 - [x] Floating-point mode `FLOAT`, literals, arithmetic/comparisons, `FLOAT(...)`
       conversion, float arrays, fractional/exponent format widths, and `%F`.
 - [x] I/O control format clauses (`%/`, `%+`, `%-`, `%?`, `%!`, `%=`).
-- [ ] Association `MODIFY` and indexed access.
+- [x] Association `MODIFY` (no parameters) and indexed `ACCESS (range) CHARS`,
+      indexed `CONNECT`/`READRECORD`/`WRITERECORD`, record-range checks, and
+      `INDEXABLE` reporting.
 - [ ] Processes, signals, and timers.
 - [ ] Sets/powersets, moreta modes, templates.
 

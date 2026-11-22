@@ -135,6 +135,7 @@ pub enum Expr {
         op: crate::builtins::AssociationOp,
         first: String,
         second: Option<String>,
+        index: Option<Node>,
         value: Option<Node>,
         ty: Option<Type>,
         span: Span,
@@ -886,7 +887,7 @@ impl Lowerer<'_> {
                         span,
                     })
                 }
-                Some(ApplyResolution::Association(op)) => {
+                Some(ApplyResolution::Association { op, index, target }) => {
                     use crate::builtins::AssociationOp;
                     let AstExpr::Name { name: first, .. } = &ast_args[0] else {
                         return Err(Error::new(
@@ -896,34 +897,47 @@ impl Lowerer<'_> {
                     };
                     let mut lowered = args.into_iter();
                     let _first = lowered.next();
-                    let (second, value) = match op {
-                        AssociationOp::Associate | AssociationOp::WriteRecord => {
-                            (None, lowered.next())
+                    let rest: Vec<Node> = lowered.collect();
+                    let target_name = |position: usize| -> Result<String, Error> {
+                        let AstExpr::Name { name, .. } = &ast_args[position] else {
+                            return Err(Error::new(
+                                ast_args[position].span(),
+                                "internal: association argument is not a location",
+                            ));
+                        };
+                        Ok(name.clone())
+                    };
+                    let (second, index_node, value) = match op {
+                        AssociationOp::Associate => (None, None, rest.first().cloned()),
+                        AssociationOp::Connect => (
+                            Some(target_name(1)?),
+                            if *index { rest.get(1).cloned() } else { None },
+                            None,
+                        ),
+                        AssociationOp::ReadRecord => {
+                            let target_position = if *index { 2 } else { 1 };
+                            (
+                                if *target {
+                                    Some(target_name(target_position)?)
+                                } else {
+                                    None
+                                },
+                                if *index { rest.first().cloned() } else { None },
+                                None,
+                            )
                         }
-                        AssociationOp::Connect => {
-                            let AstExpr::Name { name, .. } = &ast_args[1] else {
-                                return Err(Error::new(
-                                    ast_args[1].span(),
-                                    "internal: association argument is not a location",
-                                ));
-                            };
-                            (Some(name.clone()), None)
-                        }
-                        AssociationOp::ReadRecord if ast_args.len() == 2 => {
-                            let AstExpr::Name { name, .. } = &ast_args[1] else {
-                                return Err(Error::new(
-                                    ast_args[1].span(),
-                                    "internal: record target is not a location",
-                                ));
-                            };
-                            (Some(name.clone()), None)
-                        }
-                        _ => (None, None),
+                        AssociationOp::WriteRecord => (
+                            None,
+                            if *index { rest.first().cloned() } else { None },
+                            rest.last().cloned(),
+                        ),
+                        _ => (None, None, None),
                     };
                     Rc::new(Expr::Association {
                         op: *op,
                         first: first.clone(),
                         second,
+                        index: index_node,
                         value,
                         ty,
                         span,

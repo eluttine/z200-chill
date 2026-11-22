@@ -322,7 +322,44 @@ fn parse_external_type(
         };
     }
     if name == "ACCESS CHARS" {
-        return Ok(program::ExternalType::Builtin(Type::Access));
+        return Ok(program::ExternalType::Builtin(Type::Access(
+            types::AccessType {
+                indexed: false,
+                index: None,
+            },
+        )));
+    }
+    if let Some(rest) = name.strip_prefix("ACCESS(") {
+        let (index, suffix) = rest
+            .split_once(')')
+            .ok_or_else(|| format!("invalid access mode `{name}` in grant file"))?;
+        if suffix.trim() != "CHARS" {
+            return Err(format!("invalid access record mode in `{name}`"));
+        }
+        let index = index.trim();
+        let access = if index == "INT" || index == "SHORT_INT" || index == "LONG_INT" {
+            types::AccessType {
+                indexed: true,
+                index: None,
+            }
+        } else {
+            let (low, high) = index
+                .split_once(':')
+                .ok_or_else(|| format!("invalid access index mode in `{name}`"))?;
+            let low = low
+                .trim()
+                .parse::<i128>()
+                .map_err(|_| format!("invalid access index lower bound in `{name}`"))?;
+            let high = high
+                .trim()
+                .parse::<i128>()
+                .map_err(|_| format!("invalid access index upper bound in `{name}`"))?;
+            types::AccessType {
+                indexed: true,
+                index: Some(types::ArrayDimension { low, high }),
+            }
+        };
+        return Ok(program::ExternalType::Builtin(Type::Access(access)));
     }
     if let Some(rest) = name.strip_prefix("CHARS(") {
         let (length, suffix) = rest
@@ -410,7 +447,15 @@ fn type_name(ty: Type) -> String {
             format!("ARRAY({bounds}) {}", type_name(array.element.ty()))
         }
         Type::Association => "ASSOCIATION".to_owned(),
-        Type::Access => "ACCESS CHARS".to_owned(),
+        Type::Access(access) => {
+            if !access.indexed {
+                "ACCESS CHARS".to_owned()
+            } else if let Some(index) = access.index {
+                format!("ACCESS({}:{}) CHARS", index.low, index.high)
+            } else {
+                "ACCESS(INT) CHARS".to_owned()
+            }
+        }
         Type::ArrayTuple | Type::DynamicArray { .. } => "ARRAY".to_owned(),
     }
 }
@@ -682,6 +727,31 @@ END M;
                 ))),
             }
         );
+    }
+
+    #[test]
+    fn access_types_round_trip() {
+        for access in [
+            types::AccessType {
+                indexed: false,
+                index: None,
+            },
+            types::AccessType {
+                indexed: true,
+                index: None,
+            },
+            types::AccessType {
+                indexed: true,
+                index: Some(types::ArrayDimension { low: 0, high: 3 }),
+            },
+        ] {
+            let ty = Type::Access(access);
+            let text = type_name(ty);
+            assert_eq!(
+                parse_external_type(&text, &std::collections::HashMap::new()).unwrap(),
+                program::ExternalType::Builtin(ty)
+            );
+        }
     }
 
     #[test]
