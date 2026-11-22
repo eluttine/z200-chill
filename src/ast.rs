@@ -425,6 +425,7 @@ pub enum Action {
         span: Span,
     },
     ReceiveCase {
+        set: Option<Expr>,
         alternatives: Vec<ReceiveAlternative>,
         else_actions: Option<Vec<Action>>,
         span: Span,

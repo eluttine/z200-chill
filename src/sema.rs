@@ -2177,10 +2177,25 @@ impl Checker {
                 Ok(())
             }
             Action::ReceiveCase {
+                set,
                 alternatives,
                 else_actions,
                 span,
             } => {
+                if let Some(set) = set {
+                    let ty = self.location_type(set)?;
+                    self.types.insert(set.span(), ty);
+                    if ty != Type::Instance {
+                        return Err(Error::coded(
+                            "E0404",
+                            set.span(),
+                            format!(
+                                "RECEIVE CASE SET requires an INSTANCE location, found {}",
+                                ty.describe()
+                            ),
+                        ));
+                    }
+                }
                 for alternative in alternatives {
                     let modes = if let Some(modes) = self.lookup_signal(&alternative.signal) {
                         modes
@@ -3036,6 +3051,7 @@ impl Checker {
                             | Type::Struct(_)
                             | Type::Set(_)
                             | Type::Float
+                            | Type::Instance
                     ))
                     || strings_compatible(left, right)
                     || bits_compatible(left, right)

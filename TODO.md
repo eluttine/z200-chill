@@ -190,9 +190,11 @@ deferred.
       buffer elements.
 - [x] `INSTANCE` values, `THIS`, `START` as an expression, and targeted
       `SEND ... TO instance` delivery with pending targeted signals.
-- [ ] Absolute/cyclic timing actions, receive `SET` instance locations, signal
-      `TO process-name` restrictions, buffer priorities, region/task object modes,
-      process handlers, and process `LOC`/`OUT`/`INOUT` parameters.
+- [x] `RECEIVE CASE SET instance;` for signal and buffer receives, carrying sender
+      instance values through queued and direct handoffs.
+- [ ] Absolute/cyclic timing actions, signal `TO process-name` restrictions, buffer
+      priorities, region/task object modes, process handlers, and process
+      `LOC`/`OUT`/`INOUT` parameters.
 
 ## 8. Cleanup
 

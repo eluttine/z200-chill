@@ -14,6 +14,8 @@
 - `INSTANCE` values, `THIS`, and `START process(args)` as an expression.
 - Targeted signals are delivered only to the indicated process; if it is not yet
   waiting, the targeted signal remains pending for that process.
+- `RECEIVE CASE SET instance-location;` stores the sending process instance before
+  entering the receive branch, for both signal and buffer receives.
 - `BUFFER [(length)] element-mode` synchronization modes.
 - `SEND buffer(value);` and `(buffer IN name)` receive alternatives.
 - Buffer capacity limits park sending processes until space is available.
@@ -51,8 +53,7 @@
 
 - `AT` absolute timing actions and `CYCLE` periodic timing actions.
 - timeout supervision for region calls.
-- `RECEIVE CASE SET` instance locations and process-name restrictions declared by
-  `SIGNAL ... TO process-name`.
+- process-name restrictions declared by `SIGNAL ... TO process-name`.
 - signal priorities.
 - buffer send/receive priorities (buffer values currently use FIFO/priority 0).
 - buffer element modes beyond scalar grant encoding.

@@ -544,9 +544,19 @@ struct ReceiverSignal {
 enum ProcessInput {
     None,
     Timeout,
-    Delay { event: usize },
-    Signal { name: String, values: Vec<Value> },
-    Buffer { name: String, values: Vec<Value> },
+    Delay {
+        event: usize,
+    },
+    Signal {
+        name: String,
+        values: Vec<Value>,
+        sender: usize,
+    },
+    Buffer {
+        name: String,
+        values: Vec<Value>,
+        sender: usize,
+    },
 }
 
 type ProcessCoroutine = Coroutine<ProcessInput, ProcessYield, Result<(), Error>, DefaultStack>;
@@ -561,11 +571,13 @@ struct EventWaiter {
 
 struct SignalMessage {
     target: Option<usize>,
+    sender: usize,
     values: Vec<Value>,
 }
 
 struct BufferMessage {
     priority: i128,
+    sender: usize,
     values: Vec<Value>,
 }
 
@@ -1814,6 +1826,7 @@ impl<'a> Interpreter<'a> {
                                 input: ProcessInput::Buffer {
                                     name: signal.clone(),
                                     values: vec![value],
+                                    sender: self.process_id,
                                 },
                                 entry,
                             });
@@ -1840,6 +1853,7 @@ impl<'a> Interpreter<'a> {
                                     .messages
                                     .push_back(BufferMessage {
                                         priority: 0,
+                                        sender: self.process_id,
                                         values: vec![value],
                                     });
                             }
@@ -1908,6 +1922,7 @@ impl<'a> Interpreter<'a> {
                             input: ProcessInput::Signal {
                                 name: signal.clone(),
                                 values: lowered,
+                                sender: self.process_id,
                             },
                             entry,
                         });
@@ -1918,11 +1933,13 @@ impl<'a> Interpreter<'a> {
                             .or_default()
                             .push_back(SignalMessage {
                                 target,
+                                sender: self.process_id,
                                 values: lowered,
                             });
                     }
                 }
                 ir::Stmt::ReceiveCase {
+                    set,
                     alternatives,
                     else_actions,
                     span,
@@ -1937,14 +1954,20 @@ impl<'a> Interpreter<'a> {
                                         || message.target == Some(self.process_id)
                                 }) {
                                     let message = queue.remove(index).expect("signal message");
-                                    pending = Some((alternative.signal.clone(), message.values));
+                                    pending = Some((
+                                        alternative.signal.clone(),
+                                        message.values,
+                                        message.sender,
+                                    ));
                                     break;
                                 }
                             }
                         }
                         if let Ok((key, _, _)) = self.buffer_location(&alternative.signal, *span) {
-                            if let Some(values) = self.take_buffer_value(&alternative.signal, key) {
-                                pending = Some((alternative.signal.clone(), values));
+                            if let Some((values, sender)) =
+                                self.take_buffer_value(&alternative.signal, key)
+                            {
+                                pending = Some((alternative.signal.clone(), values, sender));
                                 break;
                             }
                         }
@@ -1966,8 +1989,16 @@ impl<'a> Interpreter<'a> {
                             }
                         }
                         match cooperative_receive(signals, buffers, self.deadline)? {
-                            ProcessInput::Signal { name, values }
-                            | ProcessInput::Buffer { name, values } => (name, values),
+                            ProcessInput::Signal {
+                                name,
+                                values,
+                                sender,
+                            }
+                            | ProcessInput::Buffer {
+                                name,
+                                values,
+                                sender,
+                            } => (name, values, sender),
                             ProcessInput::Timeout => return Ok(Flow::Timeout),
                             ProcessInput::Delay { .. } | ProcessInput::None => {
                                 return Err(Error::coded(
@@ -1978,6 +2009,9 @@ impl<'a> Interpreter<'a> {
                             }
                         }
                     };
+                    if let Some(set) = set {
+                        self.assign_target(set, Value::Instance(received.2), *span)?;
+                    }
                     let alternative = alternatives
                         .iter()
                         .find(|alternative| alternative.signal == received.0)
@@ -4324,6 +4358,7 @@ impl<'a> Interpreter<'a> {
             (Value::String(left), Value::String(right)) => Ok(left == right),
             (Value::Bits(left), Value::Bits(right)) => Ok(left == right),
             (Value::Ref(left), Value::Ref(right)) => Ok(left == right),
+            (Value::Instance(left), Value::Instance(right)) => Ok(left == right),
             (Value::PowerSet(left), Value::PowerSet(right)) => Ok(left == right),
             (Value::Set(left), Value::Set(right)) => Ok(left == right),
             (
@@ -5100,7 +5135,7 @@ impl<'a> Interpreter<'a> {
         Ok((Rc::as_ptr(&cell) as usize, length, element.ty()))
     }
 
-    fn take_buffer_value(&mut self, name: &str, key: usize) -> Option<Vec<Value>> {
+    fn take_buffer_value(&mut self, name: &str, key: usize) -> Option<(Vec<Value>, usize)> {
         let mut scheduler = self.scheduler.borrow_mut();
         let state = scheduler.buffers.get_mut(&key)?;
         let message_index = state
@@ -5109,7 +5144,7 @@ impl<'a> Interpreter<'a> {
             .enumerate()
             .max_by_key(|(_, message)| message.priority)
             .map(|(index, _)| index);
-        let (received, sender_entry) = if let Some(index) = message_index {
+        let (received, sender, sender_entry) = if let Some(index) = message_index {
             let message = state.messages.remove(index)?;
             let mut sender_entry = None;
             if let Some(sender_index) = state
@@ -5125,12 +5160,13 @@ impl<'a> Interpreter<'a> {
                 if let Some(entry) = entry {
                     state.messages.push_back(BufferMessage {
                         priority: sender.priority,
+                        sender: sender.id,
                         values: sender.values,
                     });
                     sender_entry = Some(entry);
                 }
             }
-            (message.values, sender_entry)
+            (message.values, message.sender, sender_entry)
         } else {
             let sender_index = state
                 .senders
@@ -5141,7 +5177,7 @@ impl<'a> Interpreter<'a> {
             let sender = state.senders.remove(sender_index);
             let slot = Rc::clone(&sender.slot);
             let entry = slot.borrow_mut().take()?;
-            (sender.values, Some(entry))
+            (sender.values, sender.id, Some(entry))
         };
         if let Some(entry) = sender_entry {
             scheduler.ready.push_back(Runnable {
@@ -5150,7 +5186,7 @@ impl<'a> Interpreter<'a> {
             });
         }
         let _ = name;
-        Some(received)
+        Some((received, sender))
     }
 
     fn event_location(&self, name: &str, span: Span) -> Result<(usize, Option<usize>), Error> {

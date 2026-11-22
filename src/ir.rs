@@ -370,6 +370,7 @@ pub enum Stmt {
         span: Span,
     },
     ReceiveCase {
+        set: Option<AssignTarget>,
         alternatives: Vec<ReceiveAlternativeIr>,
         else_actions: Option<Vec<Stmt>>,
         span: Span,
@@ -763,10 +764,12 @@ impl Lowerer<'_> {
                 span: *span,
             }),
             Action::ReceiveCase {
+                set,
                 alternatives,
                 else_actions,
                 span,
             } => Ok(Stmt::ReceiveCase {
+                set: set.as_ref().map(|set| self.lower_target(set)).transpose()?,
                 alternatives: alternatives
                     .iter()
                     .map(|alternative| {

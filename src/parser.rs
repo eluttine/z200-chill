@@ -2024,12 +2024,14 @@ impl<'a> Parser<'a> {
         let start = self.current_span();
         self.expect_keyword(Keyword::Receive)?;
         self.expect_keyword(Keyword::Case)?;
-        if self.at_keyword(Keyword::Set) {
-            return Err(self.error_here_code(
-                "E0205",
-                "RECEIVE CASE SET instance locations are not implemented yet",
-            ));
-        }
+        let set = if self.at_keyword(Keyword::Set) {
+            self.advance();
+            let target = self.parse_expr()?;
+            self.expect_semicolon()?;
+            Some(target)
+        } else {
+            None
+        };
         let mut alternatives = Vec::new();
         while self.at_lparen() {
             let alt_start = self.current_span();
@@ -2084,6 +2086,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(Keyword::Esac)?;
         let end = self.expect_semicolon()?;
         Ok(Action::ReceiveCase {
+            set,
             alternatives,
             else_actions,
             span: Span::new(self.source, start.start, end.end),
