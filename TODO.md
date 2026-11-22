@@ -176,8 +176,12 @@ deferred.
       `DELAYFAIL`, and delayed-process deadlock detection.
 - [x] `SIGNAL` declarations, `SEND`, `RECEIVE CASE`, pending signal queues, parked
       receivers, receive bindings, and `ELSE` receive alternatives.
+- [x] Region-call mutual exclusion for procedures defined inside `REGION` units,
+      including queued callers and per-process reentrancy.
+- [x] Fixed control-flow continuation so actions after `IF`, `DO`, `CASE`, `BEGIN`,
+      labelled actions, and handled actions are executed.
 - [ ] Timer-based delays/timeouts, `DELAY CASE`, signal `TO` targeting, receive `SET`
-      instance locations, buffer modes, region mutual exclusion, process
+      instance locations, buffer modes, region/task object modes, process
       handlers/instances, and process `LOC`/`OUT`/`INOUT` parameters.
 
 ## 8. Cleanup

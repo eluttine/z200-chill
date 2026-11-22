@@ -15,6 +15,10 @@
 - Pending signals are queued; waiting receivers are parked on every alternative and
   woken when a matching signal arrives.
 - Signal values are copied into the receive names before the branch executes.
+- Region mutual exclusion: calls to procedures defined inside a `REGION` acquire a
+  per-region lock. A second process attempting a region call is queued until the
+  current owner releases the region.
+- Region locks are reentrant for the owning process and queued calls resume FIFO.
 - Events wake the highest-priority delayed process; equal priorities use FIFO order.
 - Event lengths are enforced and raise `DELAYFAIL`.
 - A scheduler run with only delayed processes reports a deadlock.
@@ -38,7 +42,8 @@
 - `RECEIVE CASE SET` instance locations.
 - signal priorities.
 - buffer modes and buffer send/receive.
-- region/task mutual exclusion and critical procedures.
+- region locations (region object modes), task modes, and critical procedures on
+  region objects.
 - process handlers and full exception termination semantics.
 - process instance values and `THIS`.
 - `LOC` and `OUT`/`INOUT` process parameters.

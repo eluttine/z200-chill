@@ -169,7 +169,9 @@ processes, yielding at action boundaries:
 
 - regions do not implement mutual exclusion or waiting queues;
 - `PROCESS`, `START`, and `STOP` are executed cooperatively;
-- signals, events, `DELAY`, timers, and region mutual exclusion are not yet executed
+- events, `DELAY`, `CONTINUE`, signals, and region-call mutual exclusion are
+  executed by the cooperative scheduler;
+- timers, delay cases, buffers, and region object/task modes are not yet executed
   faithfully;
 - no resumable continuation or scheduler is required for the first release.
 

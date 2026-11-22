@@ -41,8 +41,8 @@ Current scope includes:
   `RESULT`/`RETURN`);
 - modules, nested modulions, `GRANT`/`SEIZE`, specs, contexts, regions, remote pieces;
 - `PROCESS` definitions, `START`, `STOP`, `EVENT`, `DELAY`, `CONTINUE`, `SIGNAL`,
-  `SEND`, `RECEIVE CASE`, and cooperative round-robin process scheduling at action
-  boundaries;
+  `SEND`, `RECEIVE CASE`, region-call mutual exclusion, and cooperative round-robin
+  process scheduling at action boundaries;
 - arrays including slices, multidimensional arrays, literals, and arrays of structures;
 - `REF`/`PTR`/`ROW` modes, `NULL`, `ALLOCATE`/`GETSTACK`/`TERMINATE`, and
   dereferencing;
@@ -55,7 +55,8 @@ Explicitly **deferred**:
 
 - timer-based `DELAY`/timeouts, delay cases, signal `TO` targeting, receive `SET`
   instance locations, buffer modes, process instances/`THIS`, process handlers,
-  process `LOC`/`OUT`/`INOUT` parameters, and region mutual exclusion;
+  process `LOC`/`OUT`/`INOUT` parameters, region object/task modes, and priority
+  scheduling;
 - general reference targets beyond simple variables and whole allocated locations;
 - constructors/destructors, `SELF`, task/region object modes, and the rest of moreta;
 - generic region/process templates;

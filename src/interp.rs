@@ -203,6 +203,15 @@ pub fn run_checked(
         modules_by_span: collect_modules_by_span(&program),
         proc_defs: collect_proc_defs(&program),
         process_defs: collect_process_defs(&program),
+        regions: program
+            .modules
+            .iter()
+            .enumerate()
+            .filter(|(_, module)| module.kind.is_region())
+            .map(|(index, _)| index)
+            .collect(),
+        process_id: usize::MAX,
+        region_depths: HashMap::new(),
         scheduler: Rc::clone(&scheduler),
         moreta_decls,
         moreta_invariants,
@@ -264,6 +273,14 @@ pub fn run_checked(
                             .or_default()
                             .push((id, Rc::clone(&slot)));
                     }
+                }
+                ProcessYield::AcquireRegion { region } => {
+                    scheduler
+                        .borrow_mut()
+                        .region_waiters
+                        .entry(region)
+                        .or_default()
+                        .push(runnable.entry);
                 }
             },
             corosensei::CoroutineResult::Return(result) => {
@@ -397,6 +414,7 @@ enum ProcessYield {
     Tick,
     Delay { event: usize, priority: i128 },
     Receive { signals: Vec<ReceiverSignal> },
+    AcquireRegion { region: usize },
 }
 
 #[derive(Clone)]
@@ -431,6 +449,8 @@ struct ScheduleState {
     waiting: HashMap<usize, Vec<(i128, ProcessEntry)>>,
     signals: HashMap<String, VecDeque<Vec<Value>>>,
     receivers: HashMap<String, Vec<(usize, ReceiverSlot)>>,
+    region_owner: HashMap<usize, usize>,
+    region_waiters: HashMap<usize, Vec<ProcessEntry>>,
 }
 
 thread_local! {
@@ -462,6 +482,23 @@ fn cooperative_delay(event: usize, priority: i128) -> Result<(), Error> {
         }
         unsafe {
             let _: ProcessInput = (*ptr).suspend(ProcessYield::Delay { event, priority });
+        }
+        Ok(())
+    })
+}
+
+fn cooperative_acquire_region(region: usize) -> Result<(), Error> {
+    CURRENT_YIELDER.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            return Err(Error::coded(
+                "E0500",
+                Span::new(SourceId(0), 0, 0),
+                "region call outside a process",
+            ));
+        }
+        unsafe {
+            let _: ProcessInput = (*ptr).suspend(ProcessYield::AcquireRegion { region });
         }
         Ok(())
     })
@@ -542,6 +579,9 @@ struct Interpreter<'a> {
     /// Scopes for nested modules declared in a module body, keyed by span.
     nested_scopes: HashMap<Span, Scope<'a>>,
     process_defs: HashMap<Span, &'a ProcessDef>,
+    regions: HashSet<usize>,
+    process_id: usize,
+    region_depths: HashMap<usize, usize>,
     scheduler: Rc<RefCell<ScheduleState>>,
     exprs: ir::ExprTable,
     bodies: ir::BodyTable,
@@ -1368,8 +1408,15 @@ impl<'a> Interpreter<'a> {
                             ),
                         ));
                     }
+                    let id = {
+                        let mut scheduler = self.scheduler.borrow_mut();
+                        let id = scheduler.next_process_id;
+                        scheduler.next_process_id += 1;
+                        id
+                    };
                     let mut child =
                         self.fork_for_process(process_ref.module, process_ref.scope_key);
+                    child.process_id = id;
                     let yielder = Rc::new(Cell::new(std::ptr::null()));
                     let yielder_slot = Rc::clone(&yielder);
                     let def = process_ref.def;
@@ -1388,8 +1435,6 @@ impl<'a> Interpreter<'a> {
                         )
                     };
                     let mut scheduler = self.scheduler.borrow_mut();
-                    let id = scheduler.next_process_id;
-                    scheduler.next_process_id += 1;
                     scheduler.ready.push_back(Runnable {
                         input: ProcessInput::None,
                         entry: ProcessEntry {
@@ -1426,21 +1471,32 @@ impl<'a> Interpreter<'a> {
                     else_span,
                     ..
                 } => {
-                    for branch in branches {
-                        let condition = self.eval_ir(&branch.condition)?;
-                        if self.as_bool(condition, branch.condition.span())? {
-                            return self.exec_block(&branch.body, branch.span, frame);
+                    let flow = 'flow: {
+                        for branch in branches {
+                            let condition = self.eval_ir(&branch.condition)?;
+                            if self.as_bool(condition, branch.condition.span())? {
+                                break 'flow self.exec_block(&branch.body, branch.span, frame)?;
+                            }
                         }
-                    }
-                    if let (Some(actions), Some(span)) = (else_actions, else_span) {
-                        return self.exec_block(actions, *span, frame);
+                        if let (Some(actions), Some(span)) = (else_actions, else_span) {
+                            break 'flow self.exec_block(actions, *span, frame)?;
+                        }
+                        Flow::Normal
+                    };
+                    if !matches!(flow, Flow::Normal) {
+                        return Ok(flow);
                     }
                 }
                 ir::Stmt::Do {
                     control,
                     body,
                     span,
-                } => return self.exec_do(control, body, frame, *span),
+                } => {
+                    let flow = self.exec_do(control, body, frame, *span)?;
+                    if !matches!(flow, Flow::Normal) {
+                        return Ok(flow);
+                    }
+                }
                 ir::Stmt::Exit { label, .. } => return Ok(Flow::Exit(label.clone())),
                 ir::Stmt::Case {
                     selector,
@@ -1459,6 +1515,7 @@ impl<'a> Interpreter<'a> {
                             .any(|label| explicit_label_matches(*label, value))
                     });
 
+                    let mut matched = false;
                     for alternative in alternatives {
                         let matches = alternative.labels.iter().any(|label| match label {
                             CaseLabel::Else => !explicitly_labelled,
@@ -1466,17 +1523,30 @@ impl<'a> Interpreter<'a> {
                             other => explicit_label_matches(*other, value),
                         });
                         if matches {
-                            return self.exec_block(&alternative.body, alternative.span, frame);
+                            matched = true;
+                            let flow =
+                                self.exec_block(&alternative.body, alternative.span, frame)?;
+                            if !matches!(flow, Flow::Normal) {
+                                return Ok(flow);
+                            }
+                            break;
                         }
                     }
 
-                    if let (Some(actions), Some(span)) = (else_actions, else_span) {
-                        return self.exec_block(actions, *span, frame);
+                    if !matched {
+                        if let (Some(actions), Some(span)) = (else_actions, else_span) {
+                            let flow = self.exec_block(actions, *span, frame)?;
+                            if !matches!(flow, Flow::Normal) {
+                                return Ok(flow);
+                            }
+                        }
                     }
                 }
                 ir::Stmt::Labelled { label, action, .. } => {
-                    match self.exec_stmts(std::slice::from_ref(action.as_ref()), frame)? {
-                        Flow::Exit(Some(name)) if &name == label => return Ok(Flow::Normal),
+                    let flow = self.exec_stmts(std::slice::from_ref(action.as_ref()), frame)?;
+                    match flow {
+                        Flow::Exit(Some(name)) if &name == label => {}
+                        Flow::Normal => {}
                         flow => return Ok(flow),
                     }
                 }
@@ -1497,10 +1567,14 @@ impl<'a> Interpreter<'a> {
                         self.exec_with_handler(*span, actions, frame)
                     })();
                     self.locals.pop();
-                    return match result {
-                        Ok(Flow::Exit(None)) => Ok(Flow::Normal),
-                        other => other,
+                    let flow = match result {
+                        Ok(Flow::Exit(None)) => Flow::Normal,
+                        Ok(flow) => flow,
+                        Err(error) => return Err(error),
                     };
+                    if !matches!(flow, Flow::Normal) {
+                        return Ok(flow);
+                    }
                 }
                 ir::Stmt::Empty { .. } => {}
                 ir::Stmt::Cause { name, span } => {
@@ -1512,14 +1586,21 @@ impl<'a> Interpreter<'a> {
                     actions,
                     span,
                 } => {
-                    return self.exec_nested_module(label.as_deref(), declarations, actions, *span);
+                    let flow =
+                        self.exec_nested_module(label.as_deref(), declarations, actions, *span)?;
+                    if !matches!(flow, Flow::Normal) {
+                        return Ok(flow);
+                    }
                 }
                 ir::Stmt::Handled { action, span } => {
-                    return self.exec_with_handler(
+                    let flow = self.exec_with_handler(
                         *span,
                         std::slice::from_ref(action.as_ref()),
                         frame,
-                    );
+                    )?;
+                    if !matches!(flow, Flow::Normal) {
+                        return Ok(flow);
+                    }
                 }
             }
         }
@@ -3246,6 +3327,13 @@ impl<'a> Interpreter<'a> {
         if self.depth >= 1024 {
             return Err(Error::coded("E0506", span, "call depth limit exceeded"));
         }
+        let region = self
+            .regions
+            .contains(&proc_ref.module)
+            .then_some(proc_ref.module);
+        if let Some(region) = region {
+            self.acquire_region(region)?;
+        }
 
         let previous_module = self.active_module;
         let previous_scope = self.active_scope_key;
@@ -3262,6 +3350,9 @@ impl<'a> Interpreter<'a> {
         self.locals.pop();
         self.active_module = previous_module;
         self.active_scope_key = previous_scope;
+        if let Some(region) = region {
+            self.release_region(region);
+        }
 
         let (result, updates) = outcome?;
         for (target, value) in updates {
@@ -4282,6 +4373,50 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    fn acquire_region(&mut self, region: usize) -> Result<(), Error> {
+        if let Some(depth) = self.region_depths.get_mut(&region) {
+            *depth += 1;
+            return Ok(());
+        }
+        let owner = self.scheduler.borrow().region_owner.get(&region).copied();
+        match owner {
+            None => {
+                self.scheduler
+                    .borrow_mut()
+                    .region_owner
+                    .insert(region, self.process_id);
+            }
+            Some(owner) if owner == self.process_id => {}
+            Some(_) => cooperative_acquire_region(region)?,
+        }
+        self.region_depths.insert(region, 1);
+        Ok(())
+    }
+
+    fn release_region(&mut self, region: usize) {
+        let Some(depth) = self.region_depths.get_mut(&region) else {
+            return;
+        };
+        *depth -= 1;
+        if *depth > 0 {
+            return;
+        }
+        self.region_depths.remove(&region);
+        let mut scheduler = self.scheduler.borrow_mut();
+        if let Some(waiters) = scheduler.region_waiters.get_mut(&region) {
+            if !waiters.is_empty() {
+                let entry = waiters.remove(0);
+                scheduler.region_owner.insert(region, entry.id);
+                scheduler.ready.push_back(Runnable {
+                    input: ProcessInput::None,
+                    entry,
+                });
+                return;
+            }
+        }
+        scheduler.region_owner.remove(&region);
+    }
+
     fn event_location(&self, name: &str, span: Span) -> Result<(usize, Option<usize>), Error> {
         let cell = self
             .find_var_cell(name)
@@ -4631,6 +4766,9 @@ impl<'a> Interpreter<'a> {
             modules_by_span: self.modules_by_span.clone(),
             proc_defs: self.proc_defs.clone(),
             process_defs: self.process_defs.clone(),
+            regions: self.regions.clone(),
+            process_id: usize::MAX,
+            region_depths: HashMap::new(),
             scheduler: Rc::clone(&self.scheduler),
             moreta_decls: self.moreta_decls.clone(),
             moreta_invariants: self.moreta_invariants.clone(),

@@ -1,6 +1,7 @@
 -- Direct Z.200 control-flow examples.
 M: MODULE
   DCL total INT INIT := 0;
+  DCL exited INT INIT := 0;
   DCL i INT;
 
   DO FOR i := 1 TO 5;
@@ -36,9 +37,10 @@ M: MODULE
   Outer: DO FOR i := 1 TO 3;
     DO FOR total := 1 TO 3;
       IF total = 2 THEN
+        exited := total;
         EXIT Outer;
       FI;
     OD;
   OD;
-  ASSERT total = 2;
+  ASSERT exited = 2;
 END M;

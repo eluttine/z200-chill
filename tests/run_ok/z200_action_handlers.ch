@@ -81,5 +81,9 @@ M: MODULE
   BEGIN
     DCL a SHORT_INT INIT := 32767;
     a +:= 1;
+  END
+  ON (OVERFLOW):
+    log := 11;
   END;
+  ASSERT log = 11;
 END M;
