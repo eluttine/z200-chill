@@ -673,6 +673,17 @@ fn parse_external_type(
         };
         return Ok(program::ExternalType::Builtin(Type::Access(access)));
     }
+    if let Some(rest) = name.strip_prefix("EVENT(") {
+        let length = rest
+            .strip_suffix(')')
+            .ok_or_else(|| format!("invalid event mode `{name}` in grant file"))?
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| format!("invalid event length in `{name}`"))?;
+        return Ok(program::ExternalType::Builtin(Type::Event {
+            length: Some(length),
+        }));
+    }
     if let Some(rest) = name.strip_prefix("WTEXT(") {
         let length = rest
             .strip_suffix(')')
@@ -818,6 +829,10 @@ fn type_name(ty: Type) -> String {
             length,
             wide: false,
         } => format!("TEXT({length})"),
+        Type::Event {
+            length: Some(length),
+        } => format!("EVENT({length})"),
+        Type::Event { length: None } => "EVENT".to_owned(),
         Type::Bits => "BOOLS".to_owned(),
         Type::BoundedBits {
             length,

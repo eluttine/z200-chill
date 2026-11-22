@@ -7,6 +7,11 @@
 - `PROCESS (params)` definitions.
 - `START process(args);` actions.
 - `STOP;` actions.
+- `EVENT` and `EVENT(n)` synchronization modes.
+- `DELAY event [PRIORITY expr];` and `CONTINUE event;`.
+- Events wake the highest-priority delayed process; equal priorities use FIFO order.
+- Event lengths are enforced and raise `DELAYFAIL`.
+- A scheduler run with only delayed processes reports a deadlock.
 - Processes run under a cooperative round-robin scheduler.
 - The scheduler yields at action boundaries, including inside procedure and process
   bodies.
@@ -21,7 +26,8 @@
 
 ## Not implemented yet
 
-- `DELAY` and timer/event locations.
+- timer-based delay (`DELAY` currently waits for an `EVENT`, not a timer).
+- `DELAY CASE`, timeout supervision, and `TIMEOUT`.
 - signals, `SEND`, receive cases.
 - region/task mutual exclusion and critical procedures.
 - process handlers and full exception termination semantics.

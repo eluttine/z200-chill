@@ -1565,6 +1565,34 @@ impl<'a> Parser<'a> {
                 span,
             });
         }
+        if self.at_keyword(Keyword::Event) {
+            let span = self.current_span();
+            self.advance();
+            let length = if self.at_lparen() {
+                self.advance();
+                let length = self.parse_mode_integer()?;
+                self.expect_rparen()?;
+                if length <= 0 {
+                    return Err(Error::coded("E0205", span, "event length must be positive"));
+                }
+                Some(length as usize)
+            } else {
+                None
+            };
+            return Ok(ModeRef {
+                name: "EVENT".to_owned(),
+                arrays: Vec::new(),
+                string_length: length,
+                varying: false,
+                access: false,
+                powerset: false,
+                reference: false,
+                row: false,
+                access_indexed: false,
+                access_index: None,
+                span,
+            });
+        }
         if self.at_keyword(Keyword::Ref) || self.at_keyword(Keyword::Row) {
             let row = self.at_keyword(Keyword::Row);
             let start = self.current_span();
@@ -1739,6 +1767,33 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let end = self.expect_semicolon()?;
                 Ok(Action::Stop {
+                    span: Span::new(self.source, start.start, end.end),
+                })
+            }
+            Some(TokenKind::Keyword(Keyword::Delay)) => {
+                let start = self.current_span();
+                self.advance();
+                let (event, _) = self.expect_identifier()?;
+                let priority = if self.at_keyword(Keyword::Priority) {
+                    self.advance();
+                    Some(self.parse_expr()?)
+                } else {
+                    None
+                };
+                let end = self.expect_semicolon()?;
+                Ok(Action::Delay {
+                    event,
+                    priority,
+                    span: Span::new(self.source, start.start, end.end),
+                })
+            }
+            Some(TokenKind::Keyword(Keyword::Continue)) => {
+                let start = self.current_span();
+                self.advance();
+                let (event, _) = self.expect_identifier()?;
+                let end = self.expect_semicolon()?;
+                Ok(Action::Continue {
+                    event,
                     span: Span::new(self.source, start.start, end.end),
                 })
             }

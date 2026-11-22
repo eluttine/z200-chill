@@ -1497,6 +1497,11 @@ impl Checker {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        if mode.name == "EVENT" {
+            return Ok(Type::Event {
+                length: mode.string_length,
+            });
+        }
         if mode.reference || mode.row {
             let mut inner = mode.clone();
             inner.reference = false;
@@ -1973,6 +1978,49 @@ impl Checker {
                 Ok(())
             }
             Action::Stop { .. } => Ok(()),
+            Action::Delay {
+                event,
+                priority,
+                span,
+            } => {
+                let ty = self.lookup_var(event).ok_or_else(|| {
+                    Error::coded("E0403", *span, format!("unknown event `{event}`"))
+                })?;
+                if !matches!(ty, Type::Event { .. }) {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        format!("DELAY requires an EVENT location, found {}", ty.describe()),
+                    ));
+                }
+                if let Some(priority) = priority {
+                    let ty = self.check_expr(priority)?;
+                    if !ty.is_int() {
+                        return Err(Error::coded(
+                            "E0400",
+                            priority.span(),
+                            "PRIORITY requires an integer expression",
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            Action::Continue { event, span } => {
+                let ty = self.lookup_var(event).ok_or_else(|| {
+                    Error::coded("E0403", *span, format!("unknown event `{event}`"))
+                })?;
+                if !matches!(ty, Type::Event { .. }) {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        format!(
+                            "CONTINUE requires an EVENT location, found {}",
+                            ty.describe()
+                        ),
+                    ));
+                }
+                Ok(())
+            }
             Action::Empty { .. } => Ok(()),
             Action::Cause { name, .. } => {
                 self.record_exception(name);
@@ -3778,6 +3826,7 @@ impl Checker {
             Type::WBoundedString { .. } => is_wide_string_type(value),
             Type::Text { wide: true, .. } => is_wide_string_type(value),
             Type::Text { wide: false, .. } => is_narrow_string_type(value),
+            Type::Event { .. } => false,
             Type::Bits => is_bits_type(value),
             Type::BoundedBits { .. } => is_bits_type(value),
             Type::Ref(target) => {

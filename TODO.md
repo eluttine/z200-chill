@@ -172,8 +172,11 @@ deferred.
       preservation in grant files.
 - [x] First concurrency layer: `PROCESS`, `START`, `STOP`, a cooperative
       action-boundary scheduler, shared module locations, and process-local state.
-- [ ] `DELAY`, timers, signals/`SEND`/receive cases, region mutual exclusion, process
-      handlers/instances, and process `LOC`/`OUT`/`INOUT` parameters.
+- [x] `EVENT`/`EVENT(n)` modes, `DELAY`, `CONTINUE`, priority wake-up, event-length
+      `DELAYFAIL`, and delayed-process deadlock detection.
+- [ ] Timer-based delays/timeouts, `DELAY CASE`, signals/`SEND`/receive cases, region
+      mutual exclusion, process handlers/instances, and process `LOC`/`OUT`/`INOUT`
+      parameters.
 
 ## 8. Cleanup
 

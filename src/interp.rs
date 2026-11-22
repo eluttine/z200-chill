@@ -239,15 +239,36 @@ pub fn run_checked(
         };
         CURRENT_YIELDER.with(|slot| slot.set(entry.yielder.get()));
         match entry.coroutine.resume(()) {
-            corosensei::CoroutineResult::Yield(()) => {
-                scheduler.borrow_mut().ready.push_back(entry);
-            }
+            corosensei::CoroutineResult::Yield(yielded) => match yielded {
+                ProcessYield::Tick => scheduler.borrow_mut().ready.push_back(entry),
+                ProcessYield::Delay { event, priority } => {
+                    scheduler
+                        .borrow_mut()
+                        .waiting
+                        .entry(event)
+                        .or_default()
+                        .push((priority, entry));
+                }
+            },
             corosensei::CoroutineResult::Return(result) => {
+                CURRENT_YIELDER.with(|slot| slot.set(std::ptr::null()));
                 result?;
             }
         }
     }
     CURRENT_YIELDER.with(|slot| slot.set(std::ptr::null()));
+    if scheduler
+        .borrow()
+        .waiting
+        .values()
+        .any(|waiting| !waiting.is_empty())
+    {
+        return Err(Error::coded(
+            "E0500",
+            error_span,
+            "deadlock: all remaining processes are delayed",
+        ));
+    }
 
     Ok(())
 }
@@ -350,20 +371,27 @@ struct ProcessRef<'a> {
     scope_key: Option<Span>,
 }
 
-type ProcessCoroutine = Coroutine<(), (), Result<(), Error>, DefaultStack>;
+#[derive(Clone, Copy)]
+enum ProcessYield {
+    Tick,
+    Delay { event: usize, priority: i128 },
+}
+
+type ProcessCoroutine = Coroutine<(), ProcessYield, Result<(), Error>, DefaultStack>;
 
 struct ProcessEntry {
     coroutine: ProcessCoroutine,
-    yielder: Rc<Cell<*const Yielder<(), ()>>>,
+    yielder: Rc<Cell<*const Yielder<(), ProcessYield>>>,
 }
 
 #[derive(Default)]
 struct ScheduleState {
     ready: VecDeque<ProcessEntry>,
+    waiting: HashMap<usize, Vec<(i128, ProcessEntry)>>,
 }
 
 thread_local! {
-    static CURRENT_YIELDER: Cell<*const Yielder<(), ()>> = const { Cell::new(std::ptr::null()) };
+    static CURRENT_YIELDER: Cell<*const Yielder<(), ProcessYield>> = const { Cell::new(std::ptr::null()) };
 }
 
 fn cooperative_yield() {
@@ -373,10 +401,27 @@ fn cooperative_yield() {
             // The pointer is installed by the scheduler only while this process is
             // executing on the current thread.
             unsafe {
-                (*ptr).suspend(());
+                (*ptr).suspend(ProcessYield::Tick);
             }
         }
     });
+}
+
+fn cooperative_delay(event: usize, priority: i128) -> Result<(), Error> {
+    CURRENT_YIELDER.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            return Err(Error::coded(
+                "E0500",
+                Span::new(SourceId(0), 0, 0),
+                "DELAY is only valid inside a process",
+            ));
+        }
+        unsafe {
+            (*ptr).suspend(ProcessYield::Delay { event, priority });
+        }
+        Ok(())
+    })
 }
 
 #[derive(Clone, Default)]
@@ -1042,6 +1087,63 @@ impl<'a> Interpreter<'a> {
                     self.eval_ir(call)?;
                 }
                 ir::Stmt::Stop { .. } => return Ok(Flow::Stop),
+                ir::Stmt::Delay {
+                    event,
+                    priority,
+                    span,
+                } => {
+                    let (key, length) = self.event_location(event, *span)?;
+                    let priority = match priority {
+                        Some(priority) => {
+                            let value = self.eval_ir(priority)?;
+                            let (priority, _) = self.expect_int(value, priority.span())?;
+                            if priority < 0 {
+                                return Err(Error::coded(
+                                    "E0500",
+                                    *span,
+                                    "DELAY priority must be non-negative",
+                                ));
+                            }
+                            priority
+                        }
+                        None => 0,
+                    };
+                    let count = self
+                        .scheduler
+                        .borrow()
+                        .waiting
+                        .get(&key)
+                        .map(Vec::len)
+                        .unwrap_or(0);
+                    if let Some(length) = length {
+                        if count >= length {
+                            return Err(Error::exception(
+                                "DELAYFAIL",
+                                *span,
+                                "DELAYFAIL: event length exceeded",
+                            ));
+                        }
+                    }
+                    cooperative_delay(key, priority)?;
+                }
+                ir::Stmt::Continue { event, span } => {
+                    let (key, _) = self.event_location(event, *span)?;
+                    let mut scheduler = self.scheduler.borrow_mut();
+                    let Some(waiting) = scheduler.waiting.get_mut(&key) else {
+                        continue;
+                    };
+                    if waiting.is_empty() {
+                        continue;
+                    }
+                    let mut best = 0;
+                    for index in 1..waiting.len() {
+                        if waiting[index].0 > waiting[best].0 {
+                            best = index;
+                        }
+                    }
+                    let (_, entry) = waiting.remove(best);
+                    scheduler.ready.push_back(entry);
+                }
                 ir::Stmt::Start {
                     process,
                     args,
@@ -1079,8 +1181,9 @@ impl<'a> Interpreter<'a> {
                     let coroutine = unsafe {
                         Coroutine::with_stack_unchecked(
                             DefaultStack::default(),
-                            move |current: &Yielder<(), ()>, ()| {
+                            move |current: &Yielder<(), ProcessYield>, ()| {
                                 yielder_slot.set(current as *const _);
+                                CURRENT_YIELDER.with(|slot| slot.set(current as *const _));
                                 child.run_process(def, values)
                             },
                         )
@@ -3473,6 +3576,11 @@ impl<'a> Interpreter<'a> {
                 Value::Ref(_) => Ok(value),
                 _ => Err(Error::coded("E0507", span, "expected a reference value")),
             },
+            Type::Event { .. } => Err(Error::coded(
+                "E0507",
+                span,
+                "event locations do not have values",
+            )),
             Type::Text { length, wide } => match value {
                 Value::String(value) => {
                     let actual = value.chars().count();
@@ -3639,6 +3747,11 @@ impl<'a> Interpreter<'a> {
     }
 
     fn resolve_mode(&self, mode: &ModeRef) -> Result<Type, Error> {
+        if mode.name == "EVENT" {
+            return Ok(Type::Event {
+                length: mode.string_length,
+            });
+        }
         if mode.reference || mode.row {
             let mut inner = mode.clone();
             inner.reference = false;
@@ -3961,6 +4074,21 @@ impl<'a> Interpreter<'a> {
             Value::Ref(None) => Err(Error::exception("EMPTY", span, "EMPTY: NULL reference")),
             _ => Err(Error::coded("E0507", span, "expected a reference value")),
         }
+    }
+
+    fn event_location(&self, name: &str, span: Span) -> Result<(usize, Option<usize>), Error> {
+        let cell = self
+            .find_var_cell(name)
+            .ok_or_else(|| Error::coded("E0505", span, format!("unknown event `{name}`")))?;
+        let Type::Event { length } = cell.borrow().ty else {
+            return Err(Error::coded(
+                "E0507",
+                span,
+                format!("`{name}` is not an EVENT location"),
+            ));
+        };
+        let key = Rc::as_ptr(&cell) as usize;
+        Ok((key, length))
     }
 
     fn target_type(&self, target: &ir::AssignTarget, span: Span) -> Result<Type, Error> {

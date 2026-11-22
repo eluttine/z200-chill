@@ -340,6 +340,15 @@ pub enum Stmt {
     Stop {
         span: Span,
     },
+    Delay {
+        event: String,
+        priority: Option<Node>,
+        span: Span,
+    },
+    Continue {
+        event: String,
+        span: Span,
+    },
     Return {
         value: Option<Node>,
         span: Span,
@@ -635,6 +644,22 @@ impl Lowerer<'_> {
                 span: *span,
             }),
             Action::Stop { span } => Ok(Stmt::Stop { span: *span }),
+            Action::Delay {
+                event,
+                priority,
+                span,
+            } => Ok(Stmt::Delay {
+                event: event.clone(),
+                priority: priority
+                    .as_ref()
+                    .map(|value| self.lower_expr(value))
+                    .transpose()?,
+                span: *span,
+            }),
+            Action::Continue { event, span } => Ok(Stmt::Continue {
+                event: event.clone(),
+                span: *span,
+            }),
             Action::Return { value, span } => Ok(Stmt::Return {
                 value: match value {
                     Some(value) => Some(self.lower_expr(value)?),

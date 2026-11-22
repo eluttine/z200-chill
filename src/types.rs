@@ -88,6 +88,7 @@ impl ArrayElement {
             | Type::DynamicArray { .. }
             | Type::ArrayTuple
             | Type::Text { .. }
+            | Type::Event { .. }
             | Type::Ref(_)
             | Type::Ptr
             | Type::Row(_)
@@ -230,6 +231,7 @@ impl RefTarget {
             Type::PowerSet(set) => Self::PowerSet(set),
             Type::IntLiteral
             | Type::ArrayTuple
+            | Type::Event { .. }
             | Type::Null
             | Type::Ref(_)
             | Type::Ptr
@@ -304,6 +306,10 @@ pub enum Type {
         length: usize,
         wide: bool,
     },
+    /// `EVENT [(length)]`.
+    Event {
+        length: Option<usize>,
+    },
     /// A bound reference mode `REF M`.
     Ref(RefTarget),
     /// The free reference mode `PTR`.
@@ -377,6 +383,7 @@ impl Type {
             | Self::DynamicArray { .. }
             | Self::ArrayTuple
             | Self::Text { .. }
+            | Self::Event { .. }
             | Self::Ref(_)
             | Self::Ptr
             | Self::Row(_)
@@ -419,6 +426,7 @@ impl Type {
             Self::BoundedBits { .. } => "fixed bit string",
             Self::Text { wide: true, .. } => "wide text",
             Self::Text { .. } => "text",
+            Self::Event { .. } => "event",
             Self::Ref(target) => match target {
                 RefTarget::Struct(_) => "bound reference",
                 _ => "bound reference",
@@ -455,6 +463,7 @@ pub fn resolve_mode(name: &str) -> Option<Type> {
         "BOOLS" => Some(Type::Bits),
         "TEXT" => Some(Type::String),
         "WTEXT" => Some(Type::WString),
+        "EVENT" => Some(Type::Event { length: None }),
         "PTR" => Some(Type::Ptr),
         "ASSOCIATION" => Some(Type::Association),
         _ => None,
@@ -505,6 +514,11 @@ pub fn resolve_mode_ref(
                 high: bounds.high,
             }),
         }));
+    }
+    if mode.name == "EVENT" {
+        return Some(Type::Event {
+            length: mode.string_length,
+        });
     }
     if matches!(mode.name.as_str(), "TEXT" | "WTEXT") {
         return Some(Type::Text {

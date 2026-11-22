@@ -383,6 +383,15 @@ pub enum Action {
     Stop {
         span: Span,
     },
+    Delay {
+        event: String,
+        priority: Option<Expr>,
+        span: Span,
+    },
+    Continue {
+        event: String,
+        span: Span,
+    },
     Return {
         value: Option<Expr>,
         span: Span,
@@ -641,6 +650,8 @@ impl Action {
             | Self::Call { span, .. }
             | Self::Start { span, .. }
             | Self::Stop { span }
+            | Self::Delay { span, .. }
+            | Self::Continue { span, .. }
             | Self::Return { span, .. }
             | Self::Result { span, .. }
             | Self::If { span, .. }
