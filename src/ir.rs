@@ -478,7 +478,9 @@ impl Lowerer<'_> {
                 Declaration::ProcSignature(_)
                 | Declaration::Visibility(_)
                 | Declaration::Mode(_)
-                | Declaration::SpecModule(_) => {}
+                | Declaration::SpecModule(_)
+                | Declaration::GenericProc(_)
+                | Declaration::GenericProcInstance(_) => {}
             }
         }
         Ok(())

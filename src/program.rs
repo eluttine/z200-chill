@@ -306,7 +306,145 @@ pub struct ProgramInfo {
 pub fn normalize(program: &Program) -> Result<Program, Error> {
     let mut normalized = program.clone();
     apply_virtual_grants(&mut normalized.modules)?;
+    for module in &mut normalized.modules {
+        expand_module_generics(module)?;
+    }
     Ok(normalized)
+}
+
+fn expand_module_generics(module: &mut Module) -> Result<(), Error> {
+    let mut templates: HashMap<String, crate::ast::GenericProcTemplate> = HashMap::new();
+    for declaration in &module.declarations {
+        if let Declaration::GenericProc(template) = declaration {
+            if templates
+                .insert(template.name.clone(), template.clone())
+                .is_some()
+            {
+                return Err(Error::new(
+                    template.span,
+                    format!("duplicate generic template `{}`", template.name),
+                ));
+            }
+        }
+    }
+    let mut declarations = Vec::with_capacity(module.declarations.len());
+    for declaration in module.declarations.drain(..) {
+        match declaration {
+            Declaration::GenericProc(_) => {}
+            Declaration::GenericProcInstance(instance) => {
+                let Some(template) = templates.get(&instance.template) else {
+                    return Err(Error::new(
+                        instance.span,
+                        format!("unknown generic template `{}`", instance.template),
+                    ));
+                };
+                if template.formal_modes.len() != instance.actual_modes.len() {
+                    return Err(Error::new(
+                        instance.span,
+                        format!(
+                            "generic template `{}` expects {} mode(s), found {}",
+                            instance.template,
+                            template.formal_modes.len(),
+                            instance.actual_modes.len()
+                        ),
+                    ));
+                }
+                let mut proc_def = template.proc_def.clone();
+                proc_def.name = instance.name.clone();
+                proc_def.span = instance.span;
+                let substitutions: HashMap<&str, &ModeRef> = template
+                    .formal_modes
+                    .iter()
+                    .map(String::as_str)
+                    .zip(instance.actual_modes.iter())
+                    .collect();
+                substitute_proc_modes(&mut proc_def, &substitutions)?;
+                declarations.push(Declaration::Proc(proc_def));
+            }
+            other => declarations.push(other),
+        }
+    }
+    module.declarations = declarations;
+    Ok(())
+}
+
+fn substitute_mode(
+    mode: &mut ModeRef,
+    substitutions: &HashMap<&str, &ModeRef>,
+) -> Result<(), Error> {
+    let Some(actual) = substitutions.get(mode.name.as_str()) else {
+        return Ok(());
+    };
+    if !mode.arrays.is_empty() && !actual.arrays.is_empty() {
+        return Err(Error::new(
+            mode.span,
+            "nested array modes are not implemented for generic substitution",
+        ));
+    }
+    mode.name = actual.name.clone();
+    if mode.arrays.is_empty() {
+        mode.arrays = actual.arrays.clone();
+    }
+    mode.string_length = actual.string_length.or(mode.string_length);
+    mode.varying = actual.varying || mode.varying;
+    mode.access = actual.access || mode.access;
+    mode.powerset = actual.powerset || mode.powerset;
+    mode.access_indexed = actual.access_indexed || mode.access_indexed;
+    mode.access_index = actual.access_index.or(mode.access_index);
+    Ok(())
+}
+
+fn substitute_proc_modes(
+    proc_def: &mut crate::ast::ProcDef,
+    substitutions: &HashMap<&str, &ModeRef>,
+) -> Result<(), Error> {
+    for param in &mut proc_def.params {
+        substitute_mode(&mut param.mode, substitutions)?;
+    }
+    if let Some(result) = &mut proc_def.result {
+        substitute_mode(result, substitutions)?;
+    }
+    substitute_declaration_modes(&mut proc_def.declarations, substitutions)
+}
+
+fn substitute_declaration_modes(
+    declarations: &mut [Declaration],
+    substitutions: &HashMap<&str, &ModeRef>,
+) -> Result<(), Error> {
+    for declaration in declarations {
+        match declaration {
+            Declaration::Var(vars) => {
+                for var in vars {
+                    substitute_mode(&mut var.mode, substitutions)?;
+                }
+            }
+            Declaration::Proc(proc_def) => substitute_proc_modes(proc_def, substitutions)?,
+            Declaration::ProcSignature(signature) => {
+                for param in &mut signature.params {
+                    substitute_mode(&mut param.mode, substitutions)?;
+                }
+                if let Some(result) = &mut signature.result {
+                    substitute_mode(result, substitutions)?;
+                }
+            }
+            Declaration::Mode(mode_def) => match &mut mode_def.body {
+                crate::ast::ModeDefinitionBody::Struct(fields) => {
+                    for field in fields {
+                        substitute_mode(&mut field.mode, substitutions)?;
+                    }
+                }
+                crate::ast::ModeDefinitionBody::Alias(mode) => {
+                    substitute_mode(mode, substitutions)?;
+                }
+                crate::ast::ModeDefinitionBody::Set(_) => {}
+            },
+            Declaration::Visibility(_)
+            | Declaration::SpecModule(_)
+            | Declaration::GenericProc(_)
+            | Declaration::GenericProcInstance(_) => {}
+        }
+    }
+    Ok(())
 }
 
 pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
@@ -1380,7 +1518,11 @@ pub fn collect_interface(
                     ));
                 }
             }
-            Declaration::Mode(_) | Declaration::Visibility(_) | Declaration::SpecModule(_) => {}
+            Declaration::Mode(_)
+            | Declaration::Visibility(_)
+            | Declaration::SpecModule(_)
+            | Declaration::GenericProc(_)
+            | Declaration::GenericProcInstance(_) => {}
         }
     }
 
@@ -1526,7 +1668,10 @@ fn check_contexts(module: &Module, index: usize, exports: &[ExportEntry]) -> Res
                         "mode definitions in contexts are not implemented yet",
                     ));
                 }
-                Declaration::Visibility(_) | Declaration::SpecModule(_) => {}
+                Declaration::Visibility(_)
+                | Declaration::SpecModule(_)
+                | Declaration::GenericProc(_)
+                | Declaration::GenericProcInstance(_) => {}
             }
         }
 

@@ -105,6 +105,26 @@ pub enum Declaration {
     Mode(ModeDefinition),
     /// A nested `SPEC MODULE` inside a spec module or context.
     SpecModule(Box<Module>),
+    /// A generic procedure template parameterized only by modes.
+    GenericProc(GenericProcTemplate),
+    /// `name: PROC = NEW template (actual modes) END;`
+    GenericProcInstance(GenericProcInstance),
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericProcTemplate {
+    pub name: String,
+    pub formal_modes: Vec<String>,
+    pub proc_def: ProcDef,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericProcInstance {
+    pub name: String,
+    pub template: String,
+    pub actual_modes: Vec<ModeRef>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

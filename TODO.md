@@ -127,7 +127,9 @@ all existing tests pass with no new special cases.
 - [x] `POWERSET` of `INT` / `BOOL` / `CHAR` with literals, ranges, union,
       intersection, difference, equality/ordering, and `IN`.
 - [x] Named `SET (...)` modes with unnumbered and numbered elements.
-- [ ] Moreta modes and templates.
+- [x] Generic procedure templates parameterized by `MODE`, with
+      `name: PROC = NEW template (modes) END;` instantiation.
+- [ ] Moreta modes; generic `SYN`/`PROC` parameters and module/region/process templates.
 - [ ] Processes/signals/timers: deferred pending a resumable/concurrent runtime.
 
 ## 8. Cleanup

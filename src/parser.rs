@@ -253,7 +253,9 @@ impl<'a> Parser<'a> {
                     }
                     Declaration::Proc(_)
                     | Declaration::ProcSignature(_)
-                    | Declaration::SpecModule(_) => {}
+                    | Declaration::SpecModule(_)
+                    | Declaration::GenericProc(_)
+                    | Declaration::GenericProcInstance(_) => {}
                 }
             }
             let end = self.expect_keyword(Keyword::For)?;
@@ -427,6 +429,14 @@ impl<'a> Parser<'a> {
                 declarations.push(Declaration::Var(self.parse_dcl()?));
             } else if self.at_keyword(Keyword::NewMode) || self.at_keyword(Keyword::SynMode) {
                 declarations.push(Declaration::Mode(self.parse_mode_definition()?));
+            } else if self.at_generic_proc_template() {
+                declarations.push(Declaration::GenericProc(
+                    self.parse_generic_proc_template()?,
+                ));
+            } else if self.at_generic_proc_instance() {
+                declarations.push(Declaration::GenericProcInstance(
+                    self.parse_generic_proc_instance()?,
+                ));
             } else if self.at_proc_definition() {
                 if spec {
                     declarations.push(Declaration::ProcSignature(self.parse_proc_signature()?));
@@ -734,6 +744,134 @@ impl<'a> Parser<'a> {
         }
 
         Ok(declarations)
+    }
+
+    fn at_generic_proc_template(&self) -> bool {
+        self.at_identifier()
+            && self.kind_at(1) == Some(&TokenKind::Colon)
+            && self.kind_at(2) == Some(&TokenKind::Keyword(Keyword::Generic))
+    }
+
+    fn at_generic_proc_instance(&self) -> bool {
+        self.at_identifier()
+            && self.kind_at(1) == Some(&TokenKind::Colon)
+            && self.kind_at(2) == Some(&TokenKind::Keyword(Keyword::Proc))
+            && self.kind_at(3) == Some(&TokenKind::Eq)
+    }
+
+    fn parse_generic_proc_template(&mut self) -> Result<GenericProcTemplate, Error> {
+        let start = self.current_span();
+        let (name, _) = self.expect_identifier()?;
+        self.expect_colon()?;
+        self.expect_keyword(Keyword::Generic)?;
+        let mut formal_modes = Vec::new();
+        while self.at_keyword(Keyword::Mode) {
+            self.advance();
+            loop {
+                let (formal, _) = self.expect_identifier()?;
+                formal_modes.push(formal);
+                if self.at_comma() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect_semicolon()?;
+        }
+        if self.at_keyword(Keyword::Syn) || self.at_keyword(Keyword::SynMode) {
+            return Err(
+                self.error_here_code("E0206", "generic SYN parameters are not implemented yet")
+            );
+        }
+        if self.at_keyword(Keyword::Proc) && self.kind_at(1) == Some(&TokenKind::Colon) {
+            return Err(
+                self.error_here_code("E0206", "generic PROC parameters are not implemented yet")
+            );
+        }
+        self.expect_keyword(Keyword::Proc)?;
+        if formal_modes.is_empty() {
+            return Err(self.error_here_code(
+                "E0206",
+                "generic templates currently require at least one MODE parameter",
+            ));
+        }
+        let params = self.parse_formal_params()?;
+        let (result, exceptions) = self.parse_result_and_exceptions()?;
+        self.expect_semicolon()?;
+        let declarations = self.parse_declarations(false, false)?;
+        let actions = self.parse_actions_until(&[Keyword::End])?;
+        self.expect_keyword(Keyword::End)?;
+        let handler = if self.at_keyword(Keyword::On) {
+            Some(self.parse_handler()?)
+        } else {
+            None
+        };
+        if let Some(TokenKind::Identifier(trailing)) = self.kind() {
+            if trailing != &name {
+                return Err(self.error_here_code(
+                    "E0202",
+                    format!("generic procedure end name `{trailing}` does not match `{name}`"),
+                ));
+            }
+            self.advance();
+        }
+        let end = self.expect_semicolon()?;
+        let span = Span::new(self.source, start.start, end.end);
+        Ok(GenericProcTemplate {
+            name: name.clone(),
+            formal_modes,
+            proc_def: ProcDef {
+                name,
+                params,
+                result,
+                exceptions,
+                declarations,
+                actions,
+                handler,
+                span,
+            },
+            span,
+        })
+    }
+
+    fn parse_generic_proc_instance(&mut self) -> Result<GenericProcInstance, Error> {
+        let start = self.current_span();
+        let (name, _) = self.expect_identifier()?;
+        self.expect_colon()?;
+        self.expect_keyword(Keyword::Proc)?;
+        self.expect_equal()?;
+        self.expect_keyword(Keyword::New)?;
+        let (template, _) = self.expect_identifier()?;
+        self.expect_lparen()?;
+        let mut actual_modes = Vec::new();
+        if !self.at_rparen() {
+            loop {
+                actual_modes.push(self.parse_mode_ref()?);
+                if self.at_comma() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect_rparen()?;
+        self.expect_keyword(Keyword::End)?;
+        if let Some(TokenKind::Identifier(trailing)) = self.kind() {
+            if trailing != &name {
+                return Err(self.error_here_code(
+                    "E0202",
+                    format!("generic instance end name `{trailing}` does not match `{name}`"),
+                ));
+            }
+            self.advance();
+        }
+        let end = self.expect_semicolon()?;
+        Ok(GenericProcInstance {
+            name,
+            template,
+            actual_modes,
+            span: Span::new(self.source, start.start, end.end),
+        })
     }
 
     fn parse_proc(&mut self) -> Result<ProcDef, Error> {

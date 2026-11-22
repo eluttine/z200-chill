@@ -573,6 +573,27 @@ END name ;
 
 ---
 
+### 6.2 Generic procedure templates
+
+Procedures may be templated over modes:
+
+```chill
+Identity: GENERIC
+  MODE T;
+  PROC (x T) RETURNS (T);
+    RETURN x;
+  END Identity;
+
+IdentityInt: PROC = NEW Identity (INT) END;
+```
+
+- `GENERIC MODE T;` declares formal mode parameters.
+- Template bodies are checked after each instantiation, with formal modes substituted.
+- Local declarations, parameters, results, and nested procedure signatures are substituted.
+- Instantiation syntax is `name: PROC = NEW template (actual-modes) END;`.
+- The current subset supports `MODE` parameters only; generic `SYN` and `PROC`
+  parameters and generic module/region/process templates are not implemented yet.
+
 ## 7. Modules and visibility
 
 ### 7.1 Syntax (§10.6)

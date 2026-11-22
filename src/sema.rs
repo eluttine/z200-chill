@@ -681,7 +681,10 @@ impl Checker {
                             "unsupported declaration in a nested context",
                         ));
                     }
-                    Declaration::Visibility(_) | Declaration::SpecModule(_) => {}
+                    Declaration::Visibility(_)
+                    | Declaration::SpecModule(_)
+                    | Declaration::GenericProc(_)
+                    | Declaration::GenericProcInstance(_) => {}
                 }
             }
 
@@ -1047,7 +1050,10 @@ impl Checker {
                         }
                     }
                 }
-                Declaration::Visibility(_) | Declaration::SpecModule(_) => {}
+                Declaration::Visibility(_)
+                | Declaration::SpecModule(_)
+                | Declaration::GenericProc(_)
+                | Declaration::GenericProcInstance(_) => {}
             }
         }
         Ok(())
