@@ -1239,6 +1239,14 @@ impl Checker {
     }
 
     fn declare_var(&mut self, name: &str, ty: Type, span: Span) -> Result<(), Error> {
+        if let Type::Moreta(id) = ty {
+            if self.modes.get_moreta(id).abstract_mode {
+                return Err(Error::new(
+                    span,
+                    "abstract module mode cannot be instantiated",
+                ));
+            }
+        }
         let scope = self.scopes.last_mut().expect("scope stack is never empty");
         if scope.vars.contains_key(name)
             || scope.procs.contains_key(name)
@@ -3057,6 +3065,9 @@ impl Checker {
     }
 
     fn ensure_assignable(&self, target: Type, value: Type, span: Span) -> Result<(), Error> {
+        if matches!(target, Type::Moreta(_)) {
+            return Err(Error::new(span, "module mode objects are not assignable"));
+        }
         let ok = match target {
             Type::Int(target_kind) => match value {
                 Type::Int(value_kind) => value_kind == target_kind,

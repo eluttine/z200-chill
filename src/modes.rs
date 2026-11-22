@@ -68,6 +68,7 @@ pub struct MoretaMode {
     pub package_name: Option<String>,
     pub module_name: Option<String>,
     pub bases: Vec<MoretaId>,
+    pub abstract_mode: bool,
     pub components: Vec<MoretaComponent>,
 }
 

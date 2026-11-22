@@ -613,6 +613,9 @@ PairInt: MODULE = NEW Pair (INT) END;
 
 ### 6.3 Minimal moreta module modes
 
+The detailed supported subset and intentional exclusions are documented in
+[moreta.md](moreta.md).
+
 `NEWMODE`/`SYNMODE` may define a module-body mode with variable components:
 
 ```chill

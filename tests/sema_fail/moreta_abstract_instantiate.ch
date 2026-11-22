@@ -1,0 +1,6 @@
+M: MODULE
+  NEWMODE P = MODULE SPEC
+    DCL x INT;
+  END P;
+  DCL a P;
+END M;

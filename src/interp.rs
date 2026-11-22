@@ -204,6 +204,14 @@ pub fn run_checked(
 
     let lowered = ir::lower(&program, check)
         .map_err(|error| Error::coded("E0400", error.span, error.message))?;
+    let mut moreta_decls = HashMap::new();
+    let mut moreta_invariants = HashMap::new();
+    for (id, source) in info.moreta_sources {
+        moreta_decls.insert(id, source.declarations);
+        if let Some(invariant) = source.invariant {
+            moreta_invariants.insert(id, invariant);
+        }
+    }
     let mut interpreter = Interpreter {
         profile,
         modules: Vec::new(),
@@ -219,8 +227,8 @@ pub fn run_checked(
         reaches: info.reaches,
         modules_by_span: collect_modules_by_span(&program),
         proc_defs: collect_proc_defs(&program),
-        moreta_decls: collect_moreta_decls(&program).0,
-        moreta_invariants: collect_moreta_decls(&program).1,
+        moreta_decls,
+        moreta_invariants,
         package_names: program
             .modules
             .iter()
@@ -367,8 +375,8 @@ struct Interpreter<'a> {
     reaches: program::ReachTree,
     modules_by_span: HashMap<Span, &'a Module>,
     proc_defs: HashMap<Span, &'a ProcDef>,
-    moreta_decls: HashMap<types::MoretaId, &'a [Declaration]>,
-    moreta_invariants: HashMap<types::MoretaId, &'a Expr>,
+    moreta_decls: HashMap<types::MoretaId, Vec<Declaration>>,
+    moreta_invariants: HashMap<types::MoretaId, Expr>,
     package_names: Vec<Option<String>>,
     /// Scopes for nested modules declared in a module body, keyed by span.
     nested_scopes: HashMap<Span, Scope<'a>>,
@@ -736,7 +744,9 @@ impl<'a> Interpreter<'a> {
                 }
             }
         }
-        let result = self.initialize_declarations(&initializer_declarations);
+        let result = self
+            .initialize_declarations(&initializer_declarations)
+            .and_then(|()| self.check_moreta_invariants(id, span));
         if let Err(error) = result {
             self.locals.pop();
             return Err(error);
@@ -2338,7 +2348,7 @@ impl<'a> Interpreter<'a> {
     fn collect_moreta_invariants(&self, id: types::MoretaId) -> Vec<Expr> {
         self.moreta_invariants
             .get(&id)
-            .map(|invariant| vec![(*invariant).clone()])
+            .map(|invariant| vec![invariant.clone()])
             .unwrap_or_default()
     }
 
@@ -3249,47 +3259,6 @@ fn collect_modules_by_span(program: &Program) -> HashMap<Span, &Module> {
         collect_module_span(module, &mut map);
     }
     map
-}
-
-type MoretaDecls<'a> = HashMap<types::MoretaId, &'a [Declaration]>;
-type MoretaInvariants<'a> = HashMap<types::MoretaId, &'a Expr>;
-
-fn collect_moreta_decls(program: &Program) -> (MoretaDecls<'_>, MoretaInvariants<'_>) {
-    let mut decls = HashMap::new();
-    let mut invariants = HashMap::new();
-    let mut next = 0usize;
-    for module in &program.modules {
-        collect_module_moreta_decls(module, &mut next, &mut decls, &mut invariants);
-    }
-    (decls, invariants)
-}
-
-fn collect_module_moreta_decls<'a>(
-    module: &'a Module,
-    next: &mut usize,
-    decls: &mut MoretaDecls<'a>,
-    invariants: &mut MoretaInvariants<'a>,
-) {
-    for declaration in &module.declarations {
-        if let Declaration::Mode(mode_def) = declaration {
-            if let crate::ast::ModeDefinitionBody::Moreta {
-                declarations,
-                invariant,
-                ..
-            } = &mode_def.body
-            {
-                let id = types::MoretaId(*next);
-                decls.insert(id, declarations.as_slice());
-                if let Some(invariant) = invariant {
-                    invariants.insert(id, invariant);
-                }
-                *next += 1;
-            }
-        }
-    }
-    walk_action_modules(&module.actions, &mut |child| {
-        collect_module_moreta_decls(child, next, decls, invariants);
-    });
 }
 
 fn collect_proc_defs(program: &Program) -> HashMap<Span, &ProcDef> {

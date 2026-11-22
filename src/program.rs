@@ -1,5 +1,5 @@
 use crate::ast::{
-    Action, Declaration, ModeRef, Module, ModuleKind, NameRef, Param, Passing, PrefixClause,
+    Action, Declaration, Expr, ModeRef, Module, ModuleKind, NameRef, Param, Passing, PrefixClause,
     Program, VisibilityKind,
 };
 use crate::lexer::Span;
@@ -291,11 +291,18 @@ impl ReachTree {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MoretaSource {
+    pub declarations: Vec<Declaration>,
+    pub invariant: Option<Expr>,
+}
+
 pub struct ProgramInfo {
     pub interfaces: Vec<ModuleInterface>,
     pub exports: Vec<ExportEntry>,
     pub modes: ModeTable,
     pub reaches: ReachTree,
+    pub moreta_sources: HashMap<crate::types::MoretaId, MoretaSource>,
     pub body_for_spec: HashMap<usize, usize>,
     pub spec_for_body: HashMap<usize, usize>,
 }
@@ -345,12 +352,13 @@ fn merge_moreta_specs(module: &mut Module) -> Result<(), Error> {
             crate::ast::ModeDefinitionBody::Moreta { declarations, .. } => declarations,
             _ => unreachable!(),
         };
-        let (spec_declarations, spec_bases) = match spec_mode.body {
+        let (spec_declarations, spec_bases, spec_invariant) = match spec_mode.body {
             crate::ast::ModeDefinitionBody::Moreta {
                 declarations,
                 bases,
+                invariant,
                 ..
-            } => (declarations, bases),
+            } => (declarations, bases, invariant),
             _ => unreachable!(),
         };
         let body_proc_names: HashSet<String> = body_declarations
@@ -389,6 +397,7 @@ fn merge_moreta_specs(module: &mut Module) -> Result<(), Error> {
                 spec,
                 bases,
                 declarations,
+                invariant,
                 ..
             } = &mut mode_def.body
             {
@@ -397,20 +406,19 @@ fn merge_moreta_specs(module: &mut Module) -> Result<(), Error> {
                     *bases = spec_bases;
                 }
                 *declarations = merged;
+                *invariant = match (spec_invariant, invariant.take()) {
+                    (Some(spec_invariant), Some(body_invariant)) => Some(Expr::Binary {
+                        op: crate::ast::BinaryOp::And,
+                        span: body_invariant.span(),
+                        left: Box::new(spec_invariant),
+                        right: Box::new(body_invariant),
+                    }),
+                    (Some(spec_invariant), None) => Some(spec_invariant),
+                    (None, body_invariant) => body_invariant,
+                };
             }
         }
         remove.insert(spec_index);
-    }
-    // A spec without a body remains as an abstract module mode.
-    for spec_index in specs.values() {
-        if remove.contains(spec_index) {
-            continue;
-        }
-        if let Declaration::Mode(mode_def) = &mut module.declarations[*spec_index] {
-            if let crate::ast::ModeDefinitionBody::Moreta { spec, .. } = &mut mode_def.body {
-                *spec = false;
-            }
-        }
     }
     let mut index = 0;
     module.declarations.retain(|_| {
@@ -779,7 +787,7 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
         }
     }
 
-    let (mut modes, module_modes, module_modes_by_span) = build_modes(program)?;
+    let (mut modes, module_modes, module_modes_by_span, moreta_sources) = build_modes(program)?;
     let interfaces: Vec<ModuleInterface> = program
         .modules
         .iter()
@@ -923,6 +931,7 @@ pub fn analyze(program: &Program) -> Result<ProgramInfo, Error> {
         exports,
         modes,
         reaches,
+        moreta_sources,
         body_for_spec,
         spec_for_body,
     })
@@ -1224,12 +1233,14 @@ type ModeBuildResult = (
     ModeTable,
     Vec<HashMap<String, Type>>,
     HashMap<Span, HashMap<String, Type>>,
+    HashMap<crate::types::MoretaId, MoretaSource>,
 );
 
 fn build_modes(program: &Program) -> Result<ModeBuildResult, Error> {
     let mut table = ModeTable::default();
     let mut top_maps = Vec::with_capacity(program.modules.len());
     let mut span_maps = HashMap::new();
+    let mut moreta_sources = HashMap::new();
 
     for (index, module) in program.modules.iter().enumerate() {
         let mut local = HashMap::new();
@@ -1243,11 +1254,12 @@ fn build_modes(program: &Program) -> Result<ModeBuildResult, Error> {
             &mut resolution,
             &mut table,
             &mut span_maps,
+            &mut moreta_sources,
         )?;
         top_maps.push(local);
     }
 
-    Ok((table, top_maps, span_maps))
+    Ok((table, top_maps, span_maps, moreta_sources))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1260,6 +1272,7 @@ fn process_module_modes(
     resolution: &mut HashMap<String, Type>,
     table: &mut ModeTable,
     span_maps: &mut HashMap<Span, HashMap<String, Type>>,
+    moreta_sources: &mut HashMap<crate::types::MoretaId, MoretaSource>,
 ) -> Result<(), Error> {
     for declaration in &module.declarations {
         let Declaration::Mode(mode_def) = declaration else {
@@ -1327,8 +1340,10 @@ fn process_module_modes(
                 Type::Set(id)
             }
             crate::ast::ModeDefinitionBody::Moreta {
+                spec,
                 bases,
                 declarations,
+                invariant,
                 ..
             } => {
                 let mut base_ids = Vec::new();
@@ -1429,6 +1444,13 @@ fn process_module_modes(
                     }
                 }
                 let id = crate::types::MoretaId(table.moretas.len());
+                moreta_sources.insert(
+                    id,
+                    MoretaSource {
+                        declarations: declarations.clone(),
+                        invariant: invariant.clone(),
+                    },
+                );
                 table.moretas.push(crate::modes::MoretaMode {
                     name: mode_def.name.clone(),
                     package: top_package,
@@ -1436,6 +1458,7 @@ fn process_module_modes(
                     package_name: top_package_name.clone(),
                     module_name: module.name.clone(),
                     bases: base_ids,
+                    abstract_mode: *spec,
                     components,
                 });
                 Type::Moreta(id)
@@ -1466,6 +1489,7 @@ fn process_module_modes(
             &mut child_resolution,
             table,
             span_maps,
+            moreta_sources,
         )
     })
 }

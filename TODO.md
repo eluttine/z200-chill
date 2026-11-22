@@ -137,7 +137,11 @@ all existing tests pass with no new special cases.
       methods, non-value method actions, component `INIT` evaluation (including base
       initializers), `BASED_ON` inheritance/override, paired `MODULE SPEC`
       interfaces, and invariants.
-- [ ] Moreta constructors/destructors and task/region object modes; generic
+- [x] Consolidate the moreta subset: document semantics/limits, reject object
+      assignment, reject abstract-mode instantiation, check invariants after
+      initialization, merge spec/body invariants, and key moreta metadata by stable
+      mode ID.
+- [ ] Moreta constructors/destructors, `SELF`, task/region object modes; generic
       `SYN`/`PROC` parameters and region/process templates.
 - [ ] Processes/signals/timers: deferred pending a resumable/concurrent runtime.
 
