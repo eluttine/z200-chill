@@ -12,6 +12,7 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
@@ -212,6 +213,7 @@ pub fn run_checked(
             .collect(),
         process_id: usize::MAX,
         region_depths: HashMap::new(),
+        deadline: None,
         scheduler: Rc::clone(&scheduler),
         moreta_decls,
         moreta_invariants,
@@ -243,6 +245,16 @@ pub fn run_checked(
 
     drop(interpreter);
     loop {
+        expire_timed_waiters(&scheduler);
+        if scheduler.borrow().ready.is_empty() {
+            if let Some(deadline) = next_timed_deadline(&scheduler) {
+                let now = Instant::now();
+                if deadline > now {
+                    std::thread::sleep(deadline - now);
+                }
+                expire_timed_waiters(&scheduler);
+            }
+        }
         let Some(mut runnable) = scheduler.borrow_mut().ready.pop_front() else {
             break;
         };
@@ -253,25 +265,29 @@ pub fn run_checked(
                     input: ProcessInput::None,
                     entry: runnable.entry,
                 }),
-                ProcessYield::Delay { event, priority } => {
+                ProcessYield::Delay {
+                    event,
+                    priority,
+                    deadline,
+                } => {
                     scheduler
                         .borrow_mut()
                         .waiting
                         .entry(event)
                         .or_default()
-                        .push((priority, runnable.entry));
+                        .push((priority, deadline, runnable.entry));
                 }
-                ProcessYield::Receive { signals } => {
+                ProcessYield::Receive { signals, deadline } => {
                     let entry = runnable.entry;
                     let id = entry.id;
                     let slot = Rc::new(RefCell::new(Some(entry)));
                     let mut state = scheduler.borrow_mut();
                     for signal in signals {
-                        state
-                            .receivers
-                            .entry(signal.name)
-                            .or_default()
-                            .push((id, Rc::clone(&slot)));
+                        state.receivers.entry(signal.name).or_default().push((
+                            id,
+                            Rc::clone(&slot),
+                            deadline,
+                        ));
                     }
                 }
                 ProcessYield::AcquireRegion { region } => {
@@ -299,7 +315,7 @@ pub fn run_checked(
             .borrow()
             .receivers
             .values()
-            .any(|receivers| receivers.iter().any(|(_, slot)| slot.borrow().is_some()))
+            .any(|receivers| receivers.iter().any(|(_, slot, _)| slot.borrow().is_some()))
     {
         return Err(Error::coded(
             "E0500",
@@ -333,6 +349,7 @@ enum Value {
     Char(char),
     String(String),
     Bits(String),
+    Duration(i128),
     Ref(Option<usize>),
     Struct(Vec<(String, Value)>),
     Moreta(Vec<(String, Value)>),
@@ -412,9 +429,18 @@ struct ProcessRef<'a> {
 #[derive(Clone)]
 enum ProcessYield {
     Tick,
-    Delay { event: usize, priority: i128 },
-    Receive { signals: Vec<ReceiverSignal> },
-    AcquireRegion { region: usize },
+    Delay {
+        event: usize,
+        priority: i128,
+        deadline: Option<Instant>,
+    },
+    Receive {
+        signals: Vec<ReceiverSignal>,
+        deadline: Option<Instant>,
+    },
+    AcquireRegion {
+        region: usize,
+    },
 }
 
 #[derive(Clone)]
@@ -425,6 +451,7 @@ struct ReceiverSignal {
 #[derive(Clone)]
 enum ProcessInput {
     None,
+    Timeout,
     Signal { name: String, values: Vec<Value> },
 }
 
@@ -446,9 +473,9 @@ struct Runnable {
 struct ScheduleState {
     next_process_id: usize,
     ready: VecDeque<Runnable>,
-    waiting: HashMap<usize, Vec<(i128, ProcessEntry)>>,
+    waiting: HashMap<usize, Vec<(i128, Option<Instant>, ProcessEntry)>>,
     signals: HashMap<String, VecDeque<Vec<Value>>>,
-    receivers: HashMap<String, Vec<(usize, ReceiverSlot)>>,
+    receivers: HashMap<String, Vec<(usize, ReceiverSlot, Option<Instant>)>>,
     region_owner: HashMap<usize, usize>,
     region_waiters: HashMap<usize, Vec<ProcessEntry>>,
 }
@@ -470,7 +497,11 @@ fn cooperative_yield() {
     });
 }
 
-fn cooperative_delay(event: usize, priority: i128) -> Result<(), Error> {
+fn cooperative_delay(
+    event: usize,
+    priority: i128,
+    deadline: Option<Instant>,
+) -> Result<ProcessInput, Error> {
     CURRENT_YIELDER.with(|slot| {
         let ptr = slot.get();
         if ptr.is_null() {
@@ -480,10 +511,13 @@ fn cooperative_delay(event: usize, priority: i128) -> Result<(), Error> {
                 "DELAY is only valid inside a process",
             ));
         }
-        unsafe {
-            let _: ProcessInput = (*ptr).suspend(ProcessYield::Delay { event, priority });
-        }
-        Ok(())
+        Ok(unsafe {
+            (*ptr).suspend(ProcessYield::Delay {
+                event,
+                priority,
+                deadline,
+            })
+        })
     })
 }
 
@@ -504,7 +538,10 @@ fn cooperative_acquire_region(region: usize) -> Result<(), Error> {
     })
 }
 
-fn cooperative_receive(signals: Vec<String>) -> Result<ProcessInput, Error> {
+fn cooperative_receive(
+    signals: Vec<String>,
+    deadline: Option<Instant>,
+) -> Result<ProcessInput, Error> {
     CURRENT_YIELDER.with(|slot| {
         let ptr = slot.get();
         if ptr.is_null() {
@@ -520,9 +557,81 @@ fn cooperative_receive(signals: Vec<String>) -> Result<ProcessInput, Error> {
                     .into_iter()
                     .map(|name| ReceiverSignal { name })
                     .collect(),
+                deadline,
             })
         })
     })
+}
+
+fn next_timed_deadline(scheduler: &Rc<RefCell<ScheduleState>>) -> Option<Instant> {
+    let state = scheduler.borrow();
+    let waiting_deadline = state
+        .waiting
+        .values()
+        .flat_map(|waiting| waiting.iter().filter_map(|(_, deadline, _)| *deadline))
+        .min();
+    let receiver_deadline = state
+        .receivers
+        .values()
+        .flat_map(|receivers| receivers.iter().filter_map(|(_, _, deadline)| *deadline))
+        .min();
+    match (waiting_deadline, receiver_deadline) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
+    }
+}
+
+fn expire_timed_waiters(scheduler: &Rc<RefCell<ScheduleState>>) {
+    let now = Instant::now();
+    let mut expired = Vec::new();
+    let mut expired_ids = Vec::new();
+    let mut state = scheduler.borrow_mut();
+
+    for waiting in state.waiting.values_mut() {
+        let mut index = 0;
+        while index < waiting.len() {
+            let expired_entry = waiting[index].1.is_some_and(|deadline| deadline <= now);
+            if expired_entry {
+                let (_, _, entry) = waiting.remove(index);
+                expired.push(Runnable {
+                    input: ProcessInput::Timeout,
+                    entry,
+                });
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    for receivers in state.receivers.values_mut() {
+        let mut index = 0;
+        while index < receivers.len() {
+            let (id, slot, deadline) = &receivers[index];
+            let expired_entry =
+                deadline.is_some_and(|deadline| deadline <= now) && slot.borrow().is_some();
+            if expired_entry {
+                let id = *id;
+                let entry = receivers[index].1.borrow_mut().take();
+                receivers.remove(index);
+                expired_ids.push(id);
+                if let Some(entry) = entry {
+                    expired.push(Runnable {
+                        input: ProcessInput::Timeout,
+                        entry,
+                    });
+                }
+            } else {
+                index += 1;
+            }
+        }
+    }
+    for receivers in state.receivers.values_mut() {
+        receivers.retain(|(id, _, _)| !expired_ids.contains(id));
+    }
+    for runnable in expired {
+        state.ready.push_back(runnable);
+    }
 }
 
 #[derive(Clone, Default)]
@@ -550,6 +659,7 @@ enum Flow {
     Normal,
     Return,
     Stop,
+    Timeout,
     Exit(Option<String>),
 }
 
@@ -582,6 +692,7 @@ struct Interpreter<'a> {
     regions: HashSet<usize>,
     process_id: usize,
     region_depths: HashMap<usize, usize>,
+    deadline: Option<Instant>,
     scheduler: Rc<RefCell<ScheduleState>>,
     exprs: ir::ExprTable,
     bodies: ir::BodyTable,
@@ -1108,7 +1219,7 @@ impl<'a> Interpreter<'a> {
             result: None,
         };
         match self.exec_with_handler(module.span, &body, &mut frame)? {
-            Flow::Normal | Flow::Return | Flow::Stop | Flow::Exit(None) => Ok(()),
+            Flow::Normal | Flow::Return | Flow::Stop | Flow::Timeout | Flow::Exit(None) => Ok(()),
             Flow::Exit(Some(name)) => {
                 if module.name.as_deref() == Some(name.as_str()) {
                     Ok(())
@@ -1192,6 +1303,38 @@ impl<'a> Interpreter<'a> {
                 ir::Stmt::Call { call, .. } => {
                     self.eval_ir(call)?;
                 }
+                ir::Stmt::Timing {
+                    duration,
+                    body,
+                    timeout,
+                    span,
+                } => {
+                    let value = self.eval_ir(duration)?;
+                    let Value::Duration(milliseconds) = value else {
+                        return Err(Error::coded(
+                            "E0507",
+                            duration.span(),
+                            "AFTER requires a DURATION value",
+                        ));
+                    };
+                    let deadline = Instant::now()
+                        .checked_add(std::time::Duration::from_millis(milliseconds.max(0) as u64))
+                        .ok_or_else(|| Error::coded("E0502", *span, "duration is too large"))?;
+                    let previous = self.deadline;
+                    self.deadline = Some(deadline);
+                    let flow = self.exec_stmts(body, frame);
+                    self.deadline = previous;
+                    match flow? {
+                        Flow::Timeout => {
+                            let flow = self.exec_stmts(timeout, frame)?;
+                            if !matches!(flow, Flow::Normal) {
+                                return Ok(flow);
+                            }
+                        }
+                        Flow::Normal => {}
+                        flow => return Ok(flow),
+                    }
+                }
                 ir::Stmt::Stop { .. } => return Ok(Flow::Stop),
                 ir::Stmt::Delay {
                     event,
@@ -1230,7 +1373,12 @@ impl<'a> Interpreter<'a> {
                             ));
                         }
                     }
-                    cooperative_delay(key, priority)?;
+                    if matches!(
+                        cooperative_delay(key, priority, self.deadline)?,
+                        ProcessInput::Timeout
+                    ) {
+                        return Ok(Flow::Timeout);
+                    }
                 }
                 ir::Stmt::Continue { event, span } => {
                     let (key, _) = self.event_location(event, *span)?;
@@ -1247,7 +1395,7 @@ impl<'a> Interpreter<'a> {
                             best = index;
                         }
                     }
-                    let (_, entry) = waiting.remove(best);
+                    let (_, _, entry) = waiting.remove(best);
                     scheduler.ready.push_back(Runnable {
                         input: ProcessInput::None,
                         entry,
@@ -1281,15 +1429,15 @@ impl<'a> Interpreter<'a> {
                     let receiver = scheduler.receivers.get(signal).and_then(|receivers| {
                         receivers
                             .iter()
-                            .find(|(_, slot)| slot.borrow().is_some())
-                            .map(|(id, slot)| (*id, Rc::clone(slot)))
+                            .find(|(_, slot, _)| slot.borrow().is_some())
+                            .map(|(id, slot, _)| (*id, Rc::clone(slot)))
                     });
                     if let Some((id, slot)) = receiver {
                         let entry = slot.borrow_mut().take().ok_or_else(|| {
                             Error::coded("E0500", *span, "internal: signal receiver disappeared")
                         })?;
                         for receivers in scheduler.receivers.values_mut() {
-                            receivers.retain(|(receiver_id, _)| *receiver_id != id);
+                            receivers.retain(|(receiver_id, _, _)| *receiver_id != id);
                         }
                         scheduler.ready.push_back(Runnable {
                             input: ProcessInput::Signal {
@@ -1332,8 +1480,9 @@ impl<'a> Interpreter<'a> {
                             .iter()
                             .map(|alternative| alternative.signal.clone())
                             .collect();
-                        match cooperative_receive(names)? {
+                        match cooperative_receive(names, self.deadline)? {
                             ProcessInput::Signal { name, values } => (name, values),
+                            ProcessInput::Timeout => return Ok(Flow::Timeout),
                             ProcessInput::None => {
                                 return Err(Error::coded(
                                     "E0500",
@@ -2629,6 +2778,27 @@ impl<'a> Interpreter<'a> {
                         }
                         Ok(Value::Undefined)
                     }
+                    crate::builtins::Builtin::Duration(unit) => {
+                        let Some(value) = values.first() else {
+                            return Err(Error::coded(
+                                "E0507",
+                                *span,
+                                "duration built-in requires an argument",
+                            ));
+                        };
+                        let (value, _) = self.expect_int(value.clone(), *span)?;
+                        let multiplier = match unit {
+                            crate::builtins::DurationUnit::Milliseconds => 1,
+                            crate::builtins::DurationUnit::Seconds => 1_000,
+                            crate::builtins::DurationUnit::Minutes => 60_000,
+                            crate::builtins::DurationUnit::Hours => 3_600_000,
+                            crate::builtins::DurationUnit::Days => 86_400_000,
+                        };
+                        let milliseconds = value.checked_mul(multiplier).ok_or_else(|| {
+                            Error::coded("E0502", *span, "duration value overflow")
+                        })?;
+                        Ok(Value::Duration(milliseconds))
+                    }
                     crate::builtins::Builtin::Terminate => {
                         let Some(Value::Ref(reference)) = values.first() else {
                             return Err(Error::coded(
@@ -3446,7 +3616,7 @@ impl<'a> Interpreter<'a> {
         })?;
 
         match self.exec_with_handler(proc_def.span, &body, &mut frame)? {
-            Flow::Normal | Flow::Return | Flow::Stop | Flow::Exit(None) => (),
+            Flow::Normal | Flow::Return | Flow::Stop | Flow::Timeout | Flow::Exit(None) => (),
             Flow::Exit(Some(name)) => {
                 return Err(Error::coded(
                     "E0508",
@@ -3878,6 +4048,10 @@ impl<'a> Interpreter<'a> {
                 span,
                 "event locations do not have values",
             )),
+            Type::Duration => match value {
+                Value::Duration(value) => Ok(Value::Duration(value)),
+                _ => Err(Error::coded("E0507", span, "expected a DURATION value")),
+            },
             Type::Text { length, wide } => match value {
                 Value::String(value) => {
                     let actual = value.chars().count();
@@ -4769,6 +4943,7 @@ impl<'a> Interpreter<'a> {
             regions: self.regions.clone(),
             process_id: usize::MAX,
             region_depths: HashMap::new(),
+            deadline: None,
             scheduler: Rc::clone(&self.scheduler),
             moreta_decls: self.moreta_decls.clone(),
             moreta_invariants: self.moreta_invariants.clone(),
@@ -4807,7 +4982,9 @@ impl<'a> Interpreter<'a> {
                 result: None,
             };
             match self.exec_with_handler(def.span, &body, &mut frame)? {
-                Flow::Normal | Flow::Return | Flow::Stop | Flow::Exit(None) => Ok(()),
+                Flow::Normal | Flow::Return | Flow::Stop | Flow::Timeout | Flow::Exit(None) => {
+                    Ok(())
+                }
                 Flow::Exit(Some(name)) => Err(Error::coded(
                     "E0508",
                     def.span,

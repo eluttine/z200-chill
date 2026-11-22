@@ -359,6 +359,12 @@ pub enum Stmt {
         else_actions: Option<Vec<Stmt>>,
         span: Span,
     },
+    Timing {
+        duration: Node,
+        body: Vec<Stmt>,
+        timeout: Vec<Stmt>,
+        span: Span,
+    },
     Return {
         value: Option<Node>,
         span: Span,
@@ -689,6 +695,18 @@ impl Lowerer<'_> {
                     .iter()
                     .map(|value| self.lower_expr(value))
                     .collect::<Result<Vec<_>, _>>()?,
+                span: *span,
+            }),
+            Action::Timing {
+                duration,
+                body,
+                timeout,
+                span,
+                ..
+            } => Ok(Stmt::Timing {
+                duration: self.lower_expr(duration)?,
+                body: self.lower_actions(body)?,
+                timeout: self.lower_actions(timeout)?,
                 span: *span,
             }),
             Action::ReceiveCase {

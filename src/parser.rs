@@ -1883,6 +1883,31 @@ impl<'a> Parser<'a> {
                 })
             }
             Some(TokenKind::Keyword(Keyword::Receive)) => self.parse_receive_case(),
+            Some(TokenKind::Keyword(Keyword::After)) => {
+                let start = self.current_span();
+                self.advance();
+                let duration = self.parse_unary()?;
+                let delay = if self.at_keyword(Keyword::Delay) {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
+                self.expect_keyword(Keyword::In)?;
+                let body = self.parse_actions_until(&[Keyword::Timeout])?;
+                self.expect_keyword(Keyword::Timeout)?;
+                let timeout = self.parse_actions_until(&[Keyword::End])?;
+                self.expect_keyword(Keyword::End)?;
+                let end = self.expect_semicolon()?;
+                let span = Span::new(self.source, start.start, end.end);
+                Ok(Action::Timing {
+                    duration,
+                    delay,
+                    body,
+                    timeout,
+                    span,
+                })
+            }
             Some(TokenKind::Semicolon) => {
                 let span = self.current_span();
                 self.advance();

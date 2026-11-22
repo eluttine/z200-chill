@@ -180,8 +180,11 @@ deferred.
       including queued callers and per-process reentrancy.
 - [x] Fixed control-flow continuation so actions after `IF`, `DO`, `CASE`, `BEGIN`,
       labelled actions, and handled actions are executed.
-- [ ] Timer-based delays/timeouts, `DELAY CASE`, signal `TO` targeting, receive `SET`
-      instance locations, buffer modes, region/task object modes, process
+- [x] `DURATION` values, duration built-ins, relative `AFTER ... [DELAY] IN ...
+      TIMEOUT ... END` timing actions, scheduler deadlines, and timeout cancellation of
+      blocking `DELAY`/`RECEIVE` waits.
+- [ ] Absolute/cyclic timing actions, `DELAY CASE`, signal `TO` targeting, receive
+      `SET` instance locations, buffer modes, region/task object modes, process
       handlers/instances, and process `LOC`/`OUT`/`INOUT` parameters.
 
 ## 8. Cleanup

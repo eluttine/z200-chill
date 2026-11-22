@@ -2047,6 +2047,32 @@ impl Checker {
                 }
                 Ok(())
             }
+            Action::Timing {
+                duration,
+                delay,
+                body,
+                timeout,
+                span,
+            } => {
+                let ty = self.check_expr(duration)?;
+                if ty != Type::Duration {
+                    return Err(Error::coded(
+                        "E0404",
+                        duration.span(),
+                        format!("AFTER requires a DURATION, found {}", ty.describe()),
+                    ));
+                }
+                if *delay && body.len() != 1 {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        "AFTER ... DELAY IN requires exactly one action",
+                    ));
+                }
+                self.check_actions(body)?;
+                self.check_actions(timeout)?;
+                Ok(())
+            }
             Action::ReceiveCase {
                 alternatives,
                 else_actions,
@@ -3499,6 +3525,24 @@ impl Checker {
                     }
                     Some(Type::String)
                 }
+                crate::builtins::Builtin::Duration(_) => {
+                    if args.len() != 1 {
+                        return Err(Error::coded(
+                            "E0400",
+                            span,
+                            "duration built-in takes exactly one argument",
+                        ));
+                    }
+                    let ty = self.check_expr(&args[0])?;
+                    if !ty.is_int() {
+                        return Err(Error::coded(
+                            "E0404",
+                            args[0].span(),
+                            format!("duration requires an integer, found {}", ty.describe()),
+                        ));
+                    }
+                    Some(Type::Duration)
+                }
                 crate::builtins::Builtin::Terminate => {
                     if args.len() != 1 {
                         return Err(Error::coded(
@@ -3937,6 +3981,7 @@ impl Checker {
             Type::Text { wide: true, .. } => is_wide_string_type(value),
             Type::Text { wide: false, .. } => is_narrow_string_type(value),
             Type::Event { .. } => false,
+            Type::Duration => value == Type::Duration,
             Type::Bits => is_bits_type(value),
             Type::BoundedBits { .. } => is_bits_type(value),
             Type::Ref(target) => {

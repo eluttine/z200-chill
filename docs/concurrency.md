@@ -19,6 +19,11 @@
   per-region lock. A second process attempting a region call is queued until the
   current owner releases the region.
 - Region locks are reentrant for the owning process and queued calls resume FIFO.
+- `DURATION` values and `MILLISECS`, `SECS`, `MINUTES`, `HOURS`, `DAYS` built-ins.
+- Relative timing actions:
+  `AFTER duration [DELAY] IN actions TIMEOUT actions END`.
+- Timers are checked when a process blocks in `DELAY` or `RECEIVE CASE`; expiry
+  aborts that wait and runs the `TIMEOUT` handler.
 - Events wake the highest-priority delayed process; equal priorities use FIFO order.
 - Event lengths are enforced and raise `DELAYFAIL`.
 - A scheduler run with only delayed processes reports a deadlock.
@@ -36,8 +41,8 @@
 
 ## Not implemented yet
 
-- timer-based delay (`DELAY` currently waits for an `EVENT`, not a timer).
-- `DELAY CASE`, timeout supervision, and `TIMEOUT`.
+- `AT` absolute timing actions and `CYCLE` periodic timing actions.
+- `DELAY CASE` and timeout supervision for region calls.
 - `SEND ... TO` process targeting and process instance values.
 - `RECEIVE CASE SET` instance locations.
 - signal priorities.

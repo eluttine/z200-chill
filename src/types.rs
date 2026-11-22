@@ -89,6 +89,7 @@ impl ArrayElement {
             | Type::ArrayTuple
             | Type::Text { .. }
             | Type::Event { .. }
+            | Type::Duration
             | Type::Ref(_)
             | Type::Ptr
             | Type::Row(_)
@@ -232,6 +233,7 @@ impl RefTarget {
             Type::IntLiteral
             | Type::ArrayTuple
             | Type::Event { .. }
+            | Type::Duration
             | Type::Null
             | Type::Ref(_)
             | Type::Ptr
@@ -310,6 +312,8 @@ pub enum Type {
     Event {
         length: Option<usize>,
     },
+    /// A duration value, represented in milliseconds.
+    Duration,
     /// A bound reference mode `REF M`.
     Ref(RefTarget),
     /// The free reference mode `PTR`.
@@ -384,6 +388,7 @@ impl Type {
             | Self::ArrayTuple
             | Self::Text { .. }
             | Self::Event { .. }
+            | Self::Duration
             | Self::Ref(_)
             | Self::Ptr
             | Self::Row(_)
@@ -427,6 +432,7 @@ impl Type {
             Self::Text { wide: true, .. } => "wide text",
             Self::Text { .. } => "text",
             Self::Event { .. } => "event",
+            Self::Duration => "duration",
             Self::Ref(target) => match target {
                 RefTarget::Struct(_) => "bound reference",
                 _ => "bound reference",
@@ -464,6 +470,7 @@ pub fn resolve_mode(name: &str) -> Option<Type> {
         "TEXT" => Some(Type::String),
         "WTEXT" => Some(Type::WString),
         "EVENT" => Some(Type::Event { length: None }),
+        "DURATION" => Some(Type::Duration),
         "PTR" => Some(Type::Ptr),
         "ASSOCIATION" => Some(Type::Association),
         _ => None,

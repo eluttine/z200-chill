@@ -419,6 +419,13 @@ pub enum Action {
         else_actions: Option<Vec<Action>>,
         span: Span,
     },
+    Timing {
+        duration: Expr,
+        delay: bool,
+        body: Vec<Action>,
+        timeout: Vec<Action>,
+        span: Span,
+    },
     Return {
         value: Option<Expr>,
         span: Span,
@@ -681,6 +688,7 @@ impl Action {
             | Self::Continue { span, .. }
             | Self::Send { span, .. }
             | Self::ReceiveCase { span, .. }
+            | Self::Timing { span, .. }
             | Self::Return { span, .. }
             | Self::Result { span, .. }
             | Self::If { span, .. }

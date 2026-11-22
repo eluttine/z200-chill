@@ -53,10 +53,10 @@ Current scope includes:
 
 Explicitly **deferred**:
 
-- timer-based `DELAY`/timeouts, delay cases, signal `TO` targeting, receive `SET`
-  instance locations, buffer modes, process instances/`THIS`, process handlers,
-  process `LOC`/`OUT`/`INOUT` parameters, region object/task modes, and priority
-  scheduling;
+- absolute/cyclic timing actions and `DELAY CASE`;
+- signal `TO` targeting, receive `SET` instance locations, buffer modes, process
+  instances/`THIS`, process handlers, process `LOC`/`OUT`/`INOUT` parameters,
+  region object/task modes, and priority scheduling;
 - general reference targets beyond simple variables and whole allocated locations;
 - constructors/destructors, `SELF`, task/region object modes, and the rest of moreta;
 - generic region/process templates;

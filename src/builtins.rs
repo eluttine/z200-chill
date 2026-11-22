@@ -18,6 +18,17 @@ pub enum Builtin {
     ReadLine,
     /// End the lifetime of an allocated location.
     Terminate,
+    /// Implementation-defined duration built-ins.
+    Duration(DurationUnit),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurationUnit {
+    Milliseconds,
+    Seconds,
+    Minutes,
+    Hours,
+    Days,
 }
 
 pub fn lookup(name: &str) -> Option<Builtin> {
@@ -26,6 +37,11 @@ pub fn lookup(name: &str) -> Option<Builtin> {
         "WRITELINE" => Some(Builtin::WriteLine),
         "READLINE" => Some(Builtin::ReadLine),
         "TERMINATE" => Some(Builtin::Terminate),
+        "MILLISECS" => Some(Builtin::Duration(DurationUnit::Milliseconds)),
+        "SECS" => Some(Builtin::Duration(DurationUnit::Seconds)),
+        "MINUTES" => Some(Builtin::Duration(DurationUnit::Minutes)),
+        "HOURS" => Some(Builtin::Duration(DurationUnit::Hours)),
+        "DAYS" => Some(Builtin::Duration(DurationUnit::Days)),
         _ => None,
     }
 }

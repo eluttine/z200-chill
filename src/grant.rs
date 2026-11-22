@@ -833,6 +833,7 @@ fn type_name(ty: Type) -> String {
             length: Some(length),
         } => format!("EVENT({length})"),
         Type::Event { length: None } => "EVENT".to_owned(),
+        Type::Duration => "DURATION".to_owned(),
         Type::Bits => "BOOLS".to_owned(),
         Type::BoundedBits {
             length,
