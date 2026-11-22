@@ -141,6 +141,13 @@ pub enum Expr {
         ty: Type,
         span: Span,
     },
+    MethodCall {
+        object: String,
+        proc_span: Span,
+        args: Vec<Node>,
+        ty: Option<Type>,
+        span: Span,
+    },
     Association {
         op: crate::builtins::AssociationOp,
         first: String,
@@ -176,6 +183,7 @@ impl Expr {
             | Self::ArraySliceDynamic { span, .. }
             | Self::LabelledArrayLiteral { span, .. }
             | Self::PowerSetLiteral { span, .. }
+            | Self::MethodCall { span, .. }
             | Self::Association { span, .. } => *span,
         }
     }
@@ -203,6 +211,7 @@ impl Expr {
                 element: *element,
             }),
             Self::PowerSetLiteral { ty, .. } => Some(*ty),
+            Self::MethodCall { ty, .. } => *ty,
             Self::Call { ty, .. } | Self::Builtin { ty, .. } | Self::Association { ty, .. } => *ty,
             Self::TextIo { .. } => None,
         }
@@ -475,9 +484,15 @@ impl Lowerer<'_> {
                         self.bodies.insert_handler(proc_def.span, handler);
                     }
                 }
+                Declaration::Mode(mode_def) => {
+                    if let crate::ast::ModeDefinitionBody::Moreta { declarations, .. } =
+                        &mode_def.body
+                    {
+                        self.lower_declarations(declarations)?;
+                    }
+                }
                 Declaration::ProcSignature(_)
                 | Declaration::Visibility(_)
-                | Declaration::Mode(_)
                 | Declaration::SpecModule(_)
                 | Declaration::GenericProc(_)
                 | Declaration::GenericProcInstance(_) => {}
@@ -980,6 +995,9 @@ impl Lowerer<'_> {
                 Some(ApplyResolution::SetElement { .. }) => {
                     return Err(Error::new(span, "internal: set element used as a call"));
                 }
+                Some(ApplyResolution::Method { .. }) => {
+                    return Err(Error::new(span, "internal: method call used as an apply"));
+                }
                 None => {
                     return Err(Error::new(span, "internal: call/apply has no resolution"));
                 }
@@ -1113,6 +1131,38 @@ impl Lowerer<'_> {
                         return Err(Error::new(*slice_span, "internal: slice is not an array"));
                     }
                 }
+            }
+            AstExpr::MethodCall {
+                base,
+                args,
+                span: call_span,
+                ..
+            } => {
+                let AstExpr::Name { name: object, .. } = base.as_ref() else {
+                    return Err(Error::new(
+                        base.span(),
+                        "internal: method call object is not a name",
+                    ));
+                };
+                let Some(ApplyResolution::Method { proc_span, result }) =
+                    self.check.resolutions.get(call_span)
+                else {
+                    return Err(Error::new(
+                        *call_span,
+                        "internal: method call has no resolution",
+                    ));
+                };
+                let args = args
+                    .iter()
+                    .map(|arg| self.lower_expr(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Rc::new(Expr::MethodCall {
+                    object: object.clone(),
+                    proc_span: *proc_span,
+                    args,
+                    ty: *result,
+                    span: *call_span,
+                })
             }
             AstExpr::Field { base, field, .. } => Rc::new(Expr::Field {
                 base: self.lower_expr(base)?,

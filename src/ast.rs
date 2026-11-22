@@ -495,6 +495,13 @@ pub enum Expr {
         elements: Vec<ArrayTupleElement>,
         span: Span,
     },
+    /// A component procedure call `object.method(...)`.
+    MethodCall {
+        base: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
     /// An array slice: `a(lower : upper)` or `a(first UP size)`.
     ArraySlice {
         name: String,
@@ -520,7 +527,8 @@ impl Expr {
             | Self::Binary { span, .. }
             | Self::Field { span, .. }
             | Self::ArrayTuple { span, .. }
-            | Self::ArraySlice { span, .. } => *span,
+            | Self::ArraySlice { span, .. }
+            | Self::MethodCall { span, .. } => *span,
         }
     }
 }

@@ -1976,6 +1976,29 @@ impl<'a> Parser<'a> {
                 span,
             };
         }
+        if self.at_lparen() {
+            if let Expr::Field { base, field, span } = expr {
+                self.advance();
+                let mut args = Vec::new();
+                if !self.at_rparen() {
+                    loop {
+                        args.push(self.parse_expr()?);
+                        if self.at_comma() {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                let end = self.expect_rparen()?;
+                return Ok(Expr::MethodCall {
+                    base,
+                    method: field,
+                    args,
+                    span: Span::new(self.source, span.start, end.end),
+                });
+            }
+        }
         Ok(expr)
     }
 

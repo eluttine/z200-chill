@@ -218,6 +218,7 @@ pub fn run_checked(
         module_modes,
         reaches: info.reaches,
         modules_by_span: collect_modules_by_span(&program),
+        proc_defs: collect_proc_defs(&program),
         package_names: program
             .modules
             .iter()
@@ -363,6 +364,7 @@ struct Interpreter<'a> {
     module_modes: Vec<HashMap<String, Type>>,
     reaches: program::ReachTree,
     modules_by_span: HashMap<Span, &'a Module>,
+    proc_defs: HashMap<Span, &'a ProcDef>,
     package_names: Vec<Option<String>>,
     /// Scopes for nested modules declared in a module body, keyed by span.
     nested_scopes: HashMap<Span, Scope<'a>>,
@@ -2038,6 +2040,19 @@ impl<'a> Interpreter<'a> {
                     values: lowered,
                 })
             }
+            ir::Expr::MethodCall {
+                object,
+                proc_span,
+                args,
+                span,
+                ..
+            } => {
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval_ir(arg)?);
+                }
+                self.call_method(object, *proc_span, values, *span)
+            }
             ir::Expr::Association {
                 op,
                 first,
@@ -2234,6 +2249,76 @@ impl<'a> Interpreter<'a> {
                 }
             },
         }
+    }
+
+    fn call_method(
+        &mut self,
+        object_name: &str,
+        proc_span: Span,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, Error> {
+        if self.depth >= 1024 {
+            return Err(Error::new(span, "call depth limit exceeded"));
+        }
+        let object_ty = self
+            .find_var_cell(object_name)
+            .map(|cell| cell.borrow().ty)
+            .ok_or_else(|| Error::new(span, format!("unknown variable `{object_name}`")))?;
+        let Type::Moreta(id) = object_ty else {
+            return Err(Error::new(
+                span,
+                "method call requires a module-mode object",
+            ));
+        };
+        let object = self.read_var(object_name, span)?;
+        let Value::Moreta(components) = object else {
+            return Err(Error::new(span, "expected a module-mode object"));
+        };
+        let proc_def = self
+            .proc_defs
+            .get(&proc_span)
+            .copied()
+            .ok_or_else(|| Error::new(proc_span, "internal: missing method definition"))?;
+
+        self.locals.push(Scope::default());
+        self.call_bases.push(self.locals.len() - 1);
+        self.depth += 1;
+        {
+            let scope = self.locals.last_mut().expect("method scope");
+            for component in &self.modes.get_moreta(id).components {
+                if let crate::modes::MoretaComponent::Var { name, ty } = component {
+                    let value = components
+                        .iter()
+                        .find(|(component, _)| component == name)
+                        .map(|(_, value)| value.clone())
+                        .unwrap_or_else(|| default_value(&self.modes, *ty));
+                    scope
+                        .vars
+                        .insert(name.clone(), Rc::new(RefCell::new(Var { ty: *ty, value })));
+                }
+            }
+        }
+        let result = self.call_proc_inner(proc_def, args, span);
+        self.depth -= 1;
+        self.call_bases.pop();
+        let updated = if result.is_ok() {
+            let mut updated = components;
+            let scope = self.locals.last().expect("method scope");
+            for (name, value) in &mut updated {
+                if let Some(cell) = scope.vars.get(name) {
+                    *value = cell.borrow().value.clone();
+                }
+            }
+            Some(Value::Moreta(updated))
+        } else {
+            None
+        };
+        self.locals.pop();
+        if let Some(updated) = updated {
+            self.assign_var(object_name, updated, span)?;
+        }
+        result
     }
 
     fn call_proc(
@@ -3068,6 +3153,42 @@ fn collect_modules_by_span(program: &Program) -> HashMap<Span, &Module> {
         collect_module_span(module, &mut map);
     }
     map
+}
+
+fn collect_proc_defs(program: &Program) -> HashMap<Span, &ProcDef> {
+    let mut map = HashMap::new();
+    for module in &program.modules {
+        collect_module_procs(module, &mut map);
+    }
+    map
+}
+
+fn collect_module_procs<'a>(module: &'a Module, map: &mut HashMap<Span, &'a ProcDef>) {
+    collect_declaration_procs(&module.declarations, map);
+    walk_action_modules(&module.actions, &mut |child| {
+        collect_module_procs(child, map);
+    });
+}
+
+fn collect_declaration_procs<'a>(
+    declarations: &'a [Declaration],
+    map: &mut HashMap<Span, &'a ProcDef>,
+) {
+    for declaration in declarations {
+        match declaration {
+            Declaration::Proc(proc_def) => {
+                map.insert(proc_def.span, proc_def);
+                collect_declaration_procs(&proc_def.declarations, map);
+            }
+            Declaration::Mode(mode_def) => {
+                if let crate::ast::ModeDefinitionBody::Moreta { declarations, .. } = &mode_def.body
+                {
+                    collect_declaration_procs(declarations, map);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn collect_module_span<'a>(module: &'a Module, map: &mut HashMap<Span, &'a Module>) {
@@ -3928,7 +4049,12 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
                 .get_moreta(id)
                 .components
                 .iter()
-                .map(|(name, ty)| (name.clone(), default_value(modes, *ty)))
+                .filter_map(|component| match component {
+                    crate::modes::MoretaComponent::Var { name, ty } => {
+                        Some((name.clone(), default_value(modes, *ty)))
+                    }
+                    crate::modes::MoretaComponent::Proc { .. } => None,
+                })
                 .collect(),
         ),
         Type::Array(array) => {

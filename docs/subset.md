@@ -627,11 +627,16 @@ ASSERT p.x = 1;
 ```
 
 - Each object has its own variable components.
-- Components are accessed and assigned with `.`.
-- Component modes are resolved when the module mode is defined.
+- Variable components are accessed and assigned with `.`.
+- Procedure components may be defined and called as value-returning methods:
+  ```chill
+  ASSERT counter.Inc(2) = 3;
+  ```
+- Method bodies see the object's components; mutations are written back to the object.
+- Component modes/signatures are resolved when the module mode is defined.
 - Whole-object assignment uses value-copy semantics.
 
-Not implemented yet: module mode specifications, procedure components/methods,
+Not implemented yet: module mode specifications, non-value method calls as actions,
 inheritance, invariants, component `INIT` evaluation, and object constructors.
 
 ## 7. Modules and visibility

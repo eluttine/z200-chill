@@ -99,6 +99,10 @@ pub enum ApplyResolution {
         ty: Type,
         value: i128,
     },
+    Method {
+        proc_span: Span,
+        result: Option<Type>,
+    },
 }
 
 /// The checker's result: diagnostics plus expression annotations that the
@@ -1003,6 +1007,52 @@ impl Checker {
                     self.declare_proc(&signature.name, proc_sig, signature.span)?;
                 }
                 Declaration::Mode(mode_def) => {
+                    if let ModeDefinitionBody::Moreta { declarations, .. } = &mode_def.body {
+                        let mode_ref = ModeRef {
+                            name: mode_def.name.clone(),
+                            arrays: Vec::new(),
+                            string_length: None,
+                            varying: false,
+                            access: false,
+                            powerset: false,
+                            access_indexed: false,
+                            access_index: None,
+                            span: mode_def.span,
+                        };
+                        let Type::Moreta(id) = self.resolve_mode(&mode_ref)? else {
+                            return Err(Error::new(
+                                mode_def.span,
+                                "internal: module mode has wrong type",
+                            ));
+                        };
+                        let mut component_scope = Scope::default();
+                        for component in &self.modes.get_moreta(id).components {
+                            match component {
+                                crate::modes::MoretaComponent::Var { name, ty } => {
+                                    component_scope.vars.insert(name.clone(), *ty);
+                                }
+                                crate::modes::MoretaComponent::Proc {
+                                    name, signature, ..
+                                } => {
+                                    component_scope
+                                        .procs
+                                        .insert(name.clone(), signature.clone());
+                                }
+                            }
+                        }
+                        self.scopes.push(component_scope);
+                        let result = (|| {
+                            for declaration in declarations {
+                                if let Declaration::Proc(proc_def) = declaration {
+                                    self.check_proc(proc_def)?;
+                                }
+                            }
+                            Ok(())
+                        })();
+                        self.scopes.pop();
+                        result?;
+                        continue;
+                    }
                     let ModeDefinitionBody::Set(elements) = &mode_def.body else {
                         continue;
                     };
@@ -1805,16 +1855,16 @@ impl Checker {
     fn check_field(&mut self, base: &Expr, field: &str, span: Span) -> Result<Type, Error> {
         let base_ty = self.check_expr(base)?;
         if let Type::Moreta(id) = base_ty {
-            let Some((_, ty)) = self.modes.moreta_component(id, field) else {
+            let Some(ty) = self.modes.moreta_var(id, field) else {
                 return Err(Error::new(
                     span,
                     format!(
-                        "unknown component `{field}` in module mode `{}`",
+                        "unknown variable component `{field}` in module mode `{}`",
                         self.modes.get_moreta(id).name
                     ),
                 ));
             };
-            return Ok(*ty);
+            return Ok(ty);
         }
 
         let Type::Struct(id) = base_ty else {
@@ -1989,6 +2039,62 @@ impl Checker {
                 self.check_binary_types(*op, left_ty, right_ty, *span)
             }
             Expr::Field { base, field, span } => self.check_field(base, field, *span),
+            Expr::MethodCall {
+                base,
+                method,
+                args,
+                span,
+            } => {
+                let Expr::Name {
+                    span: name_span, ..
+                } = base.as_ref()
+                else {
+                    return Err(Error::new(
+                        base.span(),
+                        "module-mode method calls currently require a named object",
+                    ));
+                };
+                let base_ty = self.check_expr(base)?;
+                let Type::Moreta(id) = base_ty else {
+                    return Err(Error::new(
+                        *name_span,
+                        "method call requires a module-mode object",
+                    ));
+                };
+                let Some((signature, proc_span)) = self.modes.moreta_proc(id, method) else {
+                    return Err(Error::new(
+                        *span,
+                        format!("unknown procedure component `{method}`"),
+                    ));
+                };
+                if signature.params.len() != args.len() {
+                    return Err(Error::new(
+                        *span,
+                        format!(
+                            "procedure component `{method}` expects {} argument(s), found {}",
+                            signature.params.len(),
+                            args.len()
+                        ),
+                    ));
+                }
+                for (arg, param_ty) in args.iter().zip(&signature.params) {
+                    let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
+                    self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
+                }
+                self.resolutions.insert(
+                    *span,
+                    ApplyResolution::Method {
+                        proc_span,
+                        result: signature.result,
+                    },
+                );
+                signature.result.ok_or_else(|| {
+                    Error::new(
+                        *span,
+                        format!("procedure component `{method}` does not return a value"),
+                    )
+                })
+            }
             Expr::ArraySlice {
                 name,
                 first,

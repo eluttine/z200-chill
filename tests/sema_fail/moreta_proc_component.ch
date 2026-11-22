@@ -1,6 +1,0 @@
-M: MODULE
-  NEWMODE Bad = MODULE BODY
-    P: PROC ();
-    END P;
-  END Bad;
-END M;

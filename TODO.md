@@ -131,8 +131,9 @@ all existing tests pass with no new special cases.
       `name: PROC = NEW template (modes) END;` instantiation.
 - [x] Generic module templates parameterized by `MODE`, with
       `name: MODULE = NEW template (modes) END;` instantiation.
-- [x] Minimal moreta module-body modes with variable components.
-- [ ] Moreta specs, procedure components/methods, inheritance, and initializers;
+- [x] Moreta module-body objects with variable and procedure components, including
+      value-returning method calls.
+- [ ] Moreta specs, non-value method actions, inheritance, and component initializers;
       generic `SYN`/`PROC` parameters and region/process templates.
 - [ ] Processes/signals/timers: deferred pending a resumable/concurrent runtime.
 

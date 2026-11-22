@@ -1149,21 +1149,66 @@ fn process_module_modes(
                 let mut components = Vec::new();
                 let mut seen = HashSet::new();
                 for declaration in declarations {
-                    let Declaration::Var(vars) = declaration else {
-                        return Err(Error::new(
-                            mode_def.span,
-                            "only variable components are implemented for module modes",
-                        ));
-                    };
-                    for var in vars {
-                        let ty = resolve_mode_with(&var.mode, resolution)?;
-                        if !seen.insert(var.name.clone()) {
+                    match declaration {
+                        Declaration::Var(vars) => {
+                            for var in vars {
+                                let ty = resolve_mode_with(&var.mode, resolution)?;
+                                if !seen.insert(var.name.clone()) {
+                                    return Err(Error::new(
+                                        var.span,
+                                        format!("duplicate component `{}`", var.name),
+                                    ));
+                                }
+                                components.push(crate::modes::MoretaComponent::Var {
+                                    name: var.name.clone(),
+                                    ty,
+                                });
+                            }
+                        }
+                        Declaration::Proc(proc_def) => {
+                            let signature = signature_from_params_with(
+                                &proc_def.params,
+                                &proc_def.result,
+                                &proc_def.exceptions,
+                                resolution,
+                            )?;
+                            if !seen.insert(proc_def.name.clone()) {
+                                return Err(Error::new(
+                                    proc_def.span,
+                                    format!("duplicate component `{}`", proc_def.name),
+                                ));
+                            }
+                            components.push(crate::modes::MoretaComponent::Proc {
+                                name: proc_def.name.clone(),
+                                signature,
+                                span: proc_def.span,
+                            });
+                        }
+                        Declaration::ProcSignature(signature) => {
+                            let ty = signature_from_params_with(
+                                &signature.params,
+                                &signature.result,
+                                &signature.exceptions,
+                                resolution,
+                            )?;
+                            if !seen.insert(signature.name.clone()) {
+                                return Err(Error::new(
+                                    signature.span,
+                                    format!("duplicate component `{}`", signature.name),
+                                ));
+                            }
+                            components.push(crate::modes::MoretaComponent::Proc {
+                                name: signature.name.clone(),
+                                signature: ty,
+                                span: signature.span,
+                            });
+                        }
+                        _ => {
                             return Err(Error::new(
-                                var.span,
-                                format!("duplicate component `{}`", var.name),
+                                mode_def.span,
+                                "unsupported module mode component",
                             ));
                         }
-                        components.push((var.name.clone(), ty));
                     }
                 }
                 let id = crate::types::MoretaId(table.moretas.len());

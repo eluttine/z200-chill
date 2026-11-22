@@ -1,4 +1,4 @@
-use crate::types::{ModeId, MoretaId, SetId, Type};
+use crate::types::{ModeId, MoretaId, ProcType, SetId, Type};
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
@@ -40,13 +40,34 @@ pub fn mode_symbol(package: Option<&str>, module: Option<&str>, name: &str) -> S
 }
 
 #[derive(Debug, Clone)]
+pub enum MoretaComponent {
+    Var {
+        name: String,
+        ty: Type,
+    },
+    Proc {
+        name: String,
+        signature: ProcType,
+        span: crate::lexer::Span,
+    },
+}
+
+impl MoretaComponent {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Var { name, .. } | Self::Proc { name, .. } => name,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct MoretaMode {
     pub name: String,
     pub package: usize,
     pub module: usize,
     pub package_name: Option<String>,
     pub module_name: Option<String>,
-    pub components: Vec<(String, Type)>,
+    pub components: Vec<MoretaComponent>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,11 +100,27 @@ impl ModeTable {
         &self.moretas[id.0]
     }
 
-    pub fn moreta_component(&self, id: MoretaId, name: &str) -> Option<&(String, Type)> {
+    pub fn moreta_component(&self, id: MoretaId, name: &str) -> Option<&MoretaComponent> {
         self.get_moreta(id)
             .components
             .iter()
-            .find(|(component, _)| component == name)
+            .find(|component| component.name() == name)
+    }
+
+    pub fn moreta_var(&self, id: MoretaId, name: &str) -> Option<Type> {
+        match self.moreta_component(id, name)? {
+            MoretaComponent::Var { ty, .. } => Some(*ty),
+            MoretaComponent::Proc { .. } => None,
+        }
+    }
+
+    pub fn moreta_proc(&self, id: MoretaId, name: &str) -> Option<(ProcType, crate::lexer::Span)> {
+        match self.moreta_component(id, name)? {
+            MoretaComponent::Proc {
+                signature, span, ..
+            } => Some((signature.clone(), *span)),
+            MoretaComponent::Var { .. } => None,
+        }
     }
 
     pub fn get_set(&self, id: SetId) -> &SetMode {
