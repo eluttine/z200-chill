@@ -953,15 +953,16 @@ impl<'a> Parser<'a> {
             } else {
                 Vec::new()
             };
-            if self.at_keyword(Keyword::To) {
-                return Err(self.error_here_code(
-                    "E0205",
-                    "signal TO process targeting is not implemented yet",
-                ));
-            }
+            let to_process = if self.at_keyword(Keyword::To) {
+                self.advance();
+                Some(self.expect_identifier()?.0)
+            } else {
+                None
+            };
             signals.push(SignalDef {
                 name,
                 modes,
+                to_process,
                 span: Span::new(self.source, name_span.start, self.current_span().start),
             });
             if self.at_comma() {

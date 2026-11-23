@@ -212,6 +212,7 @@ pub fn run_checked(
             .map(|(index, _)| index)
             .collect(),
         process_id: usize::MAX,
+        process_name: String::new(),
         region_depths: HashMap::new(),
         deadline: None,
         scheduler: Rc::clone(&scheduler),
@@ -571,6 +572,7 @@ struct EventWaiter {
 
 struct SignalMessage {
     target: Option<usize>,
+    allowed_process: Option<String>,
     sender: usize,
     priority: i128,
     values: Vec<Value>,
@@ -619,6 +621,7 @@ struct ScheduleState {
     next_process_id: usize,
     ready: VecDeque<Runnable>,
     live_processes: HashSet<usize>,
+    process_names: HashMap<usize, String>,
     event_waiters: HashMap<usize, Vec<EventWaiter>>,
     signals: HashMap<String, VecDeque<SignalMessage>>,
     receivers: HashMap<String, Vec<(usize, ReceiverSlot, Option<Instant>)>>,
@@ -918,6 +921,7 @@ struct Scope<'a> {
     procs: HashMap<String, ProcRef<'a>>,
     processes: HashMap<String, ProcessRef<'a>>,
     signals: HashMap<String, Vec<Type>>,
+    signal_targets: HashMap<String, Option<String>>,
     modes: HashMap<String, Type>,
     /// Names granted into this reach by directly enclosed modules.
     exports: HashMap<String, Vec<ReachBinding<'a>>>,
@@ -969,6 +973,7 @@ struct Interpreter<'a> {
     process_defs: HashMap<Span, &'a ProcessDef>,
     regions: HashSet<usize>,
     process_id: usize,
+    process_name: String,
     region_depths: HashMap<usize, usize>,
     deadline: Option<Instant>,
     scheduler: Rc<RefCell<ScheduleState>>,
@@ -1912,13 +1917,24 @@ impl<'a> Interpreter<'a> {
                         },
                         None => None,
                     };
+                    let allowed_process = self.lookup_signal_target(signal).flatten();
                     if let Some(target) = target {
-                        if !self.scheduler.borrow().live_processes.contains(&target) {
+                        let scheduler = self.scheduler.borrow();
+                        if !scheduler.live_processes.contains(&target) {
                             return Err(Error::exception(
                                 "EMPTY",
                                 *span,
                                 "EMPTY: SEND TO a process whose lifetime has ended",
                             ));
+                        }
+                        if let Some(allowed) = &allowed_process {
+                            if scheduler.process_names.get(&target) != Some(allowed) {
+                                return Err(Error::exception(
+                                    "SENDFAIL",
+                                    *span,
+                                    "SENDFAIL: signal target has the wrong process name",
+                                ));
+                            }
                         }
                     }
                     let mut scheduler = self.scheduler.borrow_mut();
@@ -1928,6 +1944,9 @@ impl<'a> Interpreter<'a> {
                             .find(|(id, slot, _)| {
                                 slot.borrow().is_some()
                                     && target.map(|target| target == *id).unwrap_or(true)
+                                    && allowed_process.as_ref().is_none_or(|allowed| {
+                                        scheduler.process_names.get(id) == Some(allowed)
+                                    })
                             })
                             .map(|(id, slot, _)| (*id, Rc::clone(slot)))
                     });
@@ -1953,6 +1972,7 @@ impl<'a> Interpreter<'a> {
                             .or_default()
                             .push_back(SignalMessage {
                                 target,
+                                allowed_process,
                                 sender: self.process_id,
                                 priority,
                                 values: lowered,
@@ -1974,8 +1994,12 @@ impl<'a> Interpreter<'a> {
                                     .iter()
                                     .enumerate()
                                     .filter(|(_, message)| {
-                                        message.target.is_none()
-                                            || message.target == Some(self.process_id)
+                                        (message.target.is_none()
+                                            || message.target == Some(self.process_id))
+                                            && message
+                                                .allowed_process
+                                                .as_ref()
+                                                .is_none_or(|allowed| allowed == &self.process_name)
                                     })
                                     .max_by_key(|(_, message)| message.priority)
                                     .map(|(index, _)| index);
@@ -5533,6 +5557,21 @@ impl<'a> Interpreter<'a> {
         None
     }
 
+    fn lookup_signal_target(&self, name: &str) -> Option<Option<String>> {
+        let floor = self.local_floor();
+        for scope in self.locals[floor..].iter().rev() {
+            if let Some(target) = scope.signal_targets.get(name) {
+                return Some(target.clone());
+            }
+        }
+        for scope in self.modules.iter().rev() {
+            if let Some(target) = scope.signal_targets.get(name) {
+                return Some(target.clone());
+            }
+        }
+        None
+    }
+
     fn lookup_process(&self, name: &str) -> Option<ProcessRef<'a>> {
         let floor = self.local_floor();
         for scope in self.locals[floor..].iter().rev() {
@@ -5567,6 +5606,7 @@ impl<'a> Interpreter<'a> {
             process_defs: self.process_defs.clone(),
             regions: self.regions.clone(),
             process_id: usize::MAX,
+            process_name: String::new(),
             region_depths: HashMap::new(),
             deadline: None,
             scheduler: Rc::clone(&self.scheduler),
@@ -5609,6 +5649,7 @@ impl<'a> Interpreter<'a> {
         };
         let mut child = self.fork_for_process(process_ref.module, process_ref.scope_key);
         child.process_id = id;
+        child.process_name = process_ref.def.name.clone();
         let yielder = Rc::new(Cell::new(std::ptr::null()));
         let yielder_slot = Rc::clone(&yielder);
         let def = process_ref.def;
@@ -5627,6 +5668,9 @@ impl<'a> Interpreter<'a> {
         };
         let mut scheduler = self.scheduler.borrow_mut();
         scheduler.live_processes.insert(id);
+        scheduler
+            .process_names
+            .insert(id, process_ref.def.name.clone());
         scheduler.ready.push_back(Runnable {
             input: ProcessInput::None,
             entry: ProcessEntry {
@@ -5887,6 +5931,9 @@ fn declare_into_scope<'a>(
                         .map(|mode| resolve_mode_with(mode, mode_names))
                         .collect::<Result<Vec<_>, _>>()?;
                     scope.signals.insert(def.name.clone(), modes);
+                    scope
+                        .signal_targets
+                        .insert(def.name.clone(), def.to_process.clone());
                 }
             }
             Declaration::Process(process_def) => {

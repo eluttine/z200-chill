@@ -195,8 +195,10 @@ deferred.
 - [x] Signal `SEND` priority selection and prioritized buffer messages/delayed
       senders.
 - [x] Process `ON` handlers for process-local exceptions and `CAUSE`.
-- [ ] Absolute/cyclic timing actions, signal `TO process-name` restrictions,
-      region/task object modes, and process `LOC`/`OUT`/`INOUT` parameters.
+- [x] `SIGNAL ... TO process-name` restrictions, enforced for targeted sends and
+      receiver matching.
+- [ ] Absolute/cyclic timing actions, region/task object modes, and process
+      `LOC`/`OUT`/`INOUT` parameters.
 
 ## 8. Cleanup
 

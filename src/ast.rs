@@ -341,6 +341,7 @@ pub struct Param {
 pub struct SignalDef {
     pub name: String,
     pub modes: Vec<ModeRef>,
+    pub to_process: Option<String>,
     pub span: Span,
 }
 

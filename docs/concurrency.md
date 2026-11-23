@@ -9,7 +9,7 @@
 - `STOP;` actions.
 - `EVENT` and `EVENT(n)` synchronization modes.
 - `DELAY event [PRIORITY expr];` and `CONTINUE event;`.
-- `SIGNAL name [= (modes)];` declarations.
+- `SIGNAL name [= (modes)] [TO process-name];` declarations.
 - `SEND signal [(values)] [TO instance] [PRIORITY expr];` when the target is a
   signal. Pending signals are received highest-priority first.
 - `INSTANCE` values, `THIS`, and `START process(args)` as an expression.
@@ -55,7 +55,7 @@
 
 - `AT` absolute timing actions and `CYCLE` periodic timing actions.
 - timeout supervision for region calls.
-- process-name restrictions declared by `SIGNAL ... TO process-name`.
+- process-name restrictions are enforced for targeted sends and untargeted delivery.
 - signal priorities.
 - buffer send/receive priorities (buffer values currently use FIFO/priority 0).
 - buffer element modes beyond scalar grant encoding.

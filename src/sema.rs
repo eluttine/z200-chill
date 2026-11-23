@@ -240,6 +240,7 @@ struct Scope {
     procs: HashMap<String, ProcType>,
     processes: HashMap<String, ProcType>,
     signals: HashMap<String, Vec<Type>>,
+    signal_targets: HashMap<String, Option<String>>,
     modes: HashMap<String, Type>,
     set_values: HashMap<String, (Type, i128)>,
     /// Names granted into this reach by directly enclosed modules.
@@ -1000,7 +1001,7 @@ impl Checker {
                             .iter()
                             .map(|mode| self.resolve_mode(mode))
                             .collect::<Result<Vec<_>, _>>()?;
-                        self.declare_signal(&def.name, modes, def.span)?;
+                        self.declare_signal(&def.name, modes, def.to_process.clone(), def.span)?;
                     }
                 }
                 Declaration::ProcSignature(signature) => {
@@ -1372,7 +1373,13 @@ impl Checker {
         Ok(())
     }
 
-    fn declare_signal(&mut self, name: &str, modes: Vec<Type>, span: Span) -> Result<(), Error> {
+    fn declare_signal(
+        &mut self,
+        name: &str,
+        modes: Vec<Type>,
+        to_process: Option<String>,
+        span: Span,
+    ) -> Result<(), Error> {
         let scope = self.scopes.last_mut().expect("scope stack is never empty");
         if scope.vars.contains_key(name)
             || scope.procs.contains_key(name)
@@ -1386,6 +1393,7 @@ impl Checker {
             ));
         }
         scope.signals.insert(name.to_owned(), modes);
+        scope.signal_targets.insert(name.to_owned(), to_process);
         Ok(())
     }
 
