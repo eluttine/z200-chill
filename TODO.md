@@ -50,8 +50,8 @@ all existing tests pass with no new special cases.
       nested/region interface mismatches.
 - [x] Add CLI structural assertions for grant-file output (`schema = 4`, no
       `int_widths`/`edition`) and existing diagnostic-code assertions.
-- [x] Reject `SET` and module-mode types at grant-interface boundaries instead of
-      emitting unloadable grant files.
+- [x] Encode named set modes, reference/pointer/row modes, buffer element modes, and
+      module-mode types at grant-interface boundaries.
 - [x] Expand fixtures with direct Z.200 examples (expressions, control flow,
       procedures, modes/structures, visibility, arrays, handlers) and a `run_fail`
       suite for runtime checks (`ASSERTFAIL`, `OVERFLOW`, array bounds, undefined
@@ -112,9 +112,9 @@ deferred.
 - [x] Bit strings: `BOOLS`, bounded `BOOLS(n)` modes, binary/octal/hexadecimal bit
       literals, elementwise logic, concatenation, comparison, and grant encoding.
 - [x] References and rows: `REF M`, `PTR`, `ROW M`, `NULL`, referencing/dereferencing,
-      `ALLOCATE`/`GETSTACK`/`TERMINATE`, `EMPTY`, and self-referential structure modes.
-      Grant encoding, arrays of references, nested references, and references to
-      fields/indexes remain deferred.
+      `ALLOCATE`/`GETSTACK`/`TERMINATE`, `EMPTY`, self-referential structure modes, and
+      grant encoding for reference/pointer/row modes. Arrays of references, nested
+      references, and references to fields/indexes remain deferred.
 - [x] `TEXT(n)` and `WTEXT(n)` text location modes with empty-string initialization,
       text I/O, bounded length checks, optional index-mode/DYNAMIC surface syntax, and
       grant encoding. A separate text access/reference sub-location remains deferred.
@@ -186,8 +186,8 @@ deferred.
 - [x] `DELAY CASE` with multiple event alternatives, priority selection, and timeout
       cancellation inside relative timing actions.
 - [x] `BUFFER [(length)] element-mode` locations, buffered send/receive, capacity
-      blocking, delayed senders, buffer receive timeouts, and grant encoding for scalar
-      buffer elements.
+      blocking, delayed senders, buffer receive timeouts, and grant encoding for
+      referable buffer element modes.
 - [x] `INSTANCE` values, `THIS`, `START` as an expression, and targeted
       `SEND ... TO instance` delivery with pending targeted signals.
 - [x] `RECEIVE CASE SET instance;` for signal and buffer receives, carrying sender

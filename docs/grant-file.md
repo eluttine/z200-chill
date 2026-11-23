@@ -35,13 +35,14 @@ Visibility is static and independent of textual order:
   name makes the whole `SEIZE ALL` an error.
 - `GRANT name TO Module1, package!Module2;` restricts who may seize the grant. Friend
   names are module names, optionally package-qualified.
-- Structure modes can be granted and seized:
+- Structure, set, and module modes can be granted and seized:
   ```chill
   NEWMODE S = STRUCT(x INT, hidden INT);
   GRANT S FORBID (hidden);
   ```
   `FORBID (a, b)` / `FORBID ALL` allows field selection only inside the defining
-  module. `SEIZE S;` makes the mode name usable in the seizing module.
+  module. `SEIZE S;` makes the mode name usable in the seizing module. Set modes keep
+  their element names and representation values across the grant boundary.
 - Names are private unless granted and seized. A module cannot see another module's
   private names.
 - A seized variable aliases the granting module's location, so assignments are shared.
@@ -127,9 +128,33 @@ kind = "variable"
 mode = "INT"
 ```
 
-Named `SET (...)` modes and moreta module-mode types are currently rejected at the
-grant-interface boundary: `z200c grant` reports an explicit error instead of writing a
-grant file that cannot be loaded.
+Named `SET (...)` modes are recorded with `kind = "set"` and an `[[modes.elements]]`
+entry per element:
+
+```toml
+[[modes]]
+name = "S"
+module = "Counter"
+package = "spec"
+kind = "set"
+
+[[modes.elements]]
+name = "low"
+value = "0"
+
+[[modes.elements]]
+name = "high"
+value = "5"
+```
+
+Set representation values are stored as strings so values outside the TOML integer range
+survive a round trip. Module, region, task, and interface modes are recorded with their
+corresponding `kind` and component list.
+
+Reference, pointer, row, and buffer types are encoded as `REF <mode>`, `PTR`,
+`ROW <mode>`, and `BUFFER[(length)] <element-mode>`. The element of a buffer may be any
+referable mode, including a symbolic structure-mode reference. Arrays of references,
+nested `REF`/`ROW` targets, and references to fields or indexes remain unsupported.
 
 Array types are encoded as `ARRAY(low:high)` for one dimension or
 `ARRAY(low:high, low:high, ...)` for multidimensional arrays. The element mode may be

@@ -114,6 +114,16 @@ pub struct SetMode {
     pub elements: Vec<(String, i128)>,
 }
 
+impl SetMode {
+    pub fn symbol(&self) -> String {
+        mode_symbol(
+            self.package_name.as_deref(),
+            self.module_name.as_deref(),
+            &self.name,
+        )
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ModeTable {
     pub modes: Vec<StructMode>,

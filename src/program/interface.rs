@@ -9,6 +9,14 @@ pub enum ExternalType {
     Builtin(Type),
     Mode(String),
     Moreta(String),
+    Set(String),
+    Ref(Box<ExternalType>),
+    Row(Box<ExternalType>),
+    Ptr,
+    Buffer {
+        length: Option<usize>,
+        element: Box<ExternalType>,
+    },
     Array {
         low: i128,
         high: i128,
@@ -27,6 +35,7 @@ pub struct ModeInfo {
     pub module_name: Option<String>,
     pub package_name: Option<String>,
     pub fields: Vec<(String, ExternalType)>,
+    pub elements: Vec<(String, i128)>,
     pub forbidden: Vec<String>,
     pub kind: ModeInfoKind,
     pub components: Vec<ModeComponentInfo>,
@@ -35,6 +44,7 @@ pub struct ModeInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModeInfoKind {
     Struct,
+    Set,
     Moreta,
     Region,
     Task,
@@ -98,7 +108,15 @@ pub enum ExportInfoKind {
 pub fn portable_type(ty: Type, modes: &ModeTable) -> ExternalType {
     match ty {
         Type::Struct(id) => ExternalType::Mode(modes.get(id).symbol()),
+        Type::Set(id) => ExternalType::Set(modes.get_set(id).symbol()),
         Type::Moreta(id) => ExternalType::Moreta(modes.get_moreta(id).symbol()),
+        Type::Ref(target) => ExternalType::Ref(Box::new(portable_type(target.ty(), modes))),
+        Type::Row(target) => ExternalType::Row(Box::new(portable_type(target.ty(), modes))),
+        Type::Ptr => ExternalType::Ptr,
+        Type::Buffer { length, element } => ExternalType::Buffer {
+            length,
+            element: Box::new(portable_type(element.ty(), modes)),
+        },
         Type::Array(array) => ExternalType::Array {
             low: array.low,
             high: array.high,
@@ -126,6 +144,7 @@ pub struct ExternalInterface {
 pub struct ExternalModeIds {
     ids: HashMap<String, ModeId>,
     moreta_ids: HashMap<String, crate::types::MoretaId>,
+    set_ids: HashMap<String, crate::types::SetId>,
 }
 
 impl ExternalModeIds {
@@ -136,6 +155,10 @@ impl ExternalModeIds {
     pub fn get_moreta(&self, symbol: &str) -> Option<crate::types::MoretaId> {
         self.moreta_ids.get(symbol).copied()
     }
+
+    pub fn get_set(&self, symbol: &str) -> Option<crate::types::SetId> {
+        self.set_ids.get(symbol).copied()
+    }
 }
 
 /// Instantiate structure and module modes from external grant files into `modes`.
@@ -145,12 +168,16 @@ pub fn add_external_modes(
 ) -> Result<ExternalModeIds, String> {
     let mut ids = ExternalModeIds::default();
     let mut definitions: Vec<&ModeInfo> = Vec::new();
+    let mut set_definitions: Vec<&ModeInfo> = Vec::new();
     let mut moreta_definitions: Vec<&ModeInfo> = Vec::new();
 
     for interface in external {
         for mode in &interface.modes {
             let symbol = mode.symbol();
-            if ids.ids.contains_key(&symbol) || ids.moreta_ids.contains_key(&symbol) {
+            if ids.ids.contains_key(&symbol)
+                || ids.set_ids.contains_key(&symbol)
+                || ids.moreta_ids.contains_key(&symbol)
+            {
                 continue;
             }
             match mode.kind {
@@ -168,6 +195,19 @@ pub fn add_external_modes(
                         forbidden: HashSet::new(),
                     });
                     definitions.push(mode);
+                }
+                ModeInfoKind::Set => {
+                    let id = crate::types::SetId(modes.sets.len());
+                    ids.set_ids.insert(symbol.clone(), id);
+                    modes.sets.push(crate::modes::SetMode {
+                        name: mode.name.clone(),
+                        package: usize::MAX,
+                        module: usize::MAX,
+                        package_name: mode.package_name.clone(),
+                        module_name: mode.module_name.clone(),
+                        elements: Vec::new(),
+                    });
+                    set_definitions.push(mode);
                 }
                 ModeInfoKind::Moreta
                 | ModeInfoKind::Region
@@ -235,6 +275,11 @@ pub fn add_external_modes(
         let entry = modes.get_mut(id);
         entry.fields = fields;
         entry.forbidden = forbidden;
+    }
+
+    for mode in set_definitions {
+        let id = ids.set_ids[&mode.symbol()];
+        modes.sets[id.0].elements = mode.elements.clone();
     }
 
     for mode in moreta_definitions {
@@ -404,6 +449,7 @@ pub fn add_external_exports(
                     let symbol = mode.symbol();
                     let ty = match mode.kind {
                         ModeInfoKind::Struct => ids.get(&symbol).map(Type::Struct),
+                        ModeInfoKind::Set => ids.get_set(&symbol).map(Type::Set),
                         ModeInfoKind::Moreta
                         | ModeInfoKind::Region
                         | ModeInfoKind::Task
@@ -442,6 +488,35 @@ fn resolve_external_type(ty: &ExternalType, ids: &ExternalModeIds) -> Result<Typ
             .get_moreta(symbol)
             .map(Type::Moreta)
             .ok_or_else(|| format!("external interface references unknown mode `{symbol}`")),
+        ExternalType::Set(symbol) => ids
+            .get_set(symbol)
+            .map(Type::Set)
+            .ok_or_else(|| format!("external interface references unknown set mode `{symbol}`")),
+        ExternalType::Ptr => Ok(Type::Ptr),
+        ExternalType::Ref(target) => {
+            let target = resolve_external_type(target, ids)?;
+            let Some(target) = crate::types::RefTarget::from_type(target) else {
+                return Err("reference target must be a referable mode".to_owned());
+            };
+            Ok(Type::Ref(target))
+        }
+        ExternalType::Row(target) => {
+            let target = resolve_external_type(target, ids)?;
+            let Some(target) = crate::types::RefTarget::from_type(target) else {
+                return Err("row target must be a referable mode".to_owned());
+            };
+            Ok(Type::Row(target))
+        }
+        ExternalType::Buffer { length, element } => {
+            let element = resolve_external_type(element, ids)?;
+            let Some(element) = crate::types::RefTarget::from_type(element) else {
+                return Err("buffer element must be a referable mode".to_owned());
+            };
+            Ok(Type::Buffer {
+                length: *length,
+                element,
+            })
+        }
         ExternalType::Array { low, high, element } => {
             let element = resolve_external_type(element, ids)?;
             let Some(element) = crate::types::ArrayElement::from_type(element) else {

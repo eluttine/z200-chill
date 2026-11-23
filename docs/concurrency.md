@@ -55,7 +55,7 @@ asserts end-to-end delivery invariants.
 - Region-call timeout supervision is not implemented.
 - Task-object workers are stopped explicitly by `TERMINATE`; statically declared task
   objects are not explicitly terminated at the end of their reach.
-- Buffer element modes in grant interfaces are limited to scalar modes.
+- Buffer grant encoding supports referable element modes, including structure modes.
 - Signal `TO process-name` matching uses the process definition name; process
   instance values do not carry separate dynamic names.
 - Scheduler fairness is simple round-robin; no priority scheduling guarantees.

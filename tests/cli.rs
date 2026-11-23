@@ -717,6 +717,128 @@ END Client;
 }
 
 #[test]
+fn cross_package_set_reference_and_moreta_components() {
+    let base = TempDir::new("z200c-grant-modes");
+    let lib = base.join("libmodes");
+    std::fs::create_dir_all(lib.join("src")).unwrap();
+
+    std::fs::write(
+        lib.join("Chill.toml"),
+        r#"
+[package]
+name = "libmodes"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        lib.join("src/main.ch"),
+        r#"
+Lib: MODULE
+  GRANT S, P, shared;
+
+  NEWMODE S = SET(low, high);
+
+  NEWMODE P = MODULE SPEC
+    GRANT value, Set;
+    DCL value INT;
+    Set: PROC (n INT) END;
+    Reset: PROC () END;
+  END P;
+  NEWMODE P = MODULE BODY
+    DCL value INT INIT := 2;
+    Set: PROC (n INT);
+      value := n;
+    END Set;
+    Reset: PROC ();
+      value := 0;
+    END Reset;
+  END P;
+
+  DCL shared S INIT := high;
+END Lib;
+"#,
+    )
+    .unwrap();
+
+    let grant = z200c().arg("grant").arg(&lib).output().unwrap();
+    assert!(
+        grant.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&grant.stdout),
+        String::from_utf8_lossy(&grant.stderr)
+    );
+
+    let client = base.join("client");
+    std::fs::create_dir_all(client.join("src")).unwrap();
+    std::fs::write(
+        client.join("Chill.toml"),
+        format!(
+            r#"
+[package]
+name = "client"
+
+[build]
+entry = "src/main.ch"
+
+[dependencies]
+libmodes = "{}"
+"#,
+            lib.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        client.join("src/main.ch"),
+        r#"
+Client: MODULE
+  SEIZE S, P, shared;
+  DCL p P;
+  DCL s S;
+  DCL r REF P;
+
+  p.Set(7);
+  ASSERT p.value = 7;
+  s := shared;
+  r := NULL;
+  ASSERT r = NULL;
+  ASSERT s = shared;
+END Client;
+"#,
+    )
+    .unwrap();
+
+    let output = z200c().arg("run").arg(&client).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::write(
+        client.join("src/main.ch"),
+        r#"
+Client: MODULE
+  SEIZE P;
+  DCL p P;
+  p.Reset();
+END Client;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("check").arg(&client).output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not accessible") || stderr.contains("not public"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
 fn write_and_writeline_text_io() {
     let dir = TempDir::new("z200-text-out");
     std::fs::create_dir_all(dir.join("src")).unwrap();

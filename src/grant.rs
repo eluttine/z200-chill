@@ -39,7 +39,16 @@ pub struct GrantMode {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<GrantField>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elements: Vec<GrantSetElement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<GrantComponent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantSetElement {
+    pub name: String,
+    /// Set representation value, stored as text because TOML integers are i64.
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -47,6 +56,7 @@ pub struct GrantMode {
 pub enum GrantModeKind {
     #[default]
     Struct,
+    Set,
     Moreta,
     Region,
     Task,
@@ -161,8 +171,32 @@ impl GrantFile {
                         mode: external_type_name(&program::portable_type(field.ty, &info.modes)),
                     })
                     .collect(),
+                elements: Vec::new(),
                 components: Vec::new(),
             })
+            .chain(
+                info.modes
+                    .sets
+                    .iter()
+                    .filter(|mode| mode.module_name.is_some())
+                    .map(|mode| GrantMode {
+                        name: mode.name.clone(),
+                        implements: Vec::new(),
+                        module: mode.module_name.clone(),
+                        package: mode.package_name.clone(),
+                        kind: GrantModeKind::Set,
+                        fields: Vec::new(),
+                        elements: mode
+                            .elements
+                            .iter()
+                            .map(|(name, value)| GrantSetElement {
+                                name: name.clone(),
+                                value: value.to_string(),
+                            })
+                            .collect(),
+                        components: Vec::new(),
+                    }),
+            )
             .chain(
                 info.modes
                     .moretas
@@ -184,6 +218,7 @@ impl GrantFile {
                             _ => GrantModeKind::Moreta,
                         },
                         fields: Vec::new(),
+                        elements: Vec::new(),
                         components: mode
                             .components
                             .iter()
@@ -455,9 +490,25 @@ impl GrantFile {
                 module_name: mode.module.clone(),
                 package_name: mode.package.clone(),
                 fields,
+                elements: mode
+                    .elements
+                    .iter()
+                    .map(|element| {
+                        Ok((
+                            element.name.clone(),
+                            element.value.parse::<i128>().map_err(|_| {
+                                format!(
+                                    "invalid set element value `{}` in grant file",
+                                    element.value
+                                )
+                            })?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
                 forbidden: Vec::new(),
                 kind: match mode.kind {
                     GrantModeKind::Struct => program::ModeInfoKind::Struct,
+                    GrantModeKind::Set => program::ModeInfoKind::Set,
                     GrantModeKind::Moreta => program::ModeInfoKind::Moreta,
                     GrantModeKind::Region => program::ModeInfoKind::Region,
                     GrantModeKind::Task => program::ModeInfoKind::Task,
@@ -599,14 +650,8 @@ fn validate_exports(
 
 fn validate_external_type(ty: &program::ExternalType) -> Result<(), String> {
     match ty {
-        program::ExternalType::Builtin(Type::Set(_)) => {
-            Err("set modes are not supported in grant interfaces yet".to_owned())
-        }
         program::ExternalType::Builtin(Type::Moreta(_)) => {
             Err("module mode types are not supported in grant interfaces yet".to_owned())
-        }
-        program::ExternalType::Builtin(Type::Ref(_) | Type::Ptr | Type::Row(_) | Type::Null) => {
-            Err("reference and row modes are not supported in grant interfaces yet".to_owned())
         }
         program::ExternalType::Builtin(Type::Buffer { element, .. })
             if !matches!(
@@ -628,7 +673,10 @@ fn validate_external_type(ty: &program::ExternalType) -> Result<(), String> {
             Err("buffer element modes in grant interfaces must be scalar".to_owned())
         }
         program::ExternalType::Array { element, .. }
-        | program::ExternalType::MultiArray { element, .. } => validate_external_type(element),
+        | program::ExternalType::MultiArray { element, .. }
+        | program::ExternalType::Ref(element)
+        | program::ExternalType::Row(element) => validate_external_type(element),
+        program::ExternalType::Buffer { element, .. } => validate_external_type(element),
         _ => Ok(()),
     }
 }
@@ -637,6 +685,17 @@ fn parse_external_type(
     name: &str,
     definitions: &std::collections::HashMap<String, &GrantMode>,
 ) -> Result<program::ExternalType, String> {
+    if let Some(rest) = name.strip_prefix("REF ") {
+        let target = parse_external_type(rest.trim(), definitions)?;
+        return Ok(program::ExternalType::Ref(Box::new(target)));
+    }
+    if let Some(rest) = name.strip_prefix("ROW ") {
+        let target = parse_external_type(rest.trim(), definitions)?;
+        return Ok(program::ExternalType::Row(Box::new(target)));
+    }
+    if name == "PTR" {
+        return Ok(program::ExternalType::Ptr);
+    }
     if let Some(rest) = name.strip_prefix("ARRAY(") {
         let (bounds, element) = rest
             .split_once(')')
@@ -743,37 +802,17 @@ fn parse_external_type(
             .parse::<usize>()
             .map_err(|_| format!("invalid buffer length in `{name}`"))?;
         let element = parse_external_type(element.trim(), definitions)?;
-        let program::ExternalType::Builtin(element) = element else {
-            return Err(format!(
-                "buffer element mode in `{name}` must be a value mode"
-            ));
-        };
-        let Some(element) = types::RefTarget::from_type(element) else {
-            return Err(format!(
-                "buffer element mode in `{name}` must be a value mode"
-            ));
-        };
-        return Ok(program::ExternalType::Builtin(Type::Buffer {
+        return Ok(program::ExternalType::Buffer {
             length: Some(length),
-            element,
-        }));
+            element: Box::new(element),
+        });
     }
     if let Some(rest) = name.strip_prefix("BUFFER ") {
         let element = parse_external_type(rest.trim(), definitions)?;
-        let program::ExternalType::Builtin(element) = element else {
-            return Err(format!(
-                "buffer element mode in `{name}` must be a value mode"
-            ));
-        };
-        let Some(element) = types::RefTarget::from_type(element) else {
-            return Err(format!(
-                "buffer element mode in `{name}` must be a value mode"
-            ));
-        };
-        return Ok(program::ExternalType::Builtin(Type::Buffer {
+        return Ok(program::ExternalType::Buffer {
             length: None,
-            element,
-        }));
+            element: Box::new(element),
+        });
     }
     if let Some(rest) = name.strip_prefix("EVENT(") {
         let length = rest
@@ -871,6 +910,7 @@ fn parse_external_type(
         if let Some(definition) = definitions.get(name) {
             return Ok(match definition.kind {
                 GrantModeKind::Struct => program::ExternalType::Mode(name.to_owned()),
+                GrantModeKind::Set => program::ExternalType::Set(name.to_owned()),
                 GrantModeKind::Moreta
                 | GrantModeKind::Region
                 | GrantModeKind::Task
@@ -887,9 +927,20 @@ fn parse_external_type(
 fn external_type_name(ty: &program::ExternalType) -> String {
     match ty {
         program::ExternalType::Builtin(ty) => type_name(*ty),
-        program::ExternalType::Mode(symbol) | program::ExternalType::Moreta(symbol) => {
-            symbol.clone()
+        program::ExternalType::Mode(symbol)
+        | program::ExternalType::Moreta(symbol)
+        | program::ExternalType::Set(symbol) => symbol.clone(),
+        program::ExternalType::Ptr => "PTR".to_owned(),
+        program::ExternalType::Ref(target) => {
+            format!("REF {}", external_type_name(target))
         }
+        program::ExternalType::Row(target) => {
+            format!("ROW {}", external_type_name(target))
+        }
+        program::ExternalType::Buffer { length, element } => match length {
+            Some(length) => format!("BUFFER({length}) {}", external_type_name(element)),
+            None => format!("BUFFER {}", external_type_name(element)),
+        },
         program::ExternalType::Array { low, high, element } => {
             format!("ARRAY({low}:{high}) {}", external_type_name(element))
         }
@@ -1314,46 +1365,130 @@ END M;
     }
 
     #[test]
-    fn rejects_unencodable_modes_in_grant_interfaces() {
+    fn named_sets_and_references_round_trip() {
         let manifest = Manifest::parse(
             r#"
 [package]
-name = "bad"
+name = "sets"
 
 [build]
 entry = "src/main.ch"
 "#,
         )
         .unwrap();
-        for (source, expected) in [
-            (
-                r#"
+        let tokens = lexer::tokenize(
+            r#"
 M: MODULE
-  GRANT x;
-  NEWMODE S = SET(a, b);
+  GRANT S, x, y;
+  NEWMODE S = SET(a, b = 5);
   DCL x S;
+  DCL y REF S;
 END M;
 "#,
-                "set modes are not supported",
-            ),
-            (
-                r#"
-M: MODULE
-  GRANT x;
-  DCL x REF INT;
-END M;
-"#,
-                "reference and row modes are not supported",
-            ),
-        ] {
-            let tokens = lexer::tokenize(source).unwrap();
-            let mut program = parser::parse(&tokens).unwrap();
-            for module in &mut program.modules {
-                module.package_name = Some("bad".to_owned());
-            }
-            let error = GrantFile::from_package(&manifest, &program).unwrap_err();
-            assert!(error.message.contains(expected), "{}", error.message);
+        )
+        .unwrap();
+        let mut program = parser::parse(&tokens).unwrap();
+        for module in &mut program.modules {
+            module.package_name = Some("sets".to_owned());
         }
+        let grant = GrantFile::from_package(&manifest, &program).unwrap();
+        let set = grant.modes.iter().find(|mode| mode.name == "S").unwrap();
+        assert_eq!(set.kind, GrantModeKind::Set);
+        assert_eq!(
+            set.elements,
+            vec![
+                GrantSetElement {
+                    name: "a".to_owned(),
+                    value: "0".to_owned()
+                },
+                GrantSetElement {
+                    name: "b".to_owned(),
+                    value: "5".to_owned()
+                },
+            ]
+        );
+
+        let interface = GrantFile::from_toml(&grant.to_toml().unwrap())
+            .unwrap()
+            .to_interface()
+            .unwrap();
+        let set = interface
+            .modes
+            .iter()
+            .find(|mode| mode.name == "S")
+            .unwrap();
+        assert_eq!(set.kind, program::ModeInfoKind::Set);
+        assert_eq!(set.elements.len(), 2);
+        let symbol = "sets!M!S";
+        let x = interface
+            .exports
+            .iter()
+            .find(|export| export.name == "x")
+            .unwrap();
+        assert!(matches!(
+            &x.kind,
+            ExportInfoKind::Var(program::ExternalType::Set(name)) if name == symbol
+        ));
+        let y = interface
+            .exports
+            .iter()
+            .find(|export| export.name == "y")
+            .unwrap();
+        assert!(matches!(
+            &y.kind,
+            ExportInfoKind::Var(program::ExternalType::Ref(target))
+                if matches!(target.as_ref(), program::ExternalType::Set(name) if name == symbol)
+        ));
+    }
+
+    #[test]
+    fn buffer_of_structure_mode_round_trips() {
+        let manifest = Manifest::parse(
+            r#"
+[package]
+name = "buffers"
+
+[build]
+entry = "src/main.ch"
+"#,
+        )
+        .unwrap();
+        let tokens = lexer::tokenize(
+            r#"
+M: MODULE
+  GRANT Point, b;
+  NEWMODE Point = STRUCT(x INT);
+  DCL b BUFFER(2) Point;
+END M;
+"#,
+        )
+        .unwrap();
+        let mut program = parser::parse(&tokens).unwrap();
+        for module in &mut program.modules {
+            module.package_name = Some("buffers".to_owned());
+        }
+        let grant = GrantFile::from_package(&manifest, &program).unwrap();
+        let buffer = grant
+            .exports
+            .iter()
+            .find(|export| export.name == "b")
+            .unwrap();
+        assert_eq!(buffer.mode.as_deref(), Some("BUFFER(2) buffers!M!Point"));
+
+        let interface = GrantFile::from_toml(&grant.to_toml().unwrap())
+            .unwrap()
+            .to_interface()
+            .unwrap();
+        let buffer = interface
+            .exports
+            .iter()
+            .find(|export| export.name == "b")
+            .unwrap();
+        assert!(matches!(
+            &buffer.kind,
+            ExportInfoKind::Var(program::ExternalType::Buffer { length: Some(2), element })
+                if matches!(element.as_ref(), program::ExternalType::Mode(name) if name == "buffers!M!Point")
+        ));
     }
 
     #[test]
@@ -1639,6 +1774,7 @@ END M;
                 name: "x".to_owned(),
                 mode: "INT".to_owned(),
             }],
+            elements: Vec::new(),
             components: Vec::new(),
         };
         let mut definitions = std::collections::HashMap::new();

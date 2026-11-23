@@ -179,11 +179,11 @@ pub(super) fn add_grants(
             }
 
             let kind = if let Some(mode) = interface.modes.get(&name) {
-                if !matches!(mode, Type::Struct(_) | Type::Moreta(_)) {
+                if !matches!(mode, Type::Struct(_) | Type::Set(_) | Type::Moreta(_)) {
                     return Err(Error::new(
                         span,
                         format!(
-                            "cannot GRANT `{name}`: only structure and module modes are supported as mode grants"
+                            "cannot GRANT `{name}`: only structure, set, and module modes are supported as mode grants"
                         ),
                     ));
                 }

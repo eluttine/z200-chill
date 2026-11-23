@@ -65,7 +65,6 @@ Explicitly **deferred**:
 - general reference targets beyond simple variables and whole allocated locations;
 - complete internal/private visibility distinctions and deeper interface
   inheritance/implementation rules;
-- grant encoding for named set modes and reference/row modes;
 - full association/access attribute modification and arbitrary file models.
 
 ### 1.1 Implementation status (v0)
@@ -142,8 +141,7 @@ Not implemented yet (rejected or deferred with a diagnostic):
   priority/fairness scheduling guarantees;
 - multiple `CASE` selectors and non-integer `CASE` labels;
 - general reference targets beyond simple variables and whole allocated locations;
-- deeper interface/`IMPLEMENTS` rules and complete internal/private visibility;
-- grant encoding for named set modes and reference/row modes.
+- deeper interface/`IMPLEMENTS` rules and complete internal/private visibility.
 
 The interpreter is a bootstrap for validating semantics; native code generation is a
 later milestone.
@@ -336,9 +334,9 @@ NEWMODE code = SET(one = 1, three = 3);
 
 Unnumbered elements receive representation values 0, 1, ...; numbered elements use the
 explicit non-negative values. Set element names are visible in the defining reach and
-may be assigned and compared. Named set modes are module-local for now: they are not
-included in grant interfaces, and powersets currently accept only `INT`/`BOOL`/`CHAR`
-members.
+may be assigned and compared. Named set modes may cross grant interfaces together with
+their element names and representation values. Powersets currently accept only
+`INT`/`BOOL`/`CHAR` members.
 
 ### 4.4 Runtime checks
 
@@ -597,10 +595,11 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
 - `TERMINATE(ref)` ends the lifetime of an allocated location and raises `EMPTY` for
   `NULL`; terminating a non-allocated reference is rejected.
 - Dereferencing `NULL` or a terminated reference raises `EMPTY`.
-- References and rows are not yet encodable in grant interfaces. Arrays of
-  references, nested `REF`/`ROW` modes, references to fields/indexes, and mutually
-  recursive structure modes are not implemented yet. Self-referential structure
-  modes (such as linked-list nodes) are supported.
+- References, pointers, and rows are encodable in grant interfaces, including
+  references to structure, set, and moreta modes. Arrays of references, nested
+  `REF`/`ROW` modes, references to fields/indexes, and mutually recursive structure
+  modes are not implemented yet. Self-referential structure modes (such as linked-list
+  nodes) are supported.
 
 ### 5.8 Associations and access modes (simplified)
 
@@ -753,8 +752,8 @@ ASSERT p.x = 1;
   after every component method call. A false invariant raises `INVFAIL`.
 - Component modes/signatures are resolved when the module mode is defined.
 - Whole-object assignment uses value-copy semantics.
-- Module-mode types are currently module-local: exporting one through a grant
-  interface is rejected with a clear error.
+- Module-mode types can be exported through grant interfaces with their component
+  visibility and `IMPLEMENTS` links.
 
 Not implemented yet: constructors/destructors and task/region object modes.
 

@@ -173,8 +173,23 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                             .iter()
                             .map(|field| (field.name.clone(), portable_type(field.ty, &modes)))
                             .collect(),
+                        elements: Vec::new(),
                         forbidden,
                         kind: ModeInfoKind::Struct,
+                        components: Vec::new(),
+                    })
+                }
+                ExportKind::Mode(Type::Set(id)) => {
+                    let mode = modes.get_set(id);
+                    ExportInfoKind::Mode(ModeInfo {
+                        name: mode.name.clone(),
+                        implements: Vec::new(),
+                        module_name: mode.module_name.clone(),
+                        package_name: mode.package_name.clone(),
+                        fields: Vec::new(),
+                        elements: mode.elements.clone(),
+                        forbidden: Vec::new(),
+                        kind: ModeInfoKind::Set,
                         components: Vec::new(),
                     })
                 }
@@ -230,6 +245,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                         module_name: mode.module_name.clone(),
                         package_name: mode.package_name.clone(),
                         fields: Vec::new(),
+                        elements: Vec::new(),
                         forbidden: Vec::new(),
                         kind: match mode.kind {
                             crate::ast::MoretaKind::Region => ModeInfoKind::Region,

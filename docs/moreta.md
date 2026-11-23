@@ -39,7 +39,8 @@ Z.200 requirements.
 - Components granted by a module-mode spec are public. Non-public components are only
   accessible from the defining module. Internal/private distinction is currently
   simplified to public/internal.
-- Moreta modes can appear in grant interfaces with their component visibility.
+- Moreta modes can appear in grant interfaces with their component visibility,
+  interface kind, and `IMPLEMENTS` links.
 - Objects are initialized when their declaration is executed.
 - Initialization order is base components first, then derived components, in
   declaration order.
@@ -97,10 +98,7 @@ Z.200 requirements.
 - deeper interface inheritance/implementation validation beyond exact component and
   signature matching,
 - complete internal/private visibility distinction and all standard visibility rules,
-- generic moreta-mode templates are supported via `NEWMODE T = GENERIC ... <mode body>`
-  and `NEWMODE X = NEW T(actuals) END;`;
-- complete `Mode!Component` name preservation in grant files,
-- grant-file encoding for named set modes.
+- complete `Mode!Component` name preservation in grant files.
 
 These exclusions are deliberate. Adding them should be a separate design step rather
 than an incidental extension.
