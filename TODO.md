@@ -197,8 +197,9 @@ deferred.
 - [x] Forward-declared, mutually recursive structure modes through `REF`/`ROW`, with
       direct value-cycle rejection.
 - [x] Main-process interleaving at action boundaries via scheduler pumping.
-- [x] Main-process blocking `DELAY` and timed `DELAY` through scheduler pumping.
-- [ ] Main-process signal/buffer receives and full coroutine termination semantics.
+- [x] Main-process blocking `DELAY`, timed `DELAY`, and signal/buffer `RECEIVE CASE`
+      through scheduler pumping.
+- [ ] Full coroutine-based main-process termination semantics.
 - [x] Complete `Mode!Component` path preservation in mode symbols and grant files.
 - [x] First concurrency layer: `PROCESS`, `START`, `STOP`, a cooperative
       action-boundary scheduler, shared module locations, and process-local state.

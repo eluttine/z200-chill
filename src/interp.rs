@@ -2322,53 +2322,16 @@ impl<'a> Interpreter<'a> {
                     else_actions,
                     span,
                 } => {
-                    let mut pending = None;
-                    for alternative in alternatives {
-                        {
-                            let mut scheduler = self.scheduler.borrow_mut();
-                            if let Some(queue) = scheduler.signals.get_mut(&alternative.signal) {
-                                let mut selected: Option<usize> = None;
-                                for (index, message) in queue.iter().enumerate() {
-                                    let eligible = (message.target.is_none()
-                                        || message.target == Some(self.process_id))
-                                        && message
-                                            .allowed_process
-                                            .as_ref()
-                                            .is_none_or(|allowed| allowed == &self.process_name);
-                                    if eligible
-                                        && selected
-                                            .map(|selected| {
-                                                message.priority > queue[selected].priority
-                                            })
-                                            .unwrap_or(true)
-                                    {
-                                        selected = Some(index);
-                                    }
-                                }
-                                if let Some(index) = selected {
-                                    let message = queue.remove(index).expect("signal message");
-                                    pending = Some((
-                                        alternative.signal.clone(),
-                                        message.values,
-                                        message.sender,
-                                    ));
-                                    break;
-                                }
-                            }
-                        }
-                        if let Ok((key, _, _)) = self.buffer_location(&alternative.signal, *span) {
-                            if let Some((values, sender)) =
-                                self.take_buffer_value(&alternative.signal, key)
-                            {
-                                pending = Some((alternative.signal.clone(), values, sender));
-                                break;
-                            }
-                        }
-                    }
-                    let received = if let Some(received) = pending {
+                    let mut pending = self.try_receive_case(alternatives, *span)?;
+                    let received = if let Some(received) = pending.take() {
                         received
                     } else if let Some(else_actions) = else_actions {
                         return self.exec_stmts(else_actions, frame);
+                    } else if self.process_id == usize::MAX {
+                        match self.wait_main_receive(alternatives, *span)? {
+                            Some(received) => received,
+                            None => return Ok(Flow::Timeout),
+                        }
                     } else {
                         let mut signals = Vec::new();
                         let mut buffers = Vec::new();
@@ -3438,6 +3401,87 @@ impl<'a> Interpreter<'a> {
             .map_err(|error| Error::exception("WRITEFAIL", span, format!("WRITEFAIL: {error}")))?;
         access.borrow_mut().position = position + 1;
         Ok(())
+    }
+
+    fn try_receive_case(
+        &mut self,
+        alternatives: &[ir::ReceiveAlternativeIr],
+        span: Span,
+    ) -> Result<Option<(String, Vec<Value>, usize)>, Error> {
+        for alternative in alternatives {
+            {
+                let mut scheduler = self.scheduler.borrow_mut();
+                if let Some(queue) = scheduler.signals.get_mut(&alternative.signal) {
+                    let mut selected: Option<usize> = None;
+                    for (index, message) in queue.iter().enumerate() {
+                        let eligible = (message.target.is_none()
+                            || message.target == Some(self.process_id))
+                            && message
+                                .allowed_process
+                                .as_ref()
+                                .is_none_or(|allowed| allowed == &self.process_name);
+                        if eligible
+                            && selected
+                                .map(|selected| message.priority > queue[selected].priority)
+                                .unwrap_or(true)
+                        {
+                            selected = Some(index);
+                        }
+                    }
+                    if let Some(index) = selected {
+                        let message = queue.remove(index).expect("signal message");
+                        return Ok(Some((
+                            alternative.signal.clone(),
+                            message.values,
+                            message.sender,
+                        )));
+                    }
+                }
+            }
+            if let Ok((key, _, _)) = self.buffer_location(&alternative.signal, span) {
+                if let Some((values, sender)) = self.take_buffer_value(&alternative.signal, key) {
+                    return Ok(Some((alternative.signal.clone(), values, sender)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn wait_main_receive(
+        &mut self,
+        alternatives: &[ir::ReceiveAlternativeIr],
+        span: Span,
+    ) -> Result<Option<(String, Vec<Value>, usize)>, Error> {
+        let deadline = self.deadline;
+        loop {
+            if let Some(received) = self.try_receive_case(alternatives, span)? {
+                return Ok(Some(received));
+            }
+            let now = Instant::now();
+            if deadline.is_some_and(|deadline| now >= deadline) {
+                return Ok(None);
+            }
+            expire_timed_waiters(&self.scheduler);
+            let next_deadline = next_timed_deadline(&self.scheduler)
+                .into_iter()
+                .chain(deadline)
+                .min();
+            if self.scheduler.borrow().ready.is_empty() {
+                if let Some(next_deadline) = next_deadline {
+                    let now = Instant::now();
+                    if next_deadline > now {
+                        std::thread::sleep(next_deadline - now);
+                    }
+                    continue;
+                }
+                return Err(Error::coded(
+                    "E0500",
+                    span,
+                    "deadlock: main process is receiving and no processes can send",
+                ));
+            }
+            pump_one_ready_process(&self.scheduler)?;
+        }
     }
 
     fn wait_main_event(

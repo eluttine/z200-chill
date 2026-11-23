@@ -49,9 +49,9 @@ asserts end-to-end delivery invariants.
 
 - The main module body pumps one ready process at action boundaries, so spawned
   processes interleave with main-process actions.
-- Main-process `DELAY` and timed `DELAY` actions block by pumping the scheduler until a
-  continuation or timeout wakes the main process.
-- Main-process signal/buffer receives and full termination semantics remain deferred.
+- Main-process `DELAY`/timed `DELAY` and `RECEIVE CASE` block by pumping the scheduler
+  until a continuation, signal, buffer message, or timeout wakes the main process.
+- Full coroutine-based main-process termination semantics remain deferred.
 - Timeouts are enforced at blocking points (`DELAY`, `RECEIVE`, buffer waits), not
   during arbitrary long-running computation.
 - Region-call timeout supervision is not implemented.
@@ -64,8 +64,7 @@ asserts end-to-end delivery invariants.
 - Process definitions outside the module declaration list are not supported.
 - Generic process and region templates are supported; template instances expand before
   semantic analysis.
-- Full coroutine-based main-process termination and signal/buffer receive semantics
-  remain deferred.
+- Full coroutine-based main-process termination semantics remain deferred.
 
 ## Scheduler stress testing
 
