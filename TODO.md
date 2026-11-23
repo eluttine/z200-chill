@@ -203,6 +203,9 @@ deferred.
       `ABSTIME` construction.
 - [x] Region object modes with Moreta components and per-object method-call mutual
       exclusion; region/task object grant-kind preservation.
+- [x] `examples/pipeline`: end-to-end concurrent pipeline exercising bounded buffers,
+      processes, region objects, signals, targeted sends, receive `SET`, timing, and
+      FIFO/priority message ordering.
 - [ ] Task object modes: task thread activation and termination.
 
 ## 8. Cleanup

@@ -2115,19 +2115,24 @@ impl<'a> Interpreter<'a> {
                         {
                             let mut scheduler = self.scheduler.borrow_mut();
                             if let Some(queue) = scheduler.signals.get_mut(&alternative.signal) {
-                                let selected = queue
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, message)| {
-                                        (message.target.is_none()
-                                            || message.target == Some(self.process_id))
-                                            && message
-                                                .allowed_process
-                                                .as_ref()
-                                                .is_none_or(|allowed| allowed == &self.process_name)
-                                    })
-                                    .max_by_key(|(_, message)| message.priority)
-                                    .map(|(index, _)| index);
+                                let mut selected: Option<usize> = None;
+                                for (index, message) in queue.iter().enumerate() {
+                                    let eligible = (message.target.is_none()
+                                        || message.target == Some(self.process_id))
+                                        && message
+                                            .allowed_process
+                                            .as_ref()
+                                            .is_none_or(|allowed| allowed == &self.process_name);
+                                    if eligible
+                                        && selected
+                                            .map(|selected| {
+                                                message.priority > queue[selected].priority
+                                            })
+                                            .unwrap_or(true)
+                                    {
+                                        selected = Some(index);
+                                    }
+                                }
                                 if let Some(index) = selected {
                                     let message = queue.remove(index).expect("signal message");
                                     pending = Some((
@@ -5404,22 +5409,33 @@ impl<'a> Interpreter<'a> {
     fn take_buffer_value(&mut self, name: &str, key: usize) -> Option<(Vec<Value>, usize)> {
         let mut scheduler = self.scheduler.borrow_mut();
         let state = scheduler.buffers.get_mut(&key)?;
-        let message_index = state
-            .messages
-            .iter()
-            .enumerate()
-            .max_by_key(|(_, message)| message.priority)
-            .map(|(index, _)| index);
+        let message_index = {
+            let mut best: Option<usize> = None;
+            for (index, message) in state.messages.iter().enumerate() {
+                if best
+                    .map(|best| message.priority > state.messages[best].priority)
+                    .unwrap_or(true)
+                {
+                    best = Some(index);
+                }
+            }
+            best
+        };
         let (received, sender, sender_entry) = if let Some(index) = message_index {
             let message = state.messages.remove(index)?;
             let mut sender_entry = None;
-            if let Some(sender_index) = state
-                .senders
-                .iter()
-                .enumerate()
-                .max_by_key(|(_, sender)| sender.priority)
-                .map(|(index, _)| index)
-            {
+            if let Some(sender_index) = {
+                let mut best: Option<usize> = None;
+                for (index, sender) in state.senders.iter().enumerate() {
+                    if best
+                        .map(|best| sender.priority > state.senders[best].priority)
+                        .unwrap_or(true)
+                    {
+                        best = Some(index);
+                    }
+                }
+                best
+            } {
                 let sender = state.senders.remove(sender_index);
                 let slot = Rc::clone(&sender.slot);
                 let entry = slot.borrow_mut().take();
@@ -5434,12 +5450,18 @@ impl<'a> Interpreter<'a> {
             }
             (message.values, message.sender, sender_entry)
         } else {
-            let sender_index = state
-                .senders
-                .iter()
-                .enumerate()
-                .max_by_key(|(_, sender)| sender.priority)
-                .map(|(index, _)| index)?;
+            let sender_index = {
+                let mut best: Option<usize> = None;
+                for (index, sender) in state.senders.iter().enumerate() {
+                    if best
+                        .map(|best| sender.priority > state.senders[best].priority)
+                        .unwrap_or(true)
+                    {
+                        best = Some(index);
+                    }
+                }
+                best
+            }?;
             let sender = state.senders.remove(sender_index);
             let slot = Rc::clone(&sender.slot);
             let entry = slot.borrow_mut().take()?;

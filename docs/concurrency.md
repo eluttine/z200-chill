@@ -74,5 +74,12 @@
 - fair/priority scheduling guarantees.
 - process definitions outside the module declaration list.
 
+## End-to-end example
+
+`examples/pipeline` is the concurrency integration application. It combines
+bounded buffers, producers/workers/collector processes, region-object statistics,
+signals, targeted sends, receive `SET`, relative timing, and a watchdog, then
+asserts end-to-end delivery invariants.
+
 The scheduler is intentionally an execution foundation, not yet a complete
 implementation of Z.200 clause 11.

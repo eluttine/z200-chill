@@ -123,6 +123,24 @@ fn run_hello_succeeds_without_output() {
 }
 
 #[test]
+fn run_pipeline_example_succeeds() {
+    let output = z200c()
+        .arg("run")
+        .arg(example("pipeline"))
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn run_modules_example_succeeds() {
     let output = z200c().arg("run").arg(example("modules")).output().unwrap();
 

@@ -1,0 +1,5 @@
+[package]
+name = "pipeline"
+
+[build]
+entry = "src/main.ch"
