@@ -12,6 +12,6 @@ M: MODULE
     ASSERT x = 1;
   END Checker;
 
-  START Bump(x);
   START Checker();
+  START Bump(x);
 END M;

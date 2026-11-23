@@ -16,6 +16,6 @@ M: MODULE
     ASSERT handled = 1;
   END Checker;
 
-  START Worker();
   START Checker();
+  START Worker();
 END M;

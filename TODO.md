@@ -196,6 +196,9 @@ deferred.
 - [x] References to fields and array elements, including multidimensional elements.
 - [x] Forward-declared, mutually recursive structure modes through `REF`/`ROW`, with
       direct value-cycle rejection.
+- [x] Main-process interleaving at action boundaries via scheduler pumping.
+- [ ] Coroutine-based main process with blocking `DELAY`/receive and termination
+      semantics.
 - [x] Complete `Mode!Component` path preservation in mode symbols and grant files.
 - [x] First concurrency layer: `PROCESS`, `START`, `STOP`, a cooperative
       action-boundary scheduler, shared module locations, and process-local state.

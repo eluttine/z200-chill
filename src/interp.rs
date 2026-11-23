@@ -109,6 +109,161 @@ pub fn run(program: &Program, profile: WidthProfile) -> Result<(), Error> {
     run_checked(program, profile, &check, &[])
 }
 
+fn resume_process(
+    scheduler: &Rc<RefCell<ScheduleState>>,
+    mut runnable: Runnable,
+) -> Result<(), Error> {
+    CURRENT_YIELDER.with(|slot| slot.set(runnable.entry.yielder.get()));
+    match runnable.entry.coroutine.resume(runnable.input) {
+        corosensei::CoroutineResult::Yield(yielded) => match yielded {
+            ProcessYield::Tick => scheduler.borrow_mut().ready.push_back(Runnable {
+                input: ProcessInput::None,
+                entry: runnable.entry,
+            }),
+            ProcessYield::Delay {
+                event,
+                priority,
+                deadline,
+            } => {
+                let entry = runnable.entry;
+                let waiter = EventWaiter {
+                    id: entry.id,
+                    priority,
+                    deadline,
+                    slot: Rc::new(RefCell::new(Some(entry))),
+                };
+                scheduler
+                    .borrow_mut()
+                    .event_waiters
+                    .entry(event)
+                    .or_default()
+                    .push(waiter);
+            }
+            ProcessYield::DelayCase {
+                events,
+                priority,
+                deadline,
+            } => {
+                let entry = runnable.entry;
+                let id = entry.id;
+                let slot = Rc::new(RefCell::new(Some(entry)));
+                let mut state = scheduler.borrow_mut();
+                for event in events {
+                    state
+                        .event_waiters
+                        .entry(event)
+                        .or_default()
+                        .push(EventWaiter {
+                            id,
+                            priority,
+                            deadline,
+                            slot: Rc::clone(&slot),
+                        });
+                }
+            }
+            ProcessYield::Receive {
+                signals,
+                buffers,
+                deadline,
+            } => {
+                let entry = runnable.entry;
+                let id = entry.id;
+                let slot = Rc::new(RefCell::new(Some(entry)));
+                let mut state = scheduler.borrow_mut();
+                for signal in signals {
+                    state.receivers.entry(signal.name).or_default().push((
+                        id,
+                        Rc::clone(&slot),
+                        deadline,
+                    ));
+                }
+                for buffer in buffers {
+                    state
+                        .buffers
+                        .entry(buffer)
+                        .or_default()
+                        .receivers
+                        .push(BufferReceiver {
+                            id,
+                            deadline,
+                            slot: Rc::clone(&slot),
+                        });
+                }
+            }
+            ProcessYield::SendBuffer {
+                buffer,
+                priority,
+                values,
+                deadline,
+            } => {
+                let entry = runnable.entry;
+                let mut state = scheduler.borrow_mut();
+                state
+                    .buffers
+                    .entry(buffer)
+                    .or_default()
+                    .senders
+                    .push(BufferSender {
+                        id: entry.id,
+                        priority,
+                        values,
+                        deadline,
+                        slot: Rc::new(RefCell::new(Some(entry))),
+                    });
+            }
+            ProcessYield::Sleep { deadline } => {
+                scheduler
+                    .borrow_mut()
+                    .sleepers
+                    .push((deadline, runnable.entry));
+            }
+            ProcessYield::AcquireObject { object } => {
+                scheduler
+                    .borrow_mut()
+                    .object_waiters
+                    .entry(object)
+                    .or_default()
+                    .push(runnable.entry);
+            }
+            ProcessYield::TaskWait { object } => {
+                scheduler
+                    .borrow_mut()
+                    .task_waiters
+                    .entry(object)
+                    .or_default()
+                    .push(runnable.entry);
+            }
+            ProcessYield::AcquireRegion { region } => {
+                scheduler
+                    .borrow_mut()
+                    .region_waiters
+                    .entry(region)
+                    .or_default()
+                    .push(runnable.entry);
+            }
+        },
+        corosensei::CoroutineResult::Return(result) => {
+            CURRENT_YIELDER.with(|slot| slot.set(std::ptr::null()));
+            scheduler
+                .borrow_mut()
+                .live_processes
+                .remove(&runnable.entry.id);
+            result?;
+        }
+    }
+    Ok(())
+}
+
+fn pump_one_ready_process(scheduler: &Rc<RefCell<ScheduleState>>) -> Result<(), Error> {
+    expire_timed_waiters(scheduler);
+    let Some(runnable) = scheduler.borrow_mut().ready.pop_front() else {
+        return Ok(());
+    };
+    let result = resume_process(scheduler, runnable);
+    CURRENT_YIELDER.with(|slot| slot.set(std::ptr::null()));
+    result
+}
+
 pub fn run_checked(
     program: &Program,
     profile: WidthProfile,
@@ -263,146 +418,10 @@ pub fn run_checked(
                 expire_timed_waiters(&scheduler);
             }
         }
-        let Some(mut runnable) = scheduler.borrow_mut().ready.pop_front() else {
+        let Some(runnable) = scheduler.borrow_mut().ready.pop_front() else {
             break;
         };
-        CURRENT_YIELDER.with(|slot| slot.set(runnable.entry.yielder.get()));
-        match runnable.entry.coroutine.resume(runnable.input) {
-            corosensei::CoroutineResult::Yield(yielded) => {
-                match yielded {
-                    ProcessYield::Tick => scheduler.borrow_mut().ready.push_back(Runnable {
-                        input: ProcessInput::None,
-                        entry: runnable.entry,
-                    }),
-                    ProcessYield::Delay {
-                        event,
-                        priority,
-                        deadline,
-                    } => {
-                        let entry = runnable.entry;
-                        let waiter = EventWaiter {
-                            id: entry.id,
-                            priority,
-                            deadline,
-                            slot: Rc::new(RefCell::new(Some(entry))),
-                        };
-                        scheduler
-                            .borrow_mut()
-                            .event_waiters
-                            .entry(event)
-                            .or_default()
-                            .push(waiter);
-                    }
-                    ProcessYield::DelayCase {
-                        events,
-                        priority,
-                        deadline,
-                    } => {
-                        let entry = runnable.entry;
-                        let id = entry.id;
-                        let slot = Rc::new(RefCell::new(Some(entry)));
-                        let mut state = scheduler.borrow_mut();
-                        for event in events {
-                            state
-                                .event_waiters
-                                .entry(event)
-                                .or_default()
-                                .push(EventWaiter {
-                                    id,
-                                    priority,
-                                    deadline,
-                                    slot: Rc::clone(&slot),
-                                });
-                        }
-                    }
-                    ProcessYield::Receive {
-                        signals,
-                        buffers,
-                        deadline,
-                    } => {
-                        let entry = runnable.entry;
-                        let id = entry.id;
-                        let slot = Rc::new(RefCell::new(Some(entry)));
-                        let mut state = scheduler.borrow_mut();
-                        for signal in signals {
-                            state.receivers.entry(signal.name).or_default().push((
-                                id,
-                                Rc::clone(&slot),
-                                deadline,
-                            ));
-                        }
-                        for buffer in buffers {
-                            state.buffers.entry(buffer).or_default().receivers.push(
-                                BufferReceiver {
-                                    id,
-                                    deadline,
-                                    slot: Rc::clone(&slot),
-                                },
-                            );
-                        }
-                    }
-                    ProcessYield::SendBuffer {
-                        buffer,
-                        priority,
-                        values,
-                        deadline,
-                    } => {
-                        let entry = runnable.entry;
-                        let mut state = scheduler.borrow_mut();
-                        state
-                            .buffers
-                            .entry(buffer)
-                            .or_default()
-                            .senders
-                            .push(BufferSender {
-                                id: entry.id,
-                                priority,
-                                values,
-                                deadline,
-                                slot: Rc::new(RefCell::new(Some(entry))),
-                            });
-                    }
-                    ProcessYield::Sleep { deadline } => {
-                        scheduler
-                            .borrow_mut()
-                            .sleepers
-                            .push((deadline, runnable.entry));
-                    }
-                    ProcessYield::AcquireObject { object } => {
-                        scheduler
-                            .borrow_mut()
-                            .object_waiters
-                            .entry(object)
-                            .or_default()
-                            .push(runnable.entry);
-                    }
-                    ProcessYield::TaskWait { object } => {
-                        scheduler
-                            .borrow_mut()
-                            .task_waiters
-                            .entry(object)
-                            .or_default()
-                            .push(runnable.entry);
-                    }
-                    ProcessYield::AcquireRegion { region } => {
-                        scheduler
-                            .borrow_mut()
-                            .region_waiters
-                            .entry(region)
-                            .or_default()
-                            .push(runnable.entry);
-                    }
-                }
-            }
-            corosensei::CoroutineResult::Return(result) => {
-                CURRENT_YIELDER.with(|slot| slot.set(std::ptr::null()));
-                scheduler
-                    .borrow_mut()
-                    .live_processes
-                    .remove(&runnable.entry.id);
-                result?;
-            }
-        }
+        resume_process(&scheduler, runnable)?;
     }
     CURRENT_YIELDER.with(|slot| slot.set(std::ptr::null()));
     interpreter.destroy_all_module_objects()?;
@@ -1776,8 +1795,11 @@ impl<'a> Interpreter<'a> {
     }
 
     fn exec_stmts(&mut self, stmts: &[ir::Stmt], frame: &mut Frame) -> Result<Flow, Error> {
+        let mut first = true;
         for stmt in stmts {
-            if self.yield_interval <= 1 {
+            if first {
+                first = false;
+            } else if self.yield_interval <= 1 {
                 cooperative_yield();
             } else {
                 self.yield_counter += 1;
@@ -1785,6 +1807,9 @@ impl<'a> Interpreter<'a> {
                     self.yield_counter = 0;
                     cooperative_yield();
                 }
+            }
+            if self.process_id == usize::MAX {
+                pump_one_ready_process(&self.scheduler)?;
             }
             match stmt {
                 ir::Stmt::Assign {

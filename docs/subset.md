@@ -60,7 +60,7 @@ Current scope includes:
 
 Explicitly **deferred**:
 
-- main-process interleaving with spawned processes;
+- blocking main-process operations and full main-process termination semantics;
 - region-call timeout supervision and scheduler fairness/priority guarantees;
 - general reference targets beyond simple variables and whole allocated locations;
 - complete moreta visibility rules and deeper interface inheritance beyond exact
@@ -136,7 +136,7 @@ Implemented in `z200c`:
 
 Not implemented yet (rejected or deferred with a diagnostic):
 
-- main-process interleaving with spawned processes;
+- blocking main-process operations and full main-process termination semantics;
 - region-call timeout supervision and priority/fairness scheduling guarantees;
 - general reference targets beyond simple variables and whole allocated locations;
 - deeper interface/`IMPLEMENTS` rules beyond exact public-component matching and full

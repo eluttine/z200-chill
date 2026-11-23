@@ -47,9 +47,10 @@ asserts end-to-end delivery invariants.
 
 ## Current limitations
 
-- The imaginary outermost process runs module bodies to completion before the
-  scheduler begins draining spawned processes. Spawned processes interleave with each
-  other, but not with the main module body.
+- The main module body now pumps one ready process at action boundaries, so spawned
+  processes interleave with main-process actions. The main process is still executed
+  synchronously: blocking `DELAY`/receive operations inside the main body are not yet
+  supported.
 - Timeouts are enforced at blocking points (`DELAY`, `RECEIVE`, buffer waits), not
   during arbitrary long-running computation.
 - Region-call timeout supervision is not implemented.
@@ -62,6 +63,8 @@ asserts end-to-end delivery invariants.
 - Process definitions outside the module declaration list are not supported.
 - Generic process and region templates are supported; template instances expand before
   semantic analysis.
+- Full coroutine-based main-process blocking and termination semantics remain
+  deferred.
 
 ## Scheduler stress testing
 
