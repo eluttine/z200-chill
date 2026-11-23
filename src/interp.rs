@@ -2378,9 +2378,7 @@ impl<'a> Interpreter<'a> {
                 } => {
                     let mut values = Vec::with_capacity(selectors.len());
                     for selector in selectors {
-                        let value = self.eval_ir(selector)?;
-                        let (value, _) = self.expect_int(value, selector.span())?;
-                        values.push(value);
+                        values.push(self.eval_ir(selector)?);
                     }
 
                     let explicitly_labelled = alternatives.iter().any(|alternative| {
@@ -2389,7 +2387,7 @@ impl<'a> Interpreter<'a> {
                                 |(labels, value)| {
                                     labels
                                         .iter()
-                                        .any(|label| explicit_label_matches(*label, *value))
+                                        .any(|label| explicit_label_matches(*label, value))
                                 },
                             )
                     });
@@ -2412,7 +2410,7 @@ impl<'a> Interpreter<'a> {
                                     labels.iter().any(|label| match label {
                                         CaseLabel::Else => !explicitly_labelled,
                                         CaseLabel::Any => true,
-                                        other => explicit_label_matches(*other, *value),
+                                        other => explicit_label_matches(*other, value),
                                     })
                                 });
                         if matches {
@@ -7488,11 +7486,16 @@ fn binary_for_assign(op: AssignOp) -> BinaryOp {
     }
 }
 
-fn explicit_label_matches(label: CaseLabel, value: i128) -> bool {
-    match label {
-        CaseLabel::Value(label_value) => label_value == value,
-        CaseLabel::Range { low, high } => low <= value && value <= high,
-        CaseLabel::Else | CaseLabel::Any => false,
+fn explicit_label_matches(label: CaseLabel, value: &Value) -> bool {
+    match (label, value) {
+        (CaseLabel::Value(label_value), Value::Int { value, .. }) => label_value == *value,
+        (CaseLabel::Bool(label_value), Value::Bool(value)) => label_value == *value,
+        (CaseLabel::Char(label_value), Value::Char(value)) => label_value == *value,
+        (CaseLabel::Range { low, high }, Value::Int { value, .. }) => {
+            low <= *value && *value <= high
+        }
+        (CaseLabel::CharRange { low, high }, Value::Char(value)) => low <= *value && *value <= high,
+        _ => false,
     }
 }
 

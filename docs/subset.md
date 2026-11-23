@@ -139,7 +139,6 @@ Not implemented yet (rejected or deferred with a diagnostic):
 - main-process interleaving with spawned processes;
 - task-object cleanup at static reach end, region-call timeout supervision, and
   priority/fairness scheduling guarantees;
-- non-integer `CASE` labels;
 - general reference targets beyond simple variables and whole allocated locations;
 - deeper interface/`IMPLEMENTS` rules and complete internal/private visibility.
 
@@ -434,14 +433,15 @@ CASE x, y OF
 ESAC
 ```
 
-- v0 supports one or more integer selectors, integer labels, literal ranges,
-  `(ELSE)`, `(*)`, and an optional unparenthesized `ELSE` branch.
+- v0 supports one or more integer, `BOOL`, or `CHAR` selectors; matching typed labels,
+  integer and character literal ranges, `(ELSE)`, `(*)`, and an optional
+  unparenthesized `ELSE` branch.
 - Each alternative supplies one parenthesized label list per selector. All selector
   positions must match for the alternative to be selected.
-- `(ELSE)` matches when no alternative matches all selectors with explicit
-  `Value`/`Range` labels; the unparenthesized `ELSE` branch runs when no alternative
-  matches.
-- Non-integer label values are not implemented yet.
+- `(ELSE)` matches when no alternative matches all selectors with explicit labels; the
+  unparenthesized `ELSE` branch runs when no alternative matches.
+- A label's mode must match its selector: integer labels for integer selectors,
+  `TRUE`/`FALSE` for `BOOL`, and character literals/ranges for `CHAR`.
 
 Actions can be labelled and left with `EXIT`:
 

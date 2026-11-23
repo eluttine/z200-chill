@@ -579,7 +579,10 @@ pub struct ArrayTupleElement {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaseLabel {
     Value(i128),
+    Bool(bool),
+    Char(char),
     Range { low: i128, high: i128 },
+    CharRange { low: char, high: char },
     Else,
     Any,
 }

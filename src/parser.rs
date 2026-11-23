@@ -2588,6 +2588,33 @@ impl<'a> Parser<'a> {
             } else if matches!(self.kind(), Some(TokenKind::Star)) {
                 self.advance();
                 labels.push(CaseLabel::Any);
+            } else if let Some(TokenKind::Bool(value)) = self.kind() {
+                let value = *value;
+                self.advance();
+                labels.push(CaseLabel::Bool(value));
+            } else if let Some(TokenKind::Char(low)) = self.kind() {
+                let low = *low;
+                self.advance();
+                if matches!(self.kind(), Some(TokenKind::Colon)) {
+                    self.advance();
+                    let Some(TokenKind::Char(high)) = self.kind() else {
+                        return Err(self.error_here_code(
+                            "E0206",
+                            "CASE character range upper bound must be a character literal",
+                        ));
+                    };
+                    let high = *high;
+                    self.advance();
+                    if low > high {
+                        return Err(self.error_here_code(
+                            "E0206",
+                            "CASE range lower bound exceeds upper bound",
+                        ));
+                    }
+                    labels.push(CaseLabel::CharRange { low, high });
+                } else {
+                    labels.push(CaseLabel::Char(low));
+                }
             } else {
                 let low = self.parse_case_integer()?;
                 if matches!(self.kind(), Some(TokenKind::Colon)) {

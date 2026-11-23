@@ -1963,11 +1963,14 @@ impl Checker {
                 let mut selector_types = Vec::with_capacity(selectors.len());
                 for selector in selectors {
                     let selector_ty = self.check_expr(selector)?;
-                    if !selector_ty.is_int() {
+                    if !matches!(selector_ty, Type::Bool | Type::Char) && !selector_ty.is_int() {
                         return Err(Error::coded(
                             "E0407",
                             selector.span(),
-                            "CASE selectors must be integers in v0",
+                            format!(
+                                "CASE selectors must be integer, BOOL, or CHAR, found {}",
+                                selector_ty.describe()
+                            ),
                         ));
                     }
                     selector_types.push(selector_ty);
@@ -2010,6 +2013,30 @@ impl Checker {
                                         selector_ty,
                                         alternative.span,
                                     )?;
+                                }
+                                CaseLabel::Bool(_) if selector_ty == Type::Bool => {}
+                                CaseLabel::Bool(_) => {
+                                    return Err(Error::coded(
+                                        "E0407",
+                                        alternative.span,
+                                        "BOOL CASE label requires a BOOL selector",
+                                    ))
+                                }
+                                CaseLabel::Char(_) if selector_ty == Type::Char => {}
+                                CaseLabel::Char(_) => {
+                                    return Err(Error::coded(
+                                        "E0407",
+                                        alternative.span,
+                                        "character CASE label requires a CHAR selector",
+                                    ))
+                                }
+                                CaseLabel::CharRange { .. } if selector_ty == Type::Char => {}
+                                CaseLabel::CharRange { .. } => {
+                                    return Err(Error::coded(
+                                        "E0407",
+                                        alternative.span,
+                                        "character CASE range requires a CHAR selector",
+                                    ))
                                 }
                                 CaseLabel::Else | CaseLabel::Any => {}
                             }
@@ -4331,6 +4358,13 @@ impl Checker {
                                 ));
                             }
                         }
+                        CaseLabel::Bool(_) | CaseLabel::Char(_) | CaseLabel::CharRange { .. } => {
+                            return Err(Error::coded(
+                                "E0400",
+                                *span,
+                                "array tuple labels must be integers",
+                            ));
+                        }
                     }
                 }
             }
@@ -6193,18 +6227,20 @@ END M;
     }
 
     #[test]
-    fn case_selector_must_be_integer() {
+    fn case_selector_must_be_discrete() {
         let error = check_source(
             r#"
 M: MODULE
-  CASE TRUE OF
+  CASE 1.5 OF
     (1): ;
   ESAC;
 END M;
 "#,
         )
         .unwrap_err();
-        assert!(error.message.contains("CASE selectors must be integers"));
+        assert!(error
+            .message
+            .contains("CASE selectors must be integer, BOOL, or CHAR"));
     }
 
     #[test]
