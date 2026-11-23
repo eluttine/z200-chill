@@ -172,7 +172,8 @@ processes, yielding at action boundaries:
 - events, `DELAY`, `CONTINUE`, signals, and region-call mutual exclusion are
   executed by the cooperative scheduler;
 - relative timing actions, duration values, process instances, `THIS`, targeted
-  signal sends, send priorities, buffers, and process handlers are executed;
+  signal sends, send priorities, buffers, process handlers, and process `LOC`
+  parameters are executed;
 - absolute/cyclic timing actions, buffers, and region object/task modes are not yet
   executed faithfully;
 - no resumable continuation or scheduler is required for the first release.

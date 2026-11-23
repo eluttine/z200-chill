@@ -64,6 +64,8 @@ pub enum Expr {
     Start {
         process: String,
         args: Vec<Node>,
+        passing: Vec<Passing>,
+        targets: Vec<Option<AssignTarget>>,
         ty: Type,
         span: Span,
     },
@@ -349,6 +351,8 @@ pub enum Stmt {
     Start {
         process: String,
         args: Vec<Node>,
+        passing: Vec<Passing>,
+        targets: Vec<Option<AssignTarget>>,
         span: Span,
     },
     Stop {
@@ -689,14 +693,34 @@ impl Lowerer<'_> {
                 process,
                 args,
                 span,
-            } => Ok(Stmt::Start {
-                process: process.clone(),
-                args: args
+            } => {
+                let Some(ApplyResolution::Start(signature)) = self.check.resolutions.get(span)
+                else {
+                    return Err(Error::new(*span, "internal: START has no resolution"));
+                };
+                let passing = signature.passing.clone();
+                let targets = passing
                     .iter()
-                    .map(|arg| self.lower_expr(arg))
-                    .collect::<Result<Vec<_>, _>>()?,
-                span: *span,
-            }),
+                    .zip(args)
+                    .map(|(passing, arg)| {
+                        if *passing == Passing::In {
+                            Ok(None)
+                        } else {
+                            Ok(Some(self.lower_target(arg)?))
+                        }
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+                Ok(Stmt::Start {
+                    process: process.clone(),
+                    args: args
+                        .iter()
+                        .map(|arg| self.lower_expr(arg))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    passing,
+                    targets,
+                    span: *span,
+                })
+            }
             Action::Stop { span } => Ok(Stmt::Stop { span: *span }),
             Action::Delay {
                 event,
@@ -1145,6 +1169,9 @@ impl Lowerer<'_> {
                         span,
                     })
                 }
+                Some(ApplyResolution::Start(_)) => {
+                    return Err(Error::new(span, "internal: START used as an apply"));
+                }
                 Some(ApplyResolution::Procedure(signature)) => {
                     let targets = signature
                         .passing
@@ -1365,15 +1392,40 @@ impl Lowerer<'_> {
             }),
             AstExpr::Null { .. } => Rc::new(Expr::Null { ty, span }),
             AstExpr::This { .. } => Rc::new(Expr::This { ty, span }),
-            AstExpr::Start { process, args, .. } => Rc::new(Expr::Start {
-                process: process.clone(),
-                args: args
-                    .iter()
-                    .map(|arg| self.lower_expr(arg))
-                    .collect::<Result<Vec<_>, _>>()?,
-                ty,
+            AstExpr::Start {
+                process,
+                args,
                 span,
-            }),
+                ..
+            } => {
+                let Some(ApplyResolution::Start(signature)) = self.check.resolutions.get(span)
+                else {
+                    return Err(Error::new(*span, "internal: START has no resolution"));
+                };
+                let passing = signature.passing.clone();
+                let targets = passing
+                    .iter()
+                    .zip(args)
+                    .map(|(passing, arg)| {
+                        if *passing == Passing::In {
+                            Ok(None)
+                        } else {
+                            Ok(Some(self.lower_target(arg)?))
+                        }
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+                Rc::new(Expr::Start {
+                    process: process.clone(),
+                    args: args
+                        .iter()
+                        .map(|arg| self.lower_expr(arg))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    passing,
+                    targets,
+                    ty,
+                    span: *span,
+                })
+            }
             AstExpr::SelfRef { .. } => Rc::new(Expr::SelfValue { ty, span }),
             AstExpr::AddressOf { target, span } => {
                 let AstExpr::Name { name, .. } = target.as_ref() else {

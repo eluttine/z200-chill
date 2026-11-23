@@ -45,6 +45,7 @@ pub enum ApplyResolution {
     Conversion(IntKind),
     FloatConversion,
     Procedure(ProcType),
+    Start(ProcType),
     ArrayIndex(Type),
     Builtin(crate::builtins::Builtin),
     TextIo {
@@ -1254,11 +1255,11 @@ impl Checker {
                         format!("duplicate parameter `{}`", param.name),
                     ));
                 }
-                if param.passing != Passing::In {
+                if !matches!(param.passing, Passing::In | Passing::Loc) {
                     return Err(Error::coded(
                         "E0409",
                         param.span,
-                        "process parameters currently require IN passing",
+                        "process parameters must use IN or LOC passing",
                     ));
                 }
                 let ty = self.resolve_mode(&param.mode)?;
@@ -2038,16 +2039,44 @@ impl Checker {
                     .iter()
                     .zip(signature.params.iter().zip(&signature.passing))
                 {
-                    if *passing != Passing::In {
-                        return Err(Error::coded(
-                            "E0409",
-                            arg.span(),
-                            "process arguments currently require IN passing",
-                        ));
+                    match passing {
+                        Passing::In => {
+                            let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
+                            self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
+                        }
+                        Passing::Loc => {
+                            if !matches!(arg, Expr::Name { .. }) {
+                                return Err(Error::coded(
+                                    "E0409",
+                                    arg.span(),
+                                    "LOC process arguments currently require a simple variable",
+                                ));
+                            }
+                            let arg_ty = self.location_type(arg)?;
+                            self.types.insert(arg.span(), arg_ty);
+                            if arg_ty != *param_ty {
+                                return Err(Error::coded(
+                                    "E0404",
+                                    arg.span(),
+                                    format!(
+                                        "LOC process argument must have mode {}, found {}",
+                                        param_ty.describe(),
+                                        arg_ty.describe()
+                                    ),
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(Error::coded(
+                                "E0409",
+                                arg.span(),
+                                "process arguments must use IN or LOC passing",
+                            ));
+                        }
                     }
-                    let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
-                    self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
                 }
+                self.resolutions
+                    .insert(*span, ApplyResolution::Start(signature));
                 Ok(())
             }
             Action::Stop { .. } => Ok(()),
@@ -2793,16 +2822,44 @@ impl Checker {
                     .iter()
                     .zip(signature.params.iter().zip(&signature.passing))
                 {
-                    if *passing != Passing::In {
-                        return Err(Error::coded(
-                            "E0409",
-                            arg.span(),
-                            "process arguments currently require IN passing",
-                        ));
+                    match passing {
+                        Passing::In => {
+                            let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
+                            self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
+                        }
+                        Passing::Loc => {
+                            if !matches!(arg, Expr::Name { .. }) {
+                                return Err(Error::coded(
+                                    "E0409",
+                                    arg.span(),
+                                    "LOC process arguments currently require a simple variable",
+                                ));
+                            }
+                            let arg_ty = self.location_type(arg)?;
+                            self.types.insert(arg.span(), arg_ty);
+                            if arg_ty != *param_ty {
+                                return Err(Error::coded(
+                                    "E0404",
+                                    arg.span(),
+                                    format!(
+                                        "LOC process argument must have mode {}, found {}",
+                                        param_ty.describe(),
+                                        arg_ty.describe()
+                                    ),
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(Error::coded(
+                                "E0409",
+                                arg.span(),
+                                "process arguments must use IN or LOC passing",
+                            ));
+                        }
                     }
-                    let arg_ty = self.check_expr_for_mode(arg, *param_ty)?;
-                    self.ensure_assignable(*param_ty, arg_ty, arg.span())?;
                 }
+                self.resolutions
+                    .insert(*span, ApplyResolution::Start(signature));
                 Ok(Type::Instance)
             }
             Expr::SelfRef { span } => {

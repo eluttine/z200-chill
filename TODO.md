@@ -197,8 +197,9 @@ deferred.
 - [x] Process `ON` handlers for process-local exceptions and `CAUSE`.
 - [x] `SIGNAL ... TO process-name` restrictions, enforced for targeted sends and
       receiver matching.
-- [ ] Absolute/cyclic timing actions, region/task object modes, and process
-      `LOC`/`OUT`/`INOUT` parameters.
+- [x] Process `LOC` parameters, with process actual locations lowered through the
+      shared call-argument path; `OUT`/`INOUT` process parameters are rejected.
+- [ ] Absolute/cyclic timing actions and region/task object modes.
 
 ## 8. Cleanup
 

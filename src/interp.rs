@@ -2100,6 +2100,8 @@ impl<'a> Interpreter<'a> {
                 ir::Stmt::Start {
                     process,
                     args,
+                    passing,
+                    targets,
                     span,
                 } => {
                     let Some(process_ref) = self.lookup_process(process) else {
@@ -2109,11 +2111,8 @@ impl<'a> Interpreter<'a> {
                             format!("unknown process `{process}`"),
                         ));
                     };
-                    let mut values = Vec::with_capacity(args.len());
-                    for arg in args {
-                        values.push(self.eval_ir(arg)?);
-                    }
-                    self.spawn_process(process_ref, values, *span)?;
+                    let call_args = self.prepare_call_args(args, passing, targets, *span)?;
+                    self.spawn_process(process_ref, call_args, *span)?;
                 }
                 ir::Stmt::Return { value, span } => {
                     if let Some(value) = value {
@@ -3198,6 +3197,8 @@ impl<'a> Interpreter<'a> {
             ir::Expr::Start {
                 process,
                 args,
+                passing,
+                targets,
                 span,
                 ..
             } => {
@@ -3208,11 +3209,8 @@ impl<'a> Interpreter<'a> {
                         format!("unknown process `{process}`"),
                     ));
                 };
-                let mut values = Vec::with_capacity(args.len());
-                for arg in args {
-                    values.push(self.eval_ir(arg)?);
-                }
-                self.spawn_process(process_ref, values, *span)
+                let call_args = self.prepare_call_args(args, passing, targets, *span)?;
+                self.spawn_process(process_ref, call_args, *span)
                     .map(Value::Instance)
             }
             ir::Expr::SelfValue { span, .. } => {
@@ -5626,7 +5624,7 @@ impl<'a> Interpreter<'a> {
     fn spawn_process(
         &mut self,
         process_ref: ProcessRef<'a>,
-        values: Vec<Value>,
+        values: Vec<CallArgument>,
         span: Span,
     ) -> Result<usize, Error> {
         if values.len() != process_ref.def.params.len() {
@@ -5682,19 +5680,47 @@ impl<'a> Interpreter<'a> {
         Ok(id)
     }
 
-    fn run_process(&mut self, def: &'a ProcessDef, args: Vec<Value>) -> Result<(), Error> {
+    fn run_process(&mut self, def: &'a ProcessDef, args: Vec<CallArgument>) -> Result<(), Error> {
         self.locals.push(Scope::default());
         self.call_bases.push(self.locals.len() - 1);
         self.depth += 1;
         let result = (|| {
-            for (param, value) in def.params.iter().zip(args) {
+            for (param, arg) in def.params.iter().zip(args) {
                 let ty = self.resolve_mode(&param.mode)?;
-                let value = self.convert(value, ty, param.span)?;
+                let cell = match (param.passing, arg) {
+                    (Passing::In, CallArgument::Value(value)) => Rc::new(RefCell::new(Var {
+                        ty,
+                        value: self.convert(value, ty, param.span)?,
+                    })),
+                    (Passing::Loc, CallArgument::Location(cell)) => {
+                        if cell.borrow().ty != ty {
+                            return Err(Error::coded(
+                                "E0507",
+                                param.span,
+                                format!(
+                                    "LOC process argument for `{}` has the wrong mode",
+                                    param.name
+                                ),
+                            ));
+                        }
+                        cell
+                    }
+                    _ => {
+                        return Err(Error::coded(
+                            "E0500",
+                            param.span,
+                            format!(
+                                "internal: wrong argument kind for process parameter `{}`",
+                                param.name
+                            ),
+                        ))
+                    }
+                };
                 self.locals
                     .last_mut()
                     .expect("process scope")
                     .vars
-                    .insert(param.name.clone(), Rc::new(RefCell::new(Var { ty, value })));
+                    .insert(param.name.clone(), cell);
             }
             self.declare_local(&def.declarations)?;
             self.initialize_declarations(&def.declarations)?;

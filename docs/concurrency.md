@@ -42,7 +42,9 @@
 - Processes run under a cooperative round-robin scheduler.
 - The scheduler yields at action boundaries, including inside procedure and process
   bodies.
-- Process parameters currently use `IN` passing.
+- Process parameters support `IN` and `LOC` passing. `LOC` aliases the caller's
+  location cell into the new process; `OUT`/`INOUT` are rejected as required by the
+  standard's process-parameter rules.
 - Module-level locations are shared between process activations (the same cells are
   visible to all process interpreters).
 - Process-local declarations and parameters are per activation.

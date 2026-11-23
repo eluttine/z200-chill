@@ -1,0 +1,6 @@
+M: MODULE
+  P: PROCESS (x INT OUT);
+    STOP;
+  END P;
+  START P();
+END M;
