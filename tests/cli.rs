@@ -237,6 +237,23 @@ fn run_multifile_example_succeeds() {
 }
 
 #[test]
+fn run_showcase_example_succeeds() {
+    let output = z200c()
+        .arg("run")
+        .arg(example("showcase"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn run_directory_dependency_succeeds() {
     let output = z200c().arg("run").arg(example("app")).output().unwrap();
 

@@ -29,6 +29,7 @@ Example programs:
 - `examples/modules` — `GRANT`/`SEIZE` with a shared seized location.
 - `examples/spec` — a `SPEC MODULE` paired with its body.
 - `examples/pipeline` — end-to-end cooperative concurrency example.
+- `examples/showcase` — integration example covering module modes, references, arrays, slices, and `CASE`.
 
 ## Repository Structure
 
@@ -48,7 +49,8 @@ z200-chill/
 │   ├── multifile/      # Manifest `sources` example
 │   ├── liblocal/       # Dependency package used by `app`
 │   ├── app/            # Directory-dependency linking example
-│   └── pipeline/       # End-to-end concurrent pipeline example
+│   ├── pipeline/       # End-to-end concurrent pipeline example
+│   └── showcase/       # Objects, references, arrays, slices, and CASE
 └── docs/               # subset.md, manifest.md, grant-file.md, diagnostics.md, ir.md,
                         # concurrency.md, moreta.md, text.md, contexts.md,
                         # piecewise.md, decisions.md

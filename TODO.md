@@ -198,6 +198,8 @@ deferred.
       direct value-cycle rejection.
 - [x] References to whole array targets with indexed dereference (`ref->(i)`).
 - [x] Nested multidimensional array literals.
+- [x] Integration showcase example spanning objects, references, arrays, slices, and
+      control flow.
 - [x] Full-dimensional constant-bound multidimensional slices, including `UP` size
       and rectangular slice assignment.
 - [x] Main-process interleaving at action boundaries via scheduler pumping.

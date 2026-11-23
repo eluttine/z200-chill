@@ -1,0 +1,5 @@
+[package]
+name = "showcase"
+
+[build]
+entry = "src/main.ch"
