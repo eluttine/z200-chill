@@ -1,6 +1,8 @@
 M: MODULE
   NEWMODE T = TASK BODY
-    DCL value INT;
+    Get: PROC () RETURNS (INT);
+      RESULT 1;
+    END Get;
   END T;
   DCL t T;
 END M;

@@ -193,12 +193,6 @@ fn build_mode_definition(
             invariant,
             ..
         } => {
-            if *kind == crate::ast::MoretaKind::Task {
-                return Err(Error::new(
-                    mode_def.span,
-                    "task object modes are not implemented yet",
-                ));
-            }
             let mut base_ids = Vec::new();
             let mut components: Vec<crate::modes::MoretaComponent> = Vec::new();
             for base in bases {
@@ -379,6 +373,35 @@ fn build_mode_definition(
                         *span,
                         "a destructor cannot take parameters or return a value",
                     ));
+                }
+            }
+            if *kind == crate::ast::MoretaKind::Task {
+                for component in &components {
+                    if let crate::modes::MoretaComponent::Proc {
+                        name, signature, ..
+                    } = component
+                    {
+                        if signature.result.is_some() {
+                            return Err(Error::new(
+                                mode_def.span,
+                                format!(
+                                    "task component procedure `{name}` must not return a value"
+                                ),
+                            ));
+                        }
+                        if signature
+                            .passing
+                            .iter()
+                            .any(|passing| *passing != crate::ast::Passing::In)
+                        {
+                            return Err(Error::new(
+                                mode_def.span,
+                                format!(
+                                    "task component procedure `{name}` must use only IN parameters"
+                                ),
+                            ));
+                        }
+                    }
                 }
             }
             let id = crate::types::MoretaId(table.moretas.len());

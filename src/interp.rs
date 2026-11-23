@@ -370,6 +370,14 @@ pub fn run_checked(
                             .or_default()
                             .push(runnable.entry);
                     }
+                    ProcessYield::TaskWait { object } => {
+                        scheduler
+                            .borrow_mut()
+                            .task_waiters
+                            .entry(object)
+                            .or_default()
+                            .push(runnable.entry);
+                    }
                     ProcessYield::AcquireRegion { region } => {
                         scheduler
                             .borrow_mut()
@@ -561,6 +569,9 @@ enum ProcessYield {
     AcquireObject {
         object: usize,
     },
+    TaskWait {
+        object: usize,
+    },
 }
 
 #[derive(Clone)]
@@ -585,10 +596,16 @@ enum ProcessInput {
         values: Vec<Value>,
         sender: usize,
     },
+    TaskReady,
 }
 
 type ProcessCoroutine = Coroutine<ProcessInput, ProcessYield, Result<(), Error>, DefaultStack>;
 type ReceiverSlot = Rc<RefCell<Option<ProcessEntry>>>;
+
+struct TaskJob {
+    proc_span: Span,
+    args: Vec<Value>,
+}
 
 struct EventWaiter {
     id: usize,
@@ -654,6 +671,9 @@ struct ScheduleState {
     receivers: HashMap<String, Vec<(usize, ReceiverSlot, Option<Instant>)>>,
     buffers: HashMap<usize, BufferState>,
     sleepers: Vec<(Instant, ProcessEntry)>,
+    task_jobs: HashMap<usize, VecDeque<TaskJob>>,
+    task_waiters: HashMap<usize, Vec<ProcessEntry>>,
+    task_workers: HashSet<usize>,
     region_owner: HashMap<usize, usize>,
     region_waiters: HashMap<usize, Vec<ProcessEntry>>,
     object_owner: HashMap<usize, usize>,
@@ -782,6 +802,20 @@ fn cooperative_sleep(deadline: Instant) -> Result<(), Error> {
             let _: ProcessInput = (*ptr).suspend(ProcessYield::Sleep { deadline });
         }
         Ok(())
+    })
+}
+
+fn cooperative_task_wait(object: usize) -> Result<ProcessInput, Error> {
+    CURRENT_YIELDER.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            return Err(Error::coded(
+                "E0500",
+                Span::new(SourceId(0), 0, 0),
+                "task worker outside a process",
+            ));
+        }
+        Ok(unsafe { (*ptr).suspend(ProcessYield::TaskWait { object }) })
     })
 }
 
@@ -1511,6 +1545,13 @@ impl<'a> Interpreter<'a> {
                     let value = self.create_moreta_object_with_args(id, args, var.span)?;
                     self.assign_var(&var.name, value, var.span)?;
                 }
+                if let Ok(Type::Moreta(id)) = self.resolve_mode(&var.mode) {
+                    if self.modes.get_moreta(id).kind == crate::ast::MoretaKind::Task {
+                        if let Some(cell) = self.find_var_cell(&var.name) {
+                            self.start_task_worker(cell, var.span)?;
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -1873,7 +1914,9 @@ impl<'a> Interpreter<'a> {
                     match cooperative_delay(key, priority, self.deadline)? {
                         ProcessInput::Timeout => return Ok(Flow::Timeout),
                         ProcessInput::Delay { .. } | ProcessInput::None => {}
-                        ProcessInput::Signal { .. } | ProcessInput::Buffer { .. } => {
+                        ProcessInput::Signal { .. }
+                        | ProcessInput::Buffer { .. }
+                        | ProcessInput::TaskReady => {
                             return Err(Error::coded(
                                 "E0500",
                                 *span,
@@ -2181,7 +2224,9 @@ impl<'a> Interpreter<'a> {
                                 sender,
                             } => (name, values, sender),
                             ProcessInput::Timeout => return Ok(Flow::Timeout),
-                            ProcessInput::Delay { .. } | ProcessInput::None => {
+                            ProcessInput::Delay { .. }
+                            | ProcessInput::TaskReady
+                            | ProcessInput::None => {
                                 return Err(Error::coded(
                                     "E0500",
                                     *span,
@@ -3416,6 +3461,11 @@ impl<'a> Interpreter<'a> {
                     }
                 };
                 let cell = Rc::new(RefCell::new(Var { ty: *mode, value }));
+                if let Type::Moreta(id) = mode {
+                    if self.modes.get_moreta(*id).kind == crate::ast::MoretaKind::Task {
+                        self.start_task_worker(Rc::clone(&cell), *span)?;
+                    }
+                }
                 Ok(Value::Ref(Some(self.intern_ref(cell, true))))
             }
             ir::Expr::Name { name, span, .. } => self.read_var(name, *span),
@@ -3739,7 +3789,7 @@ impl<'a> Interpreter<'a> {
                         .expect("deref method scope")
                         .vars
                         .insert(temp.clone(), Rc::new(RefCell::new(Var { ty, value })));
-                    let result = self.call_method(&temp, *proc_span, call_args, *span);
+                    let result = self.call_method(&temp, *proc_span, call_args, *span, false);
                     let updated = self
                         .locals
                         .last_mut()
@@ -3778,7 +3828,7 @@ impl<'a> Interpreter<'a> {
                         .expect("local scope")
                         .vars
                         .insert(temp.clone(), Rc::clone(&temp_cell));
-                    let result = self.call_method(&temp, *proc_span, call_args, *span);
+                    let result = self.call_method(&temp, *proc_span, call_args, *span, false);
                     let updated = self
                         .locals
                         .last_mut()
@@ -3792,7 +3842,7 @@ impl<'a> Interpreter<'a> {
                     self.refresh_self_locals(id, *span)?;
                     result
                 } else {
-                    self.call_method(object, *proc_span, call_args, *span)
+                    self.call_method(object, *proc_span, call_args, *span, true)
                 }
             }
             ir::Expr::Association {
@@ -4108,6 +4158,7 @@ impl<'a> Interpreter<'a> {
         proc_span: Span,
         args: Vec<CallArgument>,
         span: Span,
+        dispatch_task: bool,
     ) -> Result<Value, Error> {
         if self.depth >= 1024 {
             return Err(Error::coded("E0506", span, "call depth limit exceeded"));
@@ -4128,8 +4179,42 @@ impl<'a> Interpreter<'a> {
         let object_cell = self.find_var_cell(object_name).ok_or_else(|| {
             Error::coded("E0505", span, format!("unknown object `{object_name}`"))
         })?;
-        let region_object = self.modes.get_moreta(id).kind == crate::ast::MoretaKind::Region;
+        let mode_kind = self.modes.get_moreta(id).kind;
+        let region_object = mode_kind == crate::ast::MoretaKind::Region;
         let object_key = Rc::as_ptr(&object_cell) as usize;
+        if mode_kind == crate::ast::MoretaKind::Task && dispatch_task {
+            let mut values = Vec::with_capacity(args.len());
+            for arg in args {
+                let CallArgument::Value(value) = arg else {
+                    return Err(Error::coded(
+                        "E0507",
+                        span,
+                        "task procedure arguments must be IN values",
+                    ));
+                };
+                values.push(value);
+            }
+            let mut scheduler = self.scheduler.borrow_mut();
+            scheduler
+                .task_jobs
+                .entry(object_key)
+                .or_default()
+                .push_back(TaskJob {
+                    proc_span,
+                    args: values,
+                });
+            if let Some(entry) = scheduler
+                .task_waiters
+                .get_mut(&object_key)
+                .and_then(|waiters| waiters.pop())
+            {
+                scheduler.ready.push_back(Runnable {
+                    input: ProcessInput::TaskReady,
+                    entry,
+                });
+            }
+            return Ok(Value::Undefined);
+        }
         if region_object {
             self.acquire_object(object_key)?;
         }
@@ -5199,7 +5284,7 @@ impl<'a> Interpreter<'a> {
             .vars
             .insert(temp.clone(), Rc::clone(&cell));
         let call_args = args.into_iter().map(CallArgument::Value).collect();
-        let result = self.call_method(&temp, proc_span, call_args, span);
+        let result = self.call_method(&temp, proc_span, call_args, span, false);
         let updated = self
             .locals
             .last_mut()
@@ -5859,6 +5944,83 @@ impl<'a> Interpreter<'a> {
             self_cells: Vec::new(),
             self_modes: Vec::new(),
         }
+    }
+
+    fn start_task_worker(&mut self, cell: VarCell, span: Span) -> Result<(), Error> {
+        let object_key = Rc::as_ptr(&cell) as usize;
+        {
+            let scheduler = self.scheduler.borrow();
+            if scheduler.task_workers.contains(&object_key) {
+                return Ok(());
+            }
+        }
+        let id = {
+            let mut scheduler = self.scheduler.borrow_mut();
+            let id = scheduler.next_process_id;
+            scheduler.next_process_id += 1;
+            scheduler.task_workers.insert(object_key);
+            id
+        };
+        let mut child = Box::new(self.fork_for_process(self.active_module, self.active_scope_key));
+        child.process_id = id;
+        child.process_name = "task".to_owned();
+        let yielder = Rc::new(Cell::new(std::ptr::null()));
+        let yielder_slot = Rc::clone(&yielder);
+        let cell_slot = Rc::clone(&cell);
+        // Safety: the task worker is owned by the scheduler and dropped before the
+        // borrowed program/check data leaves `run_checked`.
+        let coroutine = unsafe {
+            Coroutine::with_stack_unchecked(
+                DefaultStack::default(),
+                move |current: &Yielder<ProcessInput, ProcessYield>, input: ProcessInput| {
+                    let _ = input;
+                    yielder_slot.set(current as *const _);
+                    CURRENT_YIELDER.with(|slot| slot.set(current as *const _));
+                    loop {
+                        let job = {
+                            let mut scheduler = child.scheduler.borrow_mut();
+                            scheduler
+                                .task_jobs
+                                .get_mut(&object_key)
+                                .and_then(|jobs| jobs.pop_front())
+                        };
+                        let Some(job) = job else {
+                            let _ = cooperative_task_wait(object_key)?;
+                            continue;
+                        };
+                        child.locals.push(Scope::default());
+                        let temp = "\u{0}task-object".to_owned();
+                        child
+                            .locals
+                            .last_mut()
+                            .expect("task scope")
+                            .vars
+                            .insert(temp.clone(), Rc::clone(&cell_slot));
+                        let result = child.call_method(
+                            &temp,
+                            job.proc_span,
+                            job.args.into_iter().map(CallArgument::Value).collect(),
+                            span,
+                            false,
+                        );
+                        child.locals.pop();
+                        result?;
+                    }
+                },
+            )
+        };
+        let mut scheduler = self.scheduler.borrow_mut();
+        scheduler.live_processes.insert(id);
+        scheduler.process_names.insert(id, "task".to_owned());
+        scheduler.ready.push_back(Runnable {
+            input: ProcessInput::None,
+            entry: ProcessEntry {
+                id,
+                coroutine,
+                yielder,
+            },
+        });
+        Ok(())
     }
 
     fn spawn_process(

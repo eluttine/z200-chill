@@ -36,6 +36,7 @@ pub enum ModeInfoKind {
     Struct,
     Moreta,
     Region,
+    Task,
 }
 
 #[derive(Debug, Clone)]
@@ -163,13 +164,14 @@ pub fn add_external_modes(
                     });
                     definitions.push(mode);
                 }
-                ModeInfoKind::Moreta | ModeInfoKind::Region => {
+                ModeInfoKind::Moreta | ModeInfoKind::Region | ModeInfoKind::Task => {
                     let id = crate::types::MoretaId(modes.moretas.len());
                     ids.moreta_ids.insert(symbol.clone(), id);
                     modes.moretas.push(crate::modes::MoretaMode {
                         name: mode.name.clone(),
                         kind: match mode.kind {
                             ModeInfoKind::Region => crate::ast::MoretaKind::Region,
+                            ModeInfoKind::Task => crate::ast::MoretaKind::Task,
                             _ => crate::ast::MoretaKind::Module,
                         },
                         package: usize::MAX,
@@ -360,7 +362,7 @@ pub fn add_external_exports(
                     let symbol = mode.symbol();
                     let ty = match mode.kind {
                         ModeInfoKind::Struct => ids.get(&symbol).map(Type::Struct),
-                        ModeInfoKind::Moreta | ModeInfoKind::Region => {
+                        ModeInfoKind::Moreta | ModeInfoKind::Region | ModeInfoKind::Task => {
                             ids.get_moreta(&symbol).map(Type::Moreta)
                         }
                     }

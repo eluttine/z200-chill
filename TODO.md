@@ -206,7 +206,10 @@ deferred.
 - [x] `examples/pipeline`: end-to-end concurrent pipeline exercising bounded buffers,
       processes, region objects, signals, targeted sends, receive `SET`, timing, and
       FIFO/priority message ordering.
-- [ ] Task object modes: task thread activation and termination.
+- [x] Task object modes with per-object task workers, asynchronous queued component
+      calls, task-only `IN` procedure validation, and grant-kind preservation.
+- [ ] Mutually exclusive direct task-object field access and task-object lifetime
+      termination.
 
 ## 8. Cleanup
 

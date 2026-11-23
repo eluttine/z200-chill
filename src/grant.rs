@@ -47,6 +47,7 @@ pub enum GrantModeKind {
     Struct,
     Moreta,
     Region,
+    Task,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +164,7 @@ impl GrantFile {
                         package: mode.package_name.clone(),
                         kind: match mode.kind {
                             crate::ast::MoretaKind::Region => GrantModeKind::Region,
+                            crate::ast::MoretaKind::Task => GrantModeKind::Task,
                             _ => GrantModeKind::Moreta,
                         },
                         fields: Vec::new(),
@@ -425,6 +427,7 @@ impl GrantFile {
                     GrantModeKind::Struct => program::ModeInfoKind::Struct,
                     GrantModeKind::Moreta => program::ModeInfoKind::Moreta,
                     GrantModeKind::Region => program::ModeInfoKind::Region,
+                    GrantModeKind::Task => program::ModeInfoKind::Task,
                 },
                 components,
             });
@@ -834,7 +837,7 @@ fn parse_external_type(
         if let Some(definition) = definitions.get(name) {
             return Ok(match definition.kind {
                 GrantModeKind::Struct => program::ExternalType::Mode(name.to_owned()),
-                GrantModeKind::Moreta | GrantModeKind::Region => {
+                GrantModeKind::Moreta | GrantModeKind::Region | GrantModeKind::Task => {
                     program::ExternalType::Moreta(name.to_owned())
                 }
             });
@@ -1484,6 +1487,51 @@ END M;
             .find(|mode| mode.name == "R")
             .unwrap();
         assert_eq!(info.kind, program::ModeInfoKind::Region);
+    }
+
+    #[test]
+    fn encodes_task_modes() {
+        let manifest = Manifest::parse(
+            r#"
+[package]
+name = "tasks"
+
+[build]
+entry = "src/main.ch"
+"#,
+        )
+        .unwrap();
+        let tokens = lexer::tokenize(
+            r#"
+M: MODULE
+  GRANT T;
+  NEWMODE T = TASK BODY
+    DCL value INT;
+    Set: PROC (n INT);
+      value := n;
+    END Set;
+  END T;
+END M;
+"#,
+        )
+        .unwrap();
+        let mut program = parser::parse(&tokens).unwrap();
+        for module in &mut program.modules {
+            module.package_name = Some("tasks".to_owned());
+        }
+        let grant = GrantFile::from_package(&manifest, &program).unwrap();
+        let mode = grant.modes.iter().find(|mode| mode.name == "T").unwrap();
+        assert_eq!(mode.kind, GrantModeKind::Task);
+        let interface = GrantFile::from_toml(&grant.to_toml().unwrap())
+            .unwrap()
+            .to_interface()
+            .unwrap();
+        let info = interface
+            .modes
+            .iter()
+            .find(|mode| mode.name == "T")
+            .unwrap();
+        assert_eq!(info.kind, program::ModeInfoKind::Task);
     }
 
     #[test]

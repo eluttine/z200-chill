@@ -223,6 +223,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                         forbidden: Vec::new(),
                         kind: match mode.kind {
                             crate::ast::MoretaKind::Region => ModeInfoKind::Region,
+                            crate::ast::MoretaKind::Task => ModeInfoKind::Task,
                             _ => ModeInfoKind::Moreta,
                         },
                         components,
