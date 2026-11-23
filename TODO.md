@@ -86,9 +86,11 @@ processes are single-threaded/non-preemptive for now; faithful CHILL concurrency
 deferred.
 
 - [x] Decide first-release policy: keep execution single-threaded.
-- [ ] Design region mutual exclusion and intra-regional lifetimes.
-- [ ] Implement a resumable scheduler/VM for processes, signals, and timers.
-- [ ] Support nested regions inside module bodies.
+- [x] Design and implement cooperative region mutual exclusion and per-object
+      serialization for region methods.
+- [x] Implement cooperative process scheduling, signals, buffers, timers, and
+      task-object workers.
+- [x] Support nested regions inside module bodies.
 
 ## 7. Core language coverage
 
@@ -148,7 +150,9 @@ deferred.
 - [x] Association `MODIFY` (no parameters) and indexed `ACCESS (range) CHARS`,
       indexed `CONNECT`/`READRECORD`/`WRITERECORD`, record-range checks, and
       `INDEXABLE` reporting.
-- [-] Processes, signals, and timers: deferred to post-first-release concurrency work.
+- [x] Processes, signals, buffers, timers, and event selection under the cooperative
+      single-threaded scheduler. Faithful preemptive concurrency and main-process
+      interleaving remain deferred.
 - [x] `POWERSET` of `INT` / `BOOL` / `CHAR` with literals, ranges, union,
       intersection, difference, equality/ordering, and `IN`.
 - [x] Named `SET (...)` modes with unnumbered and numbered elements.
