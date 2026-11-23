@@ -302,7 +302,9 @@ mode.
 - Array elements may be structures, sets, powersets, associations, access modes,
   module-mode objects, `REF`, `ROW`, or `PTR` modes. Arrays of buffers and references
   to array targets remain unsupported.
-- Array slices currently apply to one-dimensional arrays only.
+- Full-dimensional multidimensional slices with constant bounds are supported,
+  including the `UP size` form. Partial-dimensional and dynamic multidimensional
+  slices remain unsupported.
 - Array literals support one-dimensional arrays and nested multidimensional literals
   such as `[[1, 2], [3, 4]]`.
 

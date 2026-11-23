@@ -3122,6 +3122,48 @@ impl<'a> Parser<'a> {
                     if self.at_colon() {
                         self.advance();
                         let last = self.parse_expr()?;
+                        if self.at_comma() {
+                            let first_span = first.span();
+                            let dim_span =
+                                Span::new(self.source, first_span.start, last.span().end);
+                            let mut dims = vec![SliceDimension {
+                                first,
+                                last,
+                                up: false,
+                                span: dim_span,
+                            }];
+                            while self.at_comma() {
+                                self.advance();
+                                let first = self.parse_expr()?;
+                                let (last, up) = if self.at_colon() {
+                                    self.advance();
+                                    (self.parse_expr()?, false)
+                                } else if self.at_keyword(Keyword::Up) {
+                                    self.advance();
+                                    (self.parse_expr()?, true)
+                                } else {
+                                    return Err(self.error_here_code(
+                                        "E0205",
+                                        "multidimensional slices require a range or UP size for every dimension",
+                                    ));
+                                };
+                                let first_span = first.span();
+                                let dim_span =
+                                    Span::new(self.source, first_span.start, last.span().end);
+                                dims.push(SliceDimension {
+                                    first,
+                                    last,
+                                    up,
+                                    span: dim_span,
+                                });
+                            }
+                            let end = self.expect_rparen()?;
+                            return Ok(Expr::MultiSlice {
+                                name,
+                                dims,
+                                span: Span::new(self.source, name_span.start, end.end),
+                            });
+                        }
                         let end = self.expect_rparen()?;
                         return Ok(Expr::ArraySlice {
                             name,
@@ -3134,6 +3176,48 @@ impl<'a> Parser<'a> {
                     if self.at_keyword(Keyword::Up) {
                         self.advance();
                         let last = self.parse_expr()?;
+                        if self.at_comma() {
+                            let first_span = first.span();
+                            let dim_span =
+                                Span::new(self.source, first_span.start, last.span().end);
+                            let mut dims = vec![SliceDimension {
+                                first,
+                                last,
+                                up: true,
+                                span: dim_span,
+                            }];
+                            while self.at_comma() {
+                                self.advance();
+                                let first = self.parse_expr()?;
+                                let (last, up) = if self.at_colon() {
+                                    self.advance();
+                                    (self.parse_expr()?, false)
+                                } else if self.at_keyword(Keyword::Up) {
+                                    self.advance();
+                                    (self.parse_expr()?, true)
+                                } else {
+                                    return Err(self.error_here_code(
+                                        "E0205",
+                                        "multidimensional slices require a range or UP size for every dimension",
+                                    ));
+                                };
+                                let first_span = first.span();
+                                let dim_span =
+                                    Span::new(self.source, first_span.start, last.span().end);
+                                dims.push(SliceDimension {
+                                    first,
+                                    last,
+                                    up,
+                                    span: dim_span,
+                                });
+                            }
+                            let end = self.expect_rparen()?;
+                            return Ok(Expr::MultiSlice {
+                                name,
+                                dims,
+                                span: Span::new(self.source, name_span.start, end.end),
+                            });
+                        }
                         let end = self.expect_rparen()?;
                         return Ok(Expr::ArraySlice {
                             name,

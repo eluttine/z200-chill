@@ -560,6 +560,14 @@ pub enum Action {
 }
 
 #[derive(Debug, Clone)]
+pub struct SliceDimension {
+    pub first: Expr,
+    pub last: Expr,
+    pub up: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct Branch {
     pub condition: Expr,
     pub body: Vec<Action>,
@@ -739,6 +747,12 @@ pub enum Expr {
         up: bool,
         span: Span,
     },
+    /// A full-dimensional multidimensional slice.
+    MultiSlice {
+        name: String,
+        dims: Vec<SliceDimension>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -767,6 +781,7 @@ impl Expr {
             | Self::Field { span, .. }
             | Self::ArrayTuple { span, .. }
             | Self::ArraySlice { span, .. }
+            | Self::MultiSlice { span, .. }
             | Self::MethodCall { span, .. } => *span,
         }
     }

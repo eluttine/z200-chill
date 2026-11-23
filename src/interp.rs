@@ -4927,6 +4927,15 @@ impl<'a> Interpreter<'a> {
                 let value = self.read_var(name, *span)?;
                 read_array_slice(value, *offset, *count, array.low, *span)
             }
+            ir::Expr::MultiArraySlice {
+                name,
+                source,
+                result,
+                span,
+            } => {
+                let value = self.read_var(name, *span)?;
+                extract_multidim_slice(value, *source, *result, *span)
+            }
             ir::Expr::ArraySliceDynamic {
                 name,
                 first,
@@ -7809,6 +7818,43 @@ fn dynamic_slice_range(
         ));
     }
     Ok((first - low, upper - first + 1))
+}
+
+fn extract_multidim_slice(
+    value: Value,
+    source: crate::types::MultiArrayType,
+    result: crate::types::MultiArrayType,
+    span: Span,
+) -> Result<Value, Error> {
+    let Value::Array { values, .. } = value else {
+        return Err(Error::coded("E0507", span, "expected an array value"));
+    };
+    let total = result.total_len();
+    let mut extracted = Vec::with_capacity(total.max(0) as usize);
+    for flat in 0..total {
+        let mut remainder = flat;
+        let mut indices = Vec::with_capacity(result.rank());
+        for dim in result.dimensions().iter().rev() {
+            let length = dim.length();
+            if length <= 0 {
+                break;
+            }
+            indices.push(dim.low + remainder % length);
+            remainder /= length;
+        }
+        indices.reverse();
+        let offset = array_offset(Type::MultiArray(source), &indices, span)?;
+        extracted.push(
+            values
+                .get(offset as usize)
+                .cloned()
+                .unwrap_or(Value::Undefined),
+        );
+    }
+    Ok(Value::Array {
+        low: result.dimensions()[0].low,
+        values: extracted,
+    })
 }
 
 fn read_array_slice(

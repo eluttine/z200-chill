@@ -208,6 +208,12 @@ pub enum Expr {
         element: crate::types::ArrayElement,
         span: Span,
     },
+    MultiArraySlice {
+        name: String,
+        source: crate::types::MultiArrayType,
+        result: crate::types::MultiArrayType,
+        span: Span,
+    },
     LabelledArrayLiteral {
         entries: Vec<(Vec<i128>, Node)>,
         array: crate::types::ArrayType,
@@ -277,6 +283,7 @@ impl Expr {
             | Self::MultiArrayLiteral { span, .. }
             | Self::ArraySlice { span, .. }
             | Self::ArraySliceDynamic { span, .. }
+            | Self::MultiArraySlice { span, .. }
             | Self::LabelledArrayLiteral { span, .. }
             | Self::PowerSetLiteral { span, .. }
             | Self::MethodCall { span, .. }
@@ -317,6 +324,7 @@ impl Expr {
                 low: *low,
                 element: *element,
             }),
+            Self::MultiArraySlice { result, .. } => Some(Type::MultiArray(*result)),
             Self::PowerSetLiteral { ty, .. } => Some(*ty),
             Self::MethodCall { ty, .. } => *ty,
             Self::Call { ty, .. }
@@ -1385,6 +1393,15 @@ impl Lowerer<'_> {
                         span,
                     })
                 }
+                Some(ApplyResolution::MultiSlice { result, .. }) => {
+                    return Err(Error::new(
+                        span,
+                        format!(
+                            "internal: multidimensional slice result `{}` used as a call",
+                            result.rank()
+                        ),
+                    ));
+                }
                 Some(ApplyResolution::TextSub { op }) => {
                     use crate::builtins::TextSubOp;
                     let AstExpr::Name {
@@ -1751,6 +1768,22 @@ impl Lowerer<'_> {
                 })
             }
             AstExpr::Apply { .. } => unreachable!("handled above"),
+            AstExpr::MultiSlice { name, span, .. } => {
+                let Some(ApplyResolution::MultiSlice { source, result }) =
+                    self.check.resolutions.get(span)
+                else {
+                    return Err(Error::new(
+                        *span,
+                        "internal: multidimensional slice has no resolution",
+                    ));
+                };
+                Rc::new(Expr::MultiArraySlice {
+                    name: name.clone(),
+                    source: *source,
+                    result: *result,
+                    span: *span,
+                })
+            }
             AstExpr::ArraySlice {
                 name,
                 first,

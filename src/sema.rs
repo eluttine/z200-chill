@@ -59,6 +59,10 @@ pub enum ApplyResolution {
     TextSub {
         op: crate::builtins::TextSubOp,
     },
+    MultiSlice {
+        source: crate::types::MultiArrayType,
+        result: crate::types::MultiArrayType,
+    },
     Association {
         op: crate::builtins::AssociationOp,
         index: bool,
@@ -3099,6 +3103,76 @@ impl Checker {
                 self.resolutions
                     .insert(*span, ApplyResolution::ArrayIndex(array));
                 Ok(element)
+            }
+            Expr::MultiSlice { name, dims, span } => {
+                let Some(Type::MultiArray(source)) = self.lookup_var(name) else {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        format!("multidimensional slice requires a multidimensional array, but `{name}` is not one"),
+                    ));
+                };
+                if dims.len() != source.rank() {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        format!(
+                            "multidimensional slice requires {} dimension(s), found {}",
+                            source.rank(),
+                            dims.len()
+                        ),
+                    ));
+                }
+                let mut result_dims = Vec::with_capacity(dims.len());
+                for (dim, source_dim) in dims.iter().zip(source.dimensions()) {
+                    let first = constant_int(&dim.first).ok_or_else(|| {
+                        Error::coded(
+                            "E0400",
+                            dim.first.span(),
+                            "dynamic multidimensional slice bounds are not implemented yet",
+                        )
+                    })?;
+                    let last = constant_int(&dim.last).ok_or_else(|| {
+                        Error::coded(
+                            "E0400",
+                            dim.last.span(),
+                            "dynamic multidimensional slice bounds are not implemented yet",
+                        )
+                    })?;
+                    let last = if dim.up {
+                        if last < 1 {
+                            return Err(Error::coded(
+                                "E0400",
+                                dim.last.span(),
+                                "array slice size must be positive",
+                            ));
+                        }
+                        first + last - 1
+                    } else {
+                        last
+                    };
+                    if first < source_dim.low || last > source_dim.high || first > last {
+                        return Err(Error::coded(
+                            "E0400",
+                            dim.span,
+                            format!(
+                                "slice {}:{} is outside source dimension {}:{}",
+                                first, last, source_dim.low, source_dim.high
+                            ),
+                        ));
+                    }
+                    result_dims.push(crate::types::ArrayDimension {
+                        low: first,
+                        high: last,
+                    });
+                }
+                let result = crate::types::MultiArrayType::new(&result_dims, source.element)
+                    .ok_or_else(|| {
+                        Error::coded("E0400", *span, "unsupported multidimensional slice shape")
+                    })?;
+                self.resolutions
+                    .insert(*span, ApplyResolution::MultiSlice { source, result });
+                Ok(Type::MultiArray(result))
             }
             Expr::Deref { base, mode, span } => {
                 let base_ty = self.check_expr(base)?;
