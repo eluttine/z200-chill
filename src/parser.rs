@@ -3235,8 +3235,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_hello_example() {
-        let program = parse_source(include_str!("../examples/hello/src/main.ch"));
+    fn parses_procedures_example() {
+        let program = parse_source(include_str!("../examples/procedures/src/main.ch"));
         assert_eq!(program.modules.len(), 1);
 
         let module = &program.modules[0];

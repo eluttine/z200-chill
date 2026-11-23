@@ -19,7 +19,7 @@ removed from GCC in 2002 (GCC 3.0 omitted it; the source was deleted in April 20
 
 Section references below are to Z.200 (11/99) unless stated otherwise. The example
 compiler targets `z200-11/99`, the current in-force edition
-(11/99); every construct used by the subset and the hello example is also valid in
+(11/99); every construct used by the subset and the example programs is also valid in
 earlier editions, but 1999 is the normative target.
 
 ---
@@ -128,8 +128,9 @@ Implemented in `z200c`:
 - generic procedure/module templates over `MODE`, `SYN`, and `PROC`;
 - moreta module-body objects with methods, inheritance, specs, initializers, and
   invariants (see [moreta.md](moreta.md));
-- a tree-walking interpreter, so `z200c run examples/hello` executes the example and
-  verifies its `ASSERT`.
+- a tree-walking interpreter: `z200c run examples/hello` prints `Hello, world!`, and
+  `z200c run examples/procedures` executes the procedure/conversion example and verifies
+  its `ASSERT`.
 
 Not implemented yet (rejected or deferred with a diagnostic):
 
@@ -799,7 +800,10 @@ the language.
 
 ---
 
-## 8. Exact semantics of `examples/hello/src/main.ch`
+## 8. Exact semantics of `examples/procedures/src/main.ch`
+
+`examples/hello` is the minimal output smoke test and prints `Hello, world!`.
+This section covers the procedure/conversion example:
 
 Source:
 

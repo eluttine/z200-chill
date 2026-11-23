@@ -4550,13 +4550,13 @@ END M;
     }
 
     #[test]
-    fn hello_example_checks() {
-        check_source(include_str!("../examples/hello/src/main.ch")).unwrap();
+    fn procedures_example_checks() {
+        check_source(include_str!("../examples/procedures/src/main.ch")).unwrap();
     }
 
     #[test]
     fn records_expression_types_and_apply_resolutions() {
-        let tokens = lexer::tokenize(include_str!("../examples/hello/src/main.ch")).unwrap();
+        let tokens = lexer::tokenize(include_str!("../examples/procedures/src/main.ch")).unwrap();
         let program = parser::parse(&tokens).unwrap();
         let result = analyze(&program, WidthProfile::default());
 

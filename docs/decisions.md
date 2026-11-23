@@ -21,12 +21,15 @@ target/ABI property, so every package in a build shares it. See §4.2 of
 
 ## 10.3 Harness output convention (resolved)
 
-The hello example verifies itself with the standard `ASSERT` action, so `run_ok` does not
-need I/O:
+The procedures example verifies itself with the standard `ASSERT` action, so `run_ok`
+does not need I/O:
 
 - expected stdout: empty;
 - expected exit status: success;
 - unhandled `ASSERTFAIL`/exception: failure.
+
+The hello example is a separate minimal stdout test with expected output
+`Hello, world!`.
 
 ## 10.4 Grant-file / multi-module model (qualified seize resolved; grant renaming open)
 

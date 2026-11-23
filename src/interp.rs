@@ -7189,8 +7189,8 @@ mod tests {
     }
 
     #[test]
-    fn runs_hello_example() {
-        run_source(include_str!("../examples/hello/src/main.ch")).unwrap();
+    fn runs_procedures_example() {
+        run_source(include_str!("../examples/procedures/src/main.ch")).unwrap();
     }
 
     #[test]

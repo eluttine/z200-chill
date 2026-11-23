@@ -14,7 +14,7 @@ cargo run -- run examples/hello
 cargo run -- grant examples/spec
 ```
 
-`examples/hello` is the first acceptance test: it computes `11` and verifies it with `ASSERT`, exiting successfully with no output. `examples/modules` demonstrates `GRANT` / `SEIZE`, including a shared seized location, and `examples/spec` demonstrates a `SPEC MODULE` paired with its body.
+`examples/hello` is the minimal first-run program: it writes `Hello, world!`. `examples/procedures` is the procedure/conversion acceptance test: it computes `11` and verifies it with `ASSERT`, exiting successfully with no output. `examples/modules` demonstrates `GRANT` / `SEIZE`, including a shared seized location, and `examples/spec` demonstrates a `SPEC MODULE` paired with its body.
 
 ## Repository Structure
 
@@ -26,12 +26,14 @@ z200-chill/
 ├── src/                # CLI, lexer, parser, AST, mode checker, interpreter, manifest
 ├── tests/              # CLI integration tests
 ├── examples/
-│   ├── hello/          # Starter CHILL package and manifest example
+│   ├── hello/          # Minimal "Hello, world!" package
+│   ├── procedures/     # Procedure, conversion, and ASSERT example
 │   ├── modules/        # GRANT/SEIZE visibility example
 │   ├── spec/           # SPEC MODULE + body example
 │   ├── control/        # DO FOR / CASE / EXIT example
 │   ├── multifile/      # Manifest `sources` example
 │   ├── liblocal/       # Dependency package used by `app`
-│   └── app/            # Directory-dependency linking example
+│   ├── app/            # Directory-dependency linking example
+│   └── pipeline/       # End-to-end concurrent pipeline example
 └── docs/               # subset.md, manifest.md, grant-file.md, diagnostics.md, ir.md,
                         # contexts.md, piecewise.md, decisions.md

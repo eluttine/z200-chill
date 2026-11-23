@@ -71,6 +71,20 @@ fn check_hello_succeeds() {
 }
 
 #[test]
+fn run_hello_prints_greeting() {
+    let output = z200c().arg("run").arg(example("hello")).output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"Hello, world!\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn run_text_output_matches_golden() {
     let directory = TempDir::new("z200c-golden");
     std::fs::write(
@@ -109,8 +123,12 @@ END M;
 }
 
 #[test]
-fn run_hello_succeeds_without_output() {
-    let output = z200c().arg("run").arg(example("hello")).output().unwrap();
+fn run_procedures_example_succeeds_without_output() {
+    let output = z200c()
+        .arg("run")
+        .arg(example("procedures"))
+        .output()
+        .unwrap();
 
     assert!(
         output.status.success(),

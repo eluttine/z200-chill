@@ -858,8 +858,8 @@ mod tests {
     }
 
     #[test]
-    fn hello_example_lexes() {
-        let source = include_str!("../examples/hello/src/main.ch");
+    fn procedures_example_lexes() {
+        let source = include_str!("../examples/procedures/src/main.ch");
         let tokens = tokenize(source).unwrap();
         assert!(tokens
             .iter()

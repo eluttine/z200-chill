@@ -1,0 +1,5 @@
+[package]
+name = "procedures"
+
+[build]
+entry = "src/main.ch"
