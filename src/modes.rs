@@ -39,11 +39,19 @@ pub fn mode_symbol(package: Option<&str>, module: Option<&str>, name: &str) -> S
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentVisibility {
+    Public,
+    Internal,
+    Private,
+}
+
 #[derive(Debug, Clone)]
 pub enum MoretaComponent {
     Var {
         name: String,
         ty: Type,
+        visibility: ComponentVisibility,
     },
     Proc {
         name: String,
@@ -51,10 +59,12 @@ pub enum MoretaComponent {
         span: crate::lexer::Span,
         constructor: bool,
         destructor: bool,
+        visibility: ComponentVisibility,
     },
     Mode {
         name: String,
         ty: Type,
+        visibility: ComponentVisibility,
     },
 }
 
@@ -76,6 +86,8 @@ pub struct MoretaMode {
     pub module_name: Option<String>,
     pub bases: Vec<MoretaId>,
     pub abstract_mode: bool,
+    pub final_mode: bool,
+    pub assignable: bool,
     pub components: Vec<MoretaComponent>,
 }
 
@@ -132,6 +144,14 @@ impl ModeTable {
             MoretaComponent::Var { ty, .. } => Some(*ty),
             MoretaComponent::Proc { .. } | MoretaComponent::Mode { .. } => None,
         }
+    }
+
+    pub fn moreta_visibility(&self, id: MoretaId, name: &str) -> Option<ComponentVisibility> {
+        Some(match self.moreta_component(id, name)? {
+            MoretaComponent::Var { visibility, .. }
+            | MoretaComponent::Proc { visibility, .. }
+            | MoretaComponent::Mode { visibility, .. } => *visibility,
+        })
     }
 
     pub fn moreta_proc(&self, id: MoretaId, name: &str) -> Option<(ProcType, crate::lexer::Span)> {

@@ -66,6 +66,12 @@ pub struct GrantComponent {
     pub constructor: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub destructor: bool,
+    #[serde(default = "default_public")]
+    pub public: bool,
+}
+
+fn default_public() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,7 +178,11 @@ impl GrantFile {
                             .components
                             .iter()
                             .map(|component| match component {
-                                crate::modes::MoretaComponent::Var { name, ty } => GrantComponent {
+                                crate::modes::MoretaComponent::Var {
+                                    name,
+                                    ty,
+                                    visibility,
+                                } => GrantComponent {
                                     name: name.clone(),
                                     kind: GrantComponentKind::Variable,
                                     mode: Some(external_type_name(&program::portable_type(
@@ -184,12 +194,15 @@ impl GrantFile {
                                     result: None,
                                     constructor: false,
                                     destructor: false,
+                                    public: *visibility
+                                        == crate::modes::ComponentVisibility::Public,
                                 },
                                 crate::modes::MoretaComponent::Proc {
                                     name,
                                     signature,
                                     constructor,
                                     destructor,
+                                    visibility,
                                     ..
                                 } => GrantComponent {
                                     name: name.clone(),
@@ -215,22 +228,28 @@ impl GrantFile {
                                     }),
                                     constructor: *constructor,
                                     destructor: *destructor,
+                                    public: *visibility
+                                        == crate::modes::ComponentVisibility::Public,
                                 },
-                                crate::modes::MoretaComponent::Mode { name, ty } => {
-                                    GrantComponent {
-                                        name: name.clone(),
-                                        kind: GrantComponentKind::Mode,
-                                        mode: Some(external_type_name(&program::portable_type(
-                                            *ty,
-                                            &info.modes,
-                                        ))),
-                                        params: Vec::new(),
-                                        passing: Vec::new(),
-                                        result: None,
-                                        constructor: false,
-                                        destructor: false,
-                                    }
-                                }
+                                crate::modes::MoretaComponent::Mode {
+                                    name,
+                                    ty,
+                                    visibility,
+                                } => GrantComponent {
+                                    name: name.clone(),
+                                    kind: GrantComponentKind::Mode,
+                                    mode: Some(external_type_name(&program::portable_type(
+                                        *ty,
+                                        &info.modes,
+                                    ))),
+                                    params: Vec::new(),
+                                    passing: Vec::new(),
+                                    result: None,
+                                    constructor: false,
+                                    destructor: false,
+                                    public: *visibility
+                                        == crate::modes::ComponentVisibility::Public,
+                                },
                             })
                             .collect(),
                     }),
@@ -366,6 +385,7 @@ impl GrantFile {
                         Ok(program::ModeComponentInfo::Var {
                             name: component.name.clone(),
                             ty: parse_external_type(ty, &definitions)?,
+                            public: component.public,
                         })
                     }
                     GrantComponentKind::Procedure => {
@@ -400,6 +420,7 @@ impl GrantFile {
                             result,
                             constructor: component.constructor,
                             destructor: component.destructor,
+                            public: component.public,
                         })
                     }
                     GrantComponentKind::Mode => {
@@ -412,6 +433,7 @@ impl GrantFile {
                         Ok(program::ModeComponentInfo::Mode {
                             name: component.name.clone(),
                             ty: parse_external_type(ty, &definitions)?,
+                            public: component.public,
                         })
                     }
                 })

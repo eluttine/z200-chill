@@ -1480,7 +1480,7 @@ impl<'a> Interpreter<'a> {
         {
             let scope = self.locals.last_mut().expect("module mode scope");
             for component in &self.modes.get_moreta(id).components {
-                if let crate::modes::MoretaComponent::Var { name, ty } = component {
+                if let crate::modes::MoretaComponent::Var { name, ty, .. } = component {
                     scope.vars.insert(
                         name.clone(),
                         Rc::new(RefCell::new(Var {
@@ -1524,7 +1524,7 @@ impl<'a> Interpreter<'a> {
         let scope = self.locals.pop().expect("module mode scope");
         let mut components = Vec::new();
         for component in &self.modes.get_moreta(id).components {
-            if let crate::modes::MoretaComponent::Var { name, ty } = component {
+            if let crate::modes::MoretaComponent::Var { name, ty, .. } = component {
                 let value = if let Some(cell) = scope.vars.get(name) {
                     cell.borrow().value.clone()
                 } else {
@@ -4287,7 +4287,7 @@ impl<'a> Interpreter<'a> {
         {
             let scope = self.locals.last_mut().expect("method scope");
             for component in &self.modes.get_moreta(id).components {
-                if let crate::modes::MoretaComponent::Var { name, ty } = component {
+                if let crate::modes::MoretaComponent::Var { name, ty, .. } = component {
                     let value = components
                         .iter()
                         .find(|(component, _)| component == name)
@@ -7351,7 +7351,7 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
                 .components
                 .iter()
                 .filter_map(|component| match component {
-                    crate::modes::MoretaComponent::Var { name, ty } => {
+                    crate::modes::MoretaComponent::Var { name, ty, .. } => {
                         Some((name.clone(), default_value(modes, *ty)))
                     }
                     crate::modes::MoretaComponent::Proc { .. }

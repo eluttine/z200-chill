@@ -20,7 +20,10 @@ fn merge_moreta_specs(module: &mut Module) -> Result<(), Error> {
     let mut bodies = HashMap::new();
     for (index, declaration) in module.declarations.iter().enumerate() {
         if let Declaration::Mode(mode_def) = declaration {
-            if let crate::ast::ModeDefinitionBody::Moreta { spec, .. } = &mode_def.body {
+            if let crate::ast::ModeDefinitionBody::Moreta { kind, spec, .. } = &mode_def.body {
+                if *kind == crate::ast::MoretaKind::Interface {
+                    continue;
+                }
                 if *spec {
                     specs.insert(mode_def.name.clone(), index);
                 } else {

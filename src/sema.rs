@@ -1045,7 +1045,7 @@ impl Checker {
                         let mut component_scope = Scope::default();
                         for component in &self.modes.get_moreta(id).components {
                             match component {
-                                crate::modes::MoretaComponent::Var { name, ty } => {
+                                crate::modes::MoretaComponent::Var { name, ty, .. } => {
                                     component_scope.vars.insert(name.clone(), *ty);
                                 }
                                 crate::modes::MoretaComponent::Proc {
@@ -1055,7 +1055,7 @@ impl Checker {
                                         .procs
                                         .insert(name.clone(), signature.clone());
                                 }
-                                crate::modes::MoretaComponent::Mode { name, ty } => {
+                                crate::modes::MoretaComponent::Mode { name, ty, .. } => {
                                     component_scope.modes.insert(name.clone(), *ty);
                                 }
                             }
@@ -1709,6 +1709,15 @@ impl Checker {
             }
         }
         None
+    }
+
+    fn component_visible(&self, id: types::MoretaId, name: &str) -> bool {
+        let mode = self.modes.get_moreta(id);
+        mode.module == self.current_module
+            || matches!(
+                self.modes.moreta_visibility(id, name),
+                Some(crate::modes::ComponentVisibility::Public)
+            )
     }
 
     fn lookup_signal(&self, name: &str) -> Option<Vec<Type>> {
@@ -2582,6 +2591,13 @@ impl Checker {
                 "method call requires a module-mode object",
             ));
         };
+        if !self.component_visible(id, method) {
+            return Err(Error::coded(
+                "E0400",
+                span,
+                format!("component `{method}` is not public"),
+            ));
+        }
         let Some((signature, proc_span)) = self.modes.moreta_proc(id, method) else {
             return Err(Error::coded(
                 "E0400",
@@ -2669,6 +2685,13 @@ impl Checker {
     fn check_field(&mut self, base: &Expr, field: &str, span: Span) -> Result<Type, Error> {
         let base_ty = self.check_expr(base)?;
         if let Type::Moreta(id) = base_ty {
+            if !self.component_visible(id, field) {
+                return Err(Error::coded(
+                    "E0400",
+                    span,
+                    format!("component `{field}` is not public"),
+                ));
+            }
             let Some(ty) = self.modes.moreta_var(id, field) else {
                 return Err(Error::coded(
                     "E0403",
@@ -4251,12 +4274,14 @@ impl Checker {
     }
 
     fn ensure_assignable(&self, target: Type, value: Type, span: Span) -> Result<(), Error> {
-        if matches!(target, Type::Moreta(_)) {
-            return Err(Error::coded(
-                "E0400",
-                span,
-                "module mode objects are not assignable",
-            ));
+        if let Type::Moreta(id) = target {
+            if !self.modes.get_moreta(id).assignable || value != target {
+                return Err(Error::coded(
+                    "E0400",
+                    span,
+                    "module mode objects are not assignable",
+                ));
+            }
         }
         let ok = match target {
             Type::Int(target_kind) => match value {

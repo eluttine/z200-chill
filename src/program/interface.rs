@@ -44,6 +44,7 @@ pub enum ModeComponentInfo {
     Var {
         name: String,
         ty: ExternalType,
+        public: bool,
     },
     Proc {
         name: String,
@@ -52,10 +53,12 @@ pub enum ModeComponentInfo {
         result: Option<ExternalType>,
         constructor: bool,
         destructor: bool,
+        public: bool,
     },
     Mode {
         name: String,
         ty: ExternalType,
+        public: bool,
     },
 }
 
@@ -179,7 +182,12 @@ pub fn add_external_modes(
                         package_name: mode.package_name.clone(),
                         module_name: mode.module_name.clone(),
                         bases: Vec::new(),
-                        abstract_mode: false,
+                        abstract_mode: matches!(
+                            mode.kind,
+                            ModeInfoKind::Region | ModeInfoKind::Task
+                        ),
+                        final_mode: false,
+                        assignable: false,
                         components: Vec::new(),
                     });
                     moreta_definitions.push(mode);
@@ -227,10 +235,15 @@ pub fn add_external_modes(
         let mut components = Vec::with_capacity(mode.components.len());
         for component in &mode.components {
             match component {
-                ModeComponentInfo::Var { name, ty } => {
+                ModeComponentInfo::Var { name, ty, public } => {
                     components.push(crate::modes::MoretaComponent::Var {
                         name: name.clone(),
                         ty: resolve_external_type(ty, &ids)?,
+                        visibility: if *public {
+                            crate::modes::ComponentVisibility::Public
+                        } else {
+                            crate::modes::ComponentVisibility::Internal
+                        },
                     });
                 }
                 ModeComponentInfo::Proc {
@@ -240,6 +253,7 @@ pub fn add_external_modes(
                     result,
                     constructor,
                     destructor,
+                    public,
                 } => {
                     let params = params
                         .iter()
@@ -260,12 +274,22 @@ pub fn add_external_modes(
                         span: crate::lexer::Span::new(crate::lexer::SourceId(0), 0, 0),
                         constructor: *constructor,
                         destructor: *destructor,
+                        visibility: if *public {
+                            crate::modes::ComponentVisibility::Public
+                        } else {
+                            crate::modes::ComponentVisibility::Internal
+                        },
                     });
                 }
-                ModeComponentInfo::Mode { name, ty } => {
+                ModeComponentInfo::Mode { name, ty, public } => {
                     components.push(crate::modes::MoretaComponent::Mode {
                         name: name.clone(),
                         ty: resolve_external_type(ty, &ids)?,
+                        visibility: if *public {
+                            crate::modes::ComponentVisibility::Public
+                        } else {
+                            crate::modes::ComponentVisibility::Internal
+                        },
                     });
                 }
             }

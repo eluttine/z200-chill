@@ -183,17 +183,21 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                         .components
                         .iter()
                         .map(|component| match component {
-                            crate::modes::MoretaComponent::Var { name, ty } => {
-                                ModeComponentInfo::Var {
-                                    name: name.clone(),
-                                    ty: portable_type(*ty, &modes),
-                                }
-                            }
+                            crate::modes::MoretaComponent::Var {
+                                name,
+                                ty,
+                                visibility,
+                            } => ModeComponentInfo::Var {
+                                name: name.clone(),
+                                ty: portable_type(*ty, &modes),
+                                public: *visibility == crate::modes::ComponentVisibility::Public,
+                            },
                             crate::modes::MoretaComponent::Proc {
                                 name,
                                 signature,
                                 constructor,
                                 destructor,
+                                visibility,
                                 ..
                             } => ModeComponentInfo::Proc {
                                 name: name.clone(),
@@ -206,13 +210,17 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                                 result: signature.result.map(|ty| portable_type(ty, &modes)),
                                 constructor: *constructor,
                                 destructor: *destructor,
+                                public: *visibility == crate::modes::ComponentVisibility::Public,
                             },
-                            crate::modes::MoretaComponent::Mode { name, ty } => {
-                                ModeComponentInfo::Mode {
-                                    name: name.clone(),
-                                    ty: portable_type(*ty, &modes),
-                                }
-                            }
+                            crate::modes::MoretaComponent::Mode {
+                                name,
+                                ty,
+                                visibility,
+                            } => ModeComponentInfo::Mode {
+                                name: name.clone(),
+                                ty: portable_type(*ty, &modes),
+                                public: *visibility == crate::modes::ComponentVisibility::Public,
+                            },
                         })
                         .collect();
                     ExportInfoKind::Mode(ModeInfo {

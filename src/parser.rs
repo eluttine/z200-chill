@@ -870,17 +870,22 @@ impl<'a> Parser<'a> {
         } else if self.at_keyword(Keyword::Module)
             || self.at_keyword(Keyword::Region)
             || self.at_keyword(Keyword::Task)
+            || self.at_keyword(Keyword::Interface)
         {
             let kind = if self.at_keyword(Keyword::Region) {
                 crate::ast::MoretaKind::Region
             } else if self.at_keyword(Keyword::Task) {
                 crate::ast::MoretaKind::Task
+            } else if self.at_keyword(Keyword::Interface) {
+                crate::ast::MoretaKind::Interface
             } else {
                 crate::ast::MoretaKind::Module
             };
             let body_start = self.current_span();
             self.advance();
-            let spec = if self.at_keyword(Keyword::Spec) {
+            let spec = if kind == crate::ast::MoretaKind::Interface {
+                true
+            } else if self.at_keyword(Keyword::Spec) {
                 self.advance();
                 true
             } else {
@@ -889,8 +894,40 @@ impl<'a> Parser<'a> {
                 }
                 false
             };
+            let mut abstract_attr = false;
+            let mut final_attr = false;
+            let mut assignable = false;
+            loop {
+                if self.at_keyword(Keyword::Abstract) {
+                    self.advance();
+                    abstract_attr = true;
+                } else if self.at_keyword(Keyword::Final) {
+                    self.advance();
+                    final_attr = true;
+                } else if self.at_keyword(Keyword::Assignable) {
+                    self.advance();
+                    assignable = true;
+                } else if self.at_keyword(Keyword::NotAssignable) {
+                    self.advance();
+                    assignable = false;
+                } else {
+                    break;
+                }
+            }
             let mut bases = Vec::new();
             if self.at_keyword(Keyword::BasedOn) {
+                self.advance();
+                loop {
+                    let (base, _) = self.expect_identifier()?;
+                    bases.push(base);
+                    if self.at_comma() {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            if self.at_keyword(Keyword::Implements) {
                 self.advance();
                 loop {
                     let (base, _) = self.expect_identifier()?;
@@ -922,6 +959,9 @@ impl<'a> Parser<'a> {
             ModeDefinitionBody::Moreta {
                 kind,
                 spec,
+                abstract_attr,
+                final_attr,
+                assignable,
                 bases,
                 declarations,
                 invariant,

@@ -7,6 +7,7 @@ Z.200 requirements.
 ## Supported
 
 - `NEWMODE Name = MODULE BODY ... END;`
+- `NEWMODE Name = INTERFACE ... END;` as an abstract interface/base mode
 - `NEWMODE Name = REGION SPEC/BODY ... END;` with per-object mutual exclusion on
   component method calls
 - `NEWMODE Name = TASK SPEC/BODY ... END;` with a per-object task worker processing
@@ -23,15 +24,21 @@ Z.200 requirements.
 - nested mode components (`NEWMODE`/`SYNMODE` inside a module body) accessed by
   simple name inside the body and as `Mode!Component` outside it,
 - `BASED_ON` single or multiple module-mode inheritance,
+- `IMPLEMENTS interface-mode ...` treated as interface inheritance in this subset,
+- `ABSTRACT` and `FINAL` mode attributes,
+- `ASSIGNABLE` module modes with whole-object assignment,
+- public/internal component visibility derived from spec `GRANT` statements,
 - `INVARIANT boolean-expression` at the end of a mode body.
 
 ## Object semantics
 
 - A declared module-mode object owns independent component values.
-- Module-mode objects are **not assignable**. Whole-object assignment and passing an
-  object where a value of module-mode type is required are rejected. This matches the
-  standard default `NOT_ASSIGNABLE` behavior more closely than value copying.
-- Module-mode types are module-local and cannot appear in grant interfaces yet.
+- Module-mode objects are **not assignable by default**. `ASSIGNABLE` module modes
+  support whole-object assignment; region and task modes remain non-assignable.
+- Components granted by a module-mode spec are public. Non-public components are only
+  accessible from the defining module. Internal/private distinction is currently
+  simplified to public/internal.
+- Moreta modes can appear in grant interfaces with their component visibility.
 - Objects are initialized when their declaration is executed.
 - Initialization order is base components first, then derived components, in
   declaration order.
@@ -76,7 +83,7 @@ Z.200 requirements.
 ## Grant interfaces
 
 - Moreta modes are encoded in grant files with their variable, procedure, and mode
-  components.
+  components, including public/internal visibility.
 - Exported variables and procedure signatures may reference moreta modes
   symbolically.
 - Nested mode components have a limited grant encoding: the underlying modes are
@@ -85,10 +92,10 @@ Z.200 requirements.
 
 ## Not implemented
 
-- interface modes,
 - static-object destructors at reach/lifetime end,
-- `IMPLEMENTS`, assignability attributes, abstract/final attributes,
-- public/private component visibility and `GRANT` inside module-mode specs,
+- full interface component matching beyond treating `IMPLEMENTS` as interface
+  inheritance,
+- complete internal/private visibility distinction and all standard visibility rules,
 - generic moreta templates,
 - complete `Mode!Component` name preservation in grant files,
 - grant-file encoding for named set modes.

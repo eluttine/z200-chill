@@ -182,6 +182,7 @@ pub enum MoretaKind {
     Module,
     Region,
     Task,
+    Interface,
 }
 
 #[derive(Debug, Clone)]
@@ -191,6 +192,9 @@ pub enum ModeDefinitionBody {
     Moreta {
         kind: MoretaKind,
         spec: bool,
+        abstract_attr: bool,
+        final_attr: bool,
+        assignable: bool,
         bases: Vec<String>,
         declarations: Vec<Declaration>,
         invariant: Option<Expr>,

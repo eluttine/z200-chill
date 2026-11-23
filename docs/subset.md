@@ -62,8 +62,9 @@ Explicitly **deferred**:
 - task-object cleanup for statically declared objects, region-call timeout
   supervision, and scheduler fairness/priority guarantees;
 - general reference targets beyond simple variables and whole allocated locations;
-- interface modes, full moreta visibility/assignability attributes, and generic
-  region/process templates;
+- full interface matching rules beyond `IMPLEMENTS` inheritance and complete
+  internal/private visibility distinctions;
+- generic region/process templates;
 - grant encoding for named set modes and reference/row modes;
 - full association/access attribute modification and arbitrary file models.
 
@@ -140,7 +141,7 @@ Not implemented yet (rejected or deferred with a diagnostic):
   priority/fairness scheduling guarantees;
 - multiple `CASE` selectors and non-integer `CASE` labels;
 - general reference targets beyond simple variables and whole allocated locations;
-- interface modes and full moreta visibility/assignability attributes;
+- full interface/`IMPLEMENTS` matching rules and complete internal/private visibility;
 - generic region/process templates;
 - grant encoding for named set modes and reference/row modes.
 

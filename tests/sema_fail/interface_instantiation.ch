@@ -1,0 +1,6 @@
+M: MODULE
+  NEWMODE I = INTERFACE
+    P: PROC () END;
+  END I;
+  DCL value I;
+END M;

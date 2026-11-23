@@ -1,6 +1,6 @@
 use crate::ast::{Declaration, ModeRef, Module, Param, Program, VisibilityKind};
 use crate::lexer::Span;
-use crate::modes::{FieldInfo, ModeTable, StructMode};
+use crate::modes::{ComponentVisibility, FieldInfo, ModeTable, StructMode};
 use crate::types::{self, ModeId, ProcType, Type};
 use std::collections::{HashMap, HashSet};
 
@@ -68,7 +68,7 @@ fn process_module_modes(
         )?;
         if let Type::Moreta(id) = ty {
             for component in &table.moretas[id.0].components {
-                if let crate::modes::MoretaComponent::Mode { name, ty } = component {
+                if let crate::modes::MoretaComponent::Mode { name, ty, .. } = component {
                     if name.contains('!') {
                         local.insert(name.clone(), *ty);
                     }
@@ -188,6 +188,9 @@ fn build_mode_definition(
         crate::ast::ModeDefinitionBody::Moreta {
             kind,
             spec,
+            abstract_attr,
+            final_attr,
+            assignable,
             bases,
             declarations,
             invariant,
@@ -216,6 +219,12 @@ fn build_mode_definition(
                         format!("module mode base `{base}` is not a module mode"),
                     ));
                 };
+                if table.moretas[base_id.0].final_mode {
+                    return Err(Error::new(
+                        mode_def.span,
+                        format!("cannot derive from final mode `{base}`"),
+                    ));
+                }
                 base_ids.push(base_id);
                 for component in &table.moretas[base_id.0].components {
                     if !components
@@ -226,6 +235,24 @@ fn build_mode_definition(
                     }
                 }
             }
+            let mut public_names = HashSet::new();
+            for declaration in declarations {
+                if let Declaration::Visibility(visibility) = declaration {
+                    if visibility.kind == crate::ast::VisibilityKind::Grant {
+                        for name in &visibility.names {
+                            public_names.insert(name.name.clone());
+                        }
+                    }
+                }
+            }
+            let restrict_visibility = !public_names.is_empty();
+            let visibility_for = |name: &str| {
+                if !restrict_visibility || public_names.contains(name) {
+                    ComponentVisibility::Public
+                } else {
+                    ComponentVisibility::Internal
+                }
+            };
             let mut seen = HashSet::new();
             for declaration in declarations {
                 match declaration {
@@ -242,6 +269,7 @@ fn build_mode_definition(
                             components.push(crate::modes::MoretaComponent::Var {
                                 name: var.name.clone(),
                                 ty,
+                                visibility: visibility_for(&var.name),
                             });
                         }
                     }
@@ -265,6 +293,7 @@ fn build_mode_definition(
                             span: proc_def.span,
                             constructor: proc_def.constructor,
                             destructor: proc_def.destructor,
+                            visibility: visibility_for(&proc_def.name),
                         });
                     }
                     Declaration::ProcSignature(signature) => {
@@ -287,8 +316,10 @@ fn build_mode_definition(
                             span: signature.span,
                             constructor: signature.constructor,
                             destructor: signature.destructor,
+                            visibility: visibility_for(&signature.name),
                         });
                     }
+                    Declaration::Visibility(_) => {}
                     Declaration::Mode(nested) => {
                         let ty = build_mode_definition(
                             nested,
@@ -308,6 +339,7 @@ fn build_mode_definition(
                             components.push(crate::modes::MoretaComponent::Mode {
                                 name: prefix.clone(),
                                 ty,
+                                visibility: visibility_for(&nested.name),
                             });
                             resolution.insert(prefix, ty);
                         }
@@ -420,7 +452,11 @@ fn build_mode_definition(
                 package_name: top_package_name.clone(),
                 module_name: module_name.clone(),
                 bases: base_ids,
-                abstract_mode: *spec,
+                abstract_mode: *spec
+                    || *abstract_attr
+                    || *kind == crate::ast::MoretaKind::Interface,
+                final_mode: *final_attr,
+                assignable: *assignable && *kind == crate::ast::MoretaKind::Module,
                 components,
             });
             Type::Moreta(id)
