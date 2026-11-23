@@ -624,7 +624,9 @@ impl Lowerer<'_> {
                         }
                     }
                 }
-                Declaration::Signal(_) => {}
+                Declaration::Signal(_)
+                | Declaration::GenericProcess(_)
+                | Declaration::GenericProcessInstance(_) => {}
                 Declaration::Process(process_def) => {
                     self.lower_declarations(&process_def.declarations)?;
                     let actions = self.lower_actions(&process_def.actions)?;

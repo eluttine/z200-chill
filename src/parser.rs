@@ -243,7 +243,10 @@ impl<'a> Parser<'a> {
             let declarations = self.parse_declarations(true, true)?;
             for declaration in &declarations {
                 match declaration {
-                    Declaration::Process(_) | Declaration::Signal(_) => {}
+                    Declaration::Process(_)
+                    | Declaration::Signal(_)
+                    | Declaration::GenericProcess(_)
+                    | Declaration::GenericProcessInstance(_) => {}
                     Declaration::Visibility(visibility) => {
                         if contexts.is_empty() && remote.is_none() {
                             return Err(Error::coded(
@@ -622,8 +625,25 @@ impl<'a> Parser<'a> {
             } else if self.at_keyword(Keyword::NewMode) || self.at_keyword(Keyword::SynMode) {
                 declarations.push(Declaration::Mode(self.parse_mode_definition()?));
             } else if self.at_generic_proc_template() {
-                declarations.push(Declaration::GenericProc(
-                    self.parse_generic_proc_template()?,
+                let start = self.current_span();
+                let (name, _) = self.expect_identifier()?;
+                self.expect_colon()?;
+                self.expect_keyword(Keyword::Generic)?;
+                let formal_params = self.parse_generic_formals()?;
+                if self.at_keyword(Keyword::Process) {
+                    declarations.push(Declaration::GenericProcess(
+                        self.parse_generic_process_after(name, formal_params, start)?,
+                    ));
+                } else {
+                    declarations.push(Declaration::GenericProc(self.parse_generic_proc_after(
+                        name,
+                        formal_params,
+                        start,
+                    )?));
+                }
+            } else if self.at_generic_process_instance() {
+                declarations.push(Declaration::GenericProcessInstance(
+                    self.parse_generic_process_instance()?,
                 ));
             } else if self.at_generic_proc_instance() {
                 declarations.push(Declaration::GenericProcInstance(
@@ -1122,12 +1142,12 @@ impl<'a> Parser<'a> {
             && self.kind_at(3) == Some(&TokenKind::Eq)
     }
 
-    fn parse_generic_proc_template(&mut self) -> Result<GenericProcTemplate, Error> {
-        let start = self.current_span();
-        let (name, _) = self.expect_identifier()?;
-        self.expect_colon()?;
-        self.expect_keyword(Keyword::Generic)?;
-        let formal_params = self.parse_generic_formals()?;
+    fn parse_generic_proc_after(
+        &mut self,
+        name: String,
+        formal_params: Vec<GenericFormal>,
+        start: Span,
+    ) -> Result<GenericProcTemplate, Error> {
         if self.at_keyword(Keyword::Proc) && self.kind_at(1) == Some(&TokenKind::Colon) {
             return Err(
                 self.error_here_code("E0206", "generic PROC parameters are not implemented yet")
@@ -1172,6 +1192,88 @@ impl<'a> Parser<'a> {
                 span,
             },
             span,
+        })
+    }
+
+    fn at_generic_process_instance(&self) -> bool {
+        self.at_identifier()
+            && self.kind_at(1) == Some(&TokenKind::Colon)
+            && self.kind_at(2) == Some(&TokenKind::Keyword(Keyword::Process))
+            && self.kind_at(3) == Some(&TokenKind::Eq)
+    }
+
+    fn parse_generic_process_after(
+        &mut self,
+        name: String,
+        formal_params: Vec<GenericFormal>,
+        start: Span,
+    ) -> Result<GenericProcessTemplate, Error> {
+        self.expect_keyword(Keyword::Process)?;
+        let params = self.parse_formal_params()?;
+        if matches!(self.kind(), Some(TokenKind::Semicolon)) {
+            self.advance();
+        }
+        let declarations = self.parse_declarations(false, false)?;
+        let actions = self.parse_actions_until(&[Keyword::End])?;
+        self.expect_keyword(Keyword::End)?;
+        let handler = if self.at_keyword(Keyword::On) {
+            Some(self.parse_handler()?)
+        } else {
+            None
+        };
+        if let Some(TokenKind::Identifier(trailing)) = self.kind() {
+            if trailing != &name {
+                return Err(self.error_here_code(
+                    "E0202",
+                    format!("generic process end name `{trailing}` does not match `{name}`"),
+                ));
+            }
+            self.advance();
+        }
+        let end = self.expect_semicolon()?;
+        let span = Span::new(self.source, start.start, end.end);
+        Ok(GenericProcessTemplate {
+            name: name.clone(),
+            formal_params,
+            process: ProcessDef {
+                name,
+                params,
+                declarations,
+                actions,
+                handler,
+                span,
+            },
+            span,
+        })
+    }
+
+    fn parse_generic_process_instance(&mut self) -> Result<GenericProcessInstance, Error> {
+        let start = self.current_span();
+        let (name, _) = self.expect_identifier()?;
+        self.expect_colon()?;
+        self.expect_keyword(Keyword::Process)?;
+        self.expect_equal()?;
+        self.expect_keyword(Keyword::New)?;
+        let (template, _) = self.expect_identifier()?;
+        let actuals = self.parse_generic_actuals()?;
+        self.expect_keyword(Keyword::End)?;
+        if let Some(TokenKind::Identifier(trailing)) = self.kind() {
+            if trailing != &name {
+                return Err(self.error_here_code(
+                    "E0202",
+                    format!(
+                        "generic process instance end name `{trailing}` does not match `{name}`"
+                    ),
+                ));
+            }
+            self.advance();
+        }
+        let end = self.expect_semicolon()?;
+        Ok(GenericProcessInstance {
+            name,
+            template,
+            actuals,
+            span: Span::new(self.source, start.start, end.end),
         })
     }
 

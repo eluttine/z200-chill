@@ -1621,7 +1621,9 @@ impl<'a> Interpreter<'a> {
                 | Declaration::GenericProc(_)
                 | Declaration::GenericProcInstance(_)
                 | Declaration::Process(_)
-                | Declaration::Signal(_) => {}
+                | Declaration::Signal(_)
+                | Declaration::GenericProcess(_)
+                | Declaration::GenericProcessInstance(_) => {}
             }
         }
         Ok(())
@@ -6492,7 +6494,9 @@ fn declare_into_scope<'a>(
             | Declaration::Mode(_)
             | Declaration::SpecModule(_)
             | Declaration::GenericProc(_)
-            | Declaration::GenericProcInstance(_) => {}
+            | Declaration::GenericProcInstance(_)
+            | Declaration::GenericProcess(_)
+            | Declaration::GenericProcessInstance(_) => {}
         }
     }
     Ok(())

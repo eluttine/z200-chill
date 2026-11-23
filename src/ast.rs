@@ -10,6 +10,22 @@ pub struct Program {
 }
 
 #[derive(Debug, Clone)]
+pub struct GenericProcessTemplate {
+    pub name: String,
+    pub formal_params: Vec<GenericFormal>,
+    pub process: ProcessDef,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericProcessInstance {
+    pub name: String,
+    pub template: String,
+    pub actuals: Vec<GenericActual>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct GenericModuleTemplate {
     pub name: String,
     pub formal_params: Vec<GenericFormal>,
@@ -128,6 +144,10 @@ pub enum Declaration {
     GenericProc(GenericProcTemplate),
     /// `name: PROC = NEW template (actual modes) END;`
     GenericProcInstance(GenericProcInstance),
+    /// Generic process template.
+    GenericProcess(GenericProcessTemplate),
+    /// `name: PROCESS = NEW template (actuals) END;`
+    GenericProcessInstance(GenericProcessInstance),
     /// `SIGNAL name [= (modes)];`
     Signal(Vec<SignalDef>),
 }

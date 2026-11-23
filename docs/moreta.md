@@ -97,7 +97,7 @@ Z.200 requirements.
 - deeper interface inheritance/implementation validation beyond exact component and
   signature matching,
 - complete internal/private visibility distinction and all standard visibility rules,
-- generic moreta templates,
+- generic moreta-mode templates,
 - complete `Mode!Component` name preservation in grant files,
 - grant-file encoding for named set modes.
 

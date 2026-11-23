@@ -558,7 +558,10 @@ impl Checker {
             let mut current_names = HashSet::new();
             for declaration in &context.declarations {
                 match declaration {
-                    Declaration::Process(_) | Declaration::Signal(_) => {}
+                    Declaration::Process(_)
+                    | Declaration::Signal(_)
+                    | Declaration::GenericProcess(_)
+                    | Declaration::GenericProcessInstance(_) => {}
                     Declaration::Var(list) => {
                         for var in list {
                             if !declared_names.insert(var.name.clone()) {
@@ -995,6 +998,7 @@ impl Checker {
                     )?;
                     self.declare_process(&process_def.name, signature, process_def.span)?;
                 }
+                Declaration::GenericProcess(_) | Declaration::GenericProcessInstance(_) => {}
                 Declaration::Signal(defs) => {
                     for def in defs {
                         let modes = def

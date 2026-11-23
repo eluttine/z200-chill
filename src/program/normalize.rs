@@ -320,6 +320,7 @@ fn substitute_action_modes(
 
 fn expand_module_generics(module: &mut Module) -> Result<(), Error> {
     let mut templates: HashMap<String, crate::ast::GenericProcTemplate> = HashMap::new();
+    let mut process_templates: HashMap<String, crate::ast::GenericProcessTemplate> = HashMap::new();
     for declaration in &module.declarations {
         if let Declaration::GenericProc(template) = declaration {
             if templates
@@ -332,11 +333,42 @@ fn expand_module_generics(module: &mut Module) -> Result<(), Error> {
                 ));
             }
         }
+        if let Declaration::GenericProcess(template) = declaration {
+            if process_templates
+                .insert(template.name.clone(), template.clone())
+                .is_some()
+            {
+                return Err(Error::new(
+                    template.span,
+                    format!("duplicate generic process template `{}`", template.name),
+                ));
+            }
+        }
     }
     let mut declarations = Vec::with_capacity(module.declarations.len());
     for declaration in module.declarations.drain(..) {
         match declaration {
-            Declaration::GenericProc(_) => {}
+            Declaration::GenericProc(_) | Declaration::GenericProcess(_) => {}
+            Declaration::GenericProcessInstance(instance) => {
+                let Some(template) = process_templates.get(&instance.template) else {
+                    return Err(Error::new(
+                        instance.span,
+                        format!("unknown generic process template `{}`", instance.template),
+                    ));
+                };
+                let (substitutions, syn_substitutions, proc_substitutions) = generic_substitutions(
+                    &template.formal_params,
+                    &instance.actuals,
+                    instance.span,
+                    &instance.template,
+                )?;
+                let mut process_def = template.process.clone();
+                process_def.name = instance.name.clone();
+                process_def.span = instance.span;
+                substitute_process_modes(&mut process_def, &substitutions)?;
+                substitute_process_syns(&mut process_def, &syn_substitutions, &proc_substitutions);
+                declarations.push(Declaration::Process(process_def));
+            }
             Declaration::GenericProcInstance(instance) => {
                 let Some(template) = templates.get(&instance.template) else {
                     return Err(Error::new(
@@ -761,6 +793,28 @@ fn substitute_proc_modes(
     substitute_declaration_modes(&mut proc_def.declarations, substitutions)
 }
 
+fn substitute_process_modes(
+    process_def: &mut crate::ast::ProcessDef,
+    substitutions: &HashMap<&str, &ModeRef>,
+) -> Result<(), Error> {
+    for param in &mut process_def.params {
+        substitute_mode(&mut param.mode, substitutions)?;
+    }
+    substitute_declaration_modes(&mut process_def.declarations, substitutions)
+}
+
+fn substitute_process_syns(
+    process_def: &mut crate::ast::ProcessDef,
+    syns: &HashMap<&str, &Expr>,
+    procs: &HashMap<&str, &str>,
+) {
+    substitute_declarations_syns(&mut process_def.declarations, syns, procs);
+    substitute_actions_syns(&mut process_def.actions, syns, procs);
+    if let Some(handler) = &mut process_def.handler {
+        substitute_handler_syns(handler, syns, procs);
+    }
+}
+
 fn substitute_declaration_modes(
     declarations: &mut [Declaration],
     substitutions: &HashMap<&str, &ModeRef>,
@@ -782,6 +836,13 @@ fn substitute_declaration_modes(
                     }
                 }
             }
+            Declaration::GenericProcess(template) => {
+                for param in &mut template.process.params {
+                    substitute_mode(&mut param.mode, substitutions)?;
+                }
+                substitute_declaration_modes(&mut template.process.declarations, substitutions)?;
+            }
+            Declaration::GenericProcessInstance(_) => {}
             Declaration::Proc(proc_def) => substitute_proc_modes(proc_def, substitutions)?,
             Declaration::ProcSignature(signature) => {
                 for param in &mut signature.params {
