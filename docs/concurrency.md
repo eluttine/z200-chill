@@ -64,8 +64,6 @@ asserts end-to-end delivery invariants.
 - Process definitions outside the module declaration list are not supported.
 - Generic process and region templates are supported; template instances expand before
   semantic analysis.
-- Full coroutine-based main-process termination semantics remain deferred.
-
 ## Scheduler stress testing
 
 `Z200C_YIELD_INTERVAL=n` changes the cooperative yield cadence for testing. The default

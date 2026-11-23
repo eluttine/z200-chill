@@ -62,10 +62,10 @@ Explicitly **deferred**:
 
 - full main-process termination semantics;
 - region-call timeout supervision and scheduler fairness/priority guarantees;
-- general reference targets beyond simple variables and whole allocated locations;
 - complete moreta visibility rules and deeper interface inheritance beyond exact
   public-component/signature matching;
-- full association/access attribute modification and arbitrary file models.
+- full association/access attribute modification and arbitrary file models;
+- nested `REF`/`ROW` modes and arrays of buffers.
 
 ### 1.1 Implementation status (v0)
 
@@ -138,7 +138,6 @@ Not implemented yet (rejected or deferred with a diagnostic):
 
 - full main-process termination semantics;
 - region-call timeout supervision and priority/fairness scheduling guarantees;
-- general reference targets beyond simple variables and whole allocated locations;
 - deeper interface/`IMPLEMENTS` rules beyond exact public-component matching and full
   moreta visibility rules.
 
@@ -300,8 +299,8 @@ mode.
 - Multidimensional array elements can be read and assigned through field selection
   (`a(i, j).field := value`).
 - Array elements may be structures, sets, powersets, associations, access modes,
-  module-mode objects, `REF`, `ROW`, or `PTR` modes. Arrays of buffers and references
-  to array targets remain unsupported.
+  module-mode objects, `REF`, `ROW`, or `PTR` modes. Arrays of buffers remain
+  unsupported.
 - Full-dimensional multidimensional slices with constant bounds are supported,
   including the `UP size` form and rectangular slice assignment. Partial-dimensional
   and dynamic multidimensional slices remain unsupported.
@@ -636,8 +635,8 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
   references to structure, set, and moreta modes. Arrays may contain `REF`, `ROW`, and
   `PTR` elements. References to fields, array elements, and whole array targets are
   supported. Mutually recursive structure modes are supported through `REF`/`ROW`
-  indirection. Nested `REF`/`ROW` modes are not implemented yet. Self-referential structure modes (such as linked-list
-  nodes) are supported.
+  indirection. Nested `REF`/`ROW` modes and arrays of buffers are not implemented
+  yet. Self-referential structure modes (such as linked-list nodes) are supported.
 
 ### 5.8 Associations and access modes (simplified)
 
