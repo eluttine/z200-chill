@@ -826,27 +826,21 @@ fn parse_external_type(
         }));
     }
     if let Some(rest) = name.strip_prefix("WTEXT(") {
-        let length = rest
-            .strip_suffix(')')
-            .ok_or_else(|| format!("invalid text mode `{name}` in grant file"))?
-            .trim()
-            .parse::<usize>()
-            .map_err(|_| format!("invalid text length in `{name}`"))?;
+        let (length, indexed, index) = parse_text_mode_body(rest, name)?;
         return Ok(program::ExternalType::Builtin(Type::Text {
             length,
             wide: true,
+            indexed,
+            index,
         }));
     }
     if let Some(rest) = name.strip_prefix("TEXT(") {
-        let length = rest
-            .strip_suffix(')')
-            .ok_or_else(|| format!("invalid text mode `{name}` in grant file"))?
-            .trim()
-            .parse::<usize>()
-            .map_err(|_| format!("invalid text length in `{name}`"))?;
+        let (length, indexed, index) = parse_text_mode_body(rest, name)?;
         return Ok(program::ExternalType::Builtin(Type::Text {
             length,
             wide: false,
+            indexed,
+            index,
         }));
     }
     if let Some(rest) = name.strip_prefix("BOOLS(") {
@@ -924,6 +918,41 @@ fn parse_external_type(
     Err(format!("unsupported mode `{name}` in grant file"))
 }
 
+fn parse_text_mode_body(
+    rest: &str,
+    name: &str,
+) -> Result<(usize, bool, Option<types::ArrayDimension>), String> {
+    let (length, suffix) = rest
+        .split_once(')')
+        .ok_or_else(|| format!("invalid text mode `{name}` in grant file"))?;
+    let length = length
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| format!("invalid text length in `{name}`"))?;
+    let suffix = suffix.trim();
+    if suffix.is_empty() {
+        return Ok((length, false, None));
+    }
+    if matches!(suffix, "INT" | "SHORT_INT" | "LONG_INT") {
+        return Ok((length, true, None));
+    }
+    let (low, high) = suffix
+        .split_once(':')
+        .ok_or_else(|| format!("invalid text index mode in `{name}`"))?;
+    let low = low
+        .trim()
+        .parse::<i128>()
+        .map_err(|_| format!("invalid text index lower bound in `{name}`"))?;
+    let high = high
+        .trim()
+        .parse::<i128>()
+        .map_err(|_| format!("invalid text index upper bound in `{name}`"))?;
+    if low > high {
+        return Err(format!("invalid text index bounds in `{name}`"));
+    }
+    Ok((length, true, Some(types::ArrayDimension { low, high })))
+}
+
 fn external_type_name(ty: &program::ExternalType) -> String {
     match ty {
         program::ExternalType::Builtin(ty) => type_name(*ty),
@@ -980,11 +1009,26 @@ fn type_name(ty: Type) -> String {
             length,
             varying: false,
         } => format!("WCHARS({length})"),
-        Type::Text { length, wide: true } => format!("WTEXT({length})"),
         Type::Text {
             length,
-            wide: false,
-        } => format!("TEXT({length})"),
+            wide,
+            indexed,
+            index,
+        } => {
+            let name = if wide {
+                format!("WTEXT({length})")
+            } else {
+                format!("TEXT({length})")
+            };
+            if !indexed {
+                name
+            } else {
+                match index {
+                    Some(bounds) => format!("{name} {}:{}", bounds.low, bounds.high),
+                    None => format!("{name} INT"),
+                }
+            }
+        }
         Type::Event {
             length: Some(length),
         } => format!("EVENT({length})"),
@@ -1524,10 +1568,26 @@ END M;
             Type::Text {
                 length: 20,
                 wide: false,
+                indexed: false,
+                index: None,
             },
             Type::Text {
                 length: 20,
                 wide: true,
+                indexed: false,
+                index: None,
+            },
+            Type::Text {
+                length: 20,
+                wide: false,
+                indexed: true,
+                index: None,
+            },
+            Type::Text {
+                length: 20,
+                wide: true,
+                indexed: true,
+                index: Some(types::ArrayDimension { low: 0, high: 3 }),
             },
         ] {
             let text = type_name(ty);

@@ -2791,7 +2791,7 @@ impl<'a> Interpreter<'a> {
                             };
                             (access.indexed, access.index, false, previous_position)
                         }
-                        Type::Text { .. } => {
+                        Type::Text { indexed, index, .. } => {
                             let previous_position = var.text.as_ref().and_then(|text| {
                                 let access = text.borrow().access.clone();
                                 let access = access.borrow();
@@ -2800,7 +2800,7 @@ impl<'a> Interpreter<'a> {
                                     _ => None,
                                 }
                             });
-                            (false, None, true, previous_position)
+                            (indexed, index, true, previous_position)
                         }
                         _ => {
                             return Err(Error::coded(
@@ -2830,13 +2830,6 @@ impl<'a> Interpreter<'a> {
                 };
                 let position = match index {
                     Some(index) => {
-                        if is_text {
-                            return Err(Error::coded(
-                                "E0507",
-                                span,
-                                "indexed TEXT access is not implemented",
-                            ));
-                        }
                         let value = self.eval_ir(index)?;
                         let (value, _) = self.expect_int(value, index.span())?;
                         check_index_range(index_range, value, span)?;
@@ -3233,9 +3226,10 @@ impl<'a> Interpreter<'a> {
     fn read_text_record(
         &mut self,
         access: &Rc<RefCell<AccessState>>,
+        index: Option<i128>,
         span: Span,
     ) -> Result<Option<String>, Error> {
-        let (association, position, usage, out_of_file) = {
+        let (association, position, usage, out_of_file, indexed, index_range) = {
             let access = access.borrow();
             let Some(association) = access.association.clone() else {
                 return Err(Error::exception(
@@ -3249,7 +3243,19 @@ impl<'a> Interpreter<'a> {
                 access.position,
                 access.usage,
                 access.out_of_file,
+                access.indexed,
+                access.index_range,
             )
+        };
+        let position = match index {
+            Some(value) => {
+                if !indexed {
+                    return Err(textfail(span, "indexed transfer on sequential access"));
+                }
+                check_index_range(index_range, value, span)?;
+                value
+            }
+            None => position,
         };
         if usage == USAGE_WRITEONLY {
             return Err(Error::exception(
@@ -3258,7 +3264,7 @@ impl<'a> Interpreter<'a> {
                 "READFAIL: text access location is write-only",
             ));
         }
-        if out_of_file {
+        if out_of_file && index.is_none() {
             return Err(Error::exception(
                 "READFAIL",
                 span,
@@ -3291,10 +3297,11 @@ impl<'a> Interpreter<'a> {
     fn write_text_record(
         &mut self,
         access: &Rc<RefCell<AccessState>>,
+        index: Option<i128>,
         record: &str,
         span: Span,
     ) -> Result<(), Error> {
-        let (association, position, usage) = {
+        let (association, position, usage, indexed, index_range) = {
             let access = access.borrow();
             let Some(association) = access.association.clone() else {
                 return Err(Error::exception(
@@ -3303,7 +3310,23 @@ impl<'a> Interpreter<'a> {
                     "NOTCONNECTED: text location is not connected",
                 ));
             };
-            (association, access.position, access.usage)
+            (
+                association,
+                access.position,
+                access.usage,
+                access.indexed,
+                access.index_range,
+            )
+        };
+        let position = match index {
+            Some(value) => {
+                if !indexed {
+                    return Err(textfail(span, "indexed transfer on sequential access"));
+                }
+                check_index_range(index_range, value, span)?;
+                value
+            }
+            None => position,
         };
         if usage == USAGE_READONLY {
             return Err(Error::exception(
@@ -4153,20 +4176,25 @@ impl<'a> Interpreter<'a> {
                         _ => None,
                     }
                 });
-                let mut cursor = match index {
+                let transfer_index = match index {
                     Some(index) => {
                         let value = self.eval_ir(index)?;
                         let (index, _) = self.expect_int(value, index.span())?;
-                        index
+                        Some(index)
                     }
-                    None => text_index,
+                    None => None,
+                };
+                let mut cursor = if text_access.is_some() {
+                    0
+                } else {
+                    transfer_index.unwrap_or(text_index)
                 };
                 if cursor < 0 {
                     return Err(textfail(*span, "negative text index"));
                 }
                 let mut chars: Vec<char> = if matches!(kind, crate::builtins::TextIo::Read) {
                     if let Some(access) = &text_access {
-                        match self.read_text_record(access, *span)? {
+                        match self.read_text_record(access, transfer_index, *span)? {
                             Some(record) => record.chars().collect(),
                             None => return Ok(Value::Undefined),
                         }
@@ -4235,7 +4263,7 @@ impl<'a> Interpreter<'a> {
                             text.borrow_mut().index = 0;
                         }
                         if let Some(access) = &text_access {
-                            self.write_text_record(access, &rendered, *span)?;
+                            self.write_text_record(access, transfer_index, &rendered, *span)?;
                         }
                     }
                     crate::builtins::TextIo::Read => {
@@ -5569,7 +5597,7 @@ impl<'a> Interpreter<'a> {
                 Value::Duration(value) => Ok(Value::Duration(value)),
                 _ => Err(Error::coded("E0507", span, "expected a DURATION value")),
             },
-            Type::Text { length, wide } => match value {
+            Type::Text { length, wide, .. } => match value {
                 Value::String(value) => {
                     let actual = value.chars().count();
                     let valid = actual <= length
@@ -5852,8 +5880,25 @@ impl<'a> Interpreter<'a> {
                 "TEXT" => Type::Text {
                     length,
                     wide: false,
+                    indexed: mode.access_indexed,
+                    index: mode
+                        .access_index
+                        .map(|bounds| crate::types::ArrayDimension {
+                            low: bounds.low,
+                            high: bounds.high,
+                        }),
                 },
-                "WTEXT" => Type::Text { length, wide: true },
+                "WTEXT" => Type::Text {
+                    length,
+                    wide: true,
+                    indexed: mode.access_indexed,
+                    index: mode
+                        .access_index
+                        .map(|bounds| crate::types::ArrayDimension {
+                            low: bounds.low,
+                            high: bounds.high,
+                        }),
+                },
                 "WCHARS" => Type::WBoundedString {
                     length,
                     varying: mode.varying,

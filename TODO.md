@@ -156,8 +156,9 @@ deferred.
       file-backed sequential `READTEXT`/`WRITETEXT`, and access attributes for text.
 - [x] Reference-backed text record/access sub-locations:
       `GETTEXTRECORD`/`SETTEXTRECORD`, `GETTEXTACCESS`/`SETTEXTACCESS`, and
-      dereferenced access references as transfer locations. Indexed text access
-      remains deferred.
+      dereferenced access references as transfer locations.
+- [x] Indexed text access: retained text index modes, indexed text `CONNECT`, indexed
+      `READTEXT`/`WRITETEXT`, range checking, and grant encoding.
 - [x] Processes, signals, buffers, timers, and event selection under the cooperative
       single-threaded scheduler. Faithful preemptive concurrency and main-process
       interleaving remain deferred.

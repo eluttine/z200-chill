@@ -18,7 +18,8 @@ sub-location is stored alongside the variable and uses the same `AccessState` as
 ## Implemented phase 1
 
 - `CONNECT(text, association [, usage [, where [, index]]])` connects the text
-  location's access sub-location. The text location is sequential-only for now.
+  location's access sub-location. Sequential text modes accept no index; text modes
+  declared with an index mode accept the index expression.
 - `DISCONNECT(text)` clears the connection.
 - `GETUSAGE(text)`, `OUTOFFILE(text)`, and `GETASSOCIATION(text)` operate on the text
   access sub-location.
@@ -55,10 +56,26 @@ This makes the sub-locations reference-backed:
   references (`ref->`) can be used as `CONNECT`/`DISCONNECT` transfer locations and
   with `GETUSAGE`, `OUTOFFILE`, and `GETASSOCIATION`.
 
+## Indexed text access
+
+Text modes retain their optional index mode:
+
+```chill
+DCL t TEXT(20) 0:3;
+DCL bounded TEXT(20) INT;
+```
+
+- `CONNECT(text, ..., index)` is accepted when the text mode has an index mode;
+  otherwise the connection is sequential.
+- For a connected text location, an explicit index argument to `READTEXT`/`WRITETEXT`
+  selects the file record. Without it, the access position is used.
+- Indexed reads/writes check the declared index range and raise `RANGEFAIL` outside it.
+- `OUTOFFILE` applies to indexed reads as well; a later indexed read can still succeed.
+- `DYNAMIC` remains accepted on the text mode and is effectively satisfied by the
+  varying string record model.
+
 ## Deferred
 
-- Indexed/dynamic text access. The current text mode does not retain an index mode, so
-  `CONNECT(text, ..., index)` is rejected and connected text transfers are sequential.
 - General reference-to-record arguments in `SETTEXTRECORD`; the current form accepts a
   simple string location.
 - Enforcing the text mode's length on assignments through a record reference.

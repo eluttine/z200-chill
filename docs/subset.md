@@ -585,8 +585,12 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
 - `CONNECT`/`DISCONNECT`, `GETUSAGE`, `OUTOFFILE`, and `GETASSOCIATION` accept text
   locations and operate on their access sub-location. Connected `READTEXT`/`WRITETEXT`
   transfer sequential file records; disconnected operations remain in-memory.
-- Connected text access is sequential only: indexed text connections and indexed
-  `READTEXT`/`WRITETEXT` are not implemented.
+- Text modes may declare an index mode (`TEXT(n) INT` or `TEXT(n) low:high`).
+  Connected indexed text locations accept `CONNECT` index expressions, and indexed
+  `READTEXT`/`WRITETEXT` select file records and check `RANGEFAIL`. Sequential text
+  connections reject index expressions.
+- `DYNAMIC` is accepted on text modes; the varying text-record representation already
+  provides dynamic record storage.
 - `SETTEXTRECORD(text, chars-location)` makes the text record alias a `CHARS`/`WCHARS`
   location; `GETTEXTRECORD(text)` returns a reference to it.
 - `SETTEXTACCESS(text, access-location)` makes the text access sub-location alias an

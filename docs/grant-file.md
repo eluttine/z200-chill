@@ -151,8 +151,9 @@ Set representation values are stored as strings so values outside the TOML integ
 survive a round trip. Module, region, task, and interface modes are recorded with their
 corresponding `kind` and component list.
 
-Reference, pointer, row, and buffer types are encoded as `REF <mode>`, `PTR`,
-`ROW <mode>`, and `BUFFER[(length)] <element-mode>`. The element of a buffer may be any
+Text types with an index mode are encoded as `TEXT(n) INT` or `TEXT(n) low:high`
+(and likewise for `WTEXT`). Reference, pointer, row, and buffer types are encoded as
+`REF <mode>`, `PTR`, `ROW <mode>`, and `BUFFER[(length)] <element-mode>`. The element of a buffer may be any
 referable mode, including a symbolic structure-mode reference. Arrays of references,
 nested `REF`/`ROW` targets, and references to fields or indexes remain unsupported.
 

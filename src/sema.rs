@@ -1657,8 +1657,25 @@ impl Checker {
                 "TEXT" => Type::Text {
                     length,
                     wide: false,
+                    indexed: mode.access_indexed,
+                    index: mode
+                        .access_index
+                        .map(|bounds| crate::types::ArrayDimension {
+                            low: bounds.low,
+                            high: bounds.high,
+                        }),
                 },
-                "WTEXT" => Type::Text { length, wide: true },
+                "WTEXT" => Type::Text {
+                    length,
+                    wide: true,
+                    indexed: mode.access_indexed,
+                    index: mode
+                        .access_index
+                        .map(|bounds| crate::types::ArrayDimension {
+                            low: bounds.low,
+                            high: bounds.high,
+                        }),
+                },
                 "WCHARS" => Type::WBoundedString {
                     length,
                     varying: mode.varying,
@@ -3494,7 +3511,7 @@ impl Checker {
                 let ty = checker.check_expr(arg)?;
                 match ty {
                     Type::Access(access) => Ok((access.indexed, access.index, false)),
-                    Type::Text { .. } => Ok((false, None, true)),
+                    Type::Text { indexed, index, .. } => Ok((indexed, index, true)),
                     _ => Err(Error::coded(
                         "E0400",
                         arg.span(),
@@ -3615,7 +3632,7 @@ impl Checker {
                             "CONNECT takes an access, an association, and optional usage, where, and index expressions",
                         ));
                     }
-                    let (indexed, _index_range, is_text) = transfer_access(self, &args[0])?;
+                    let (indexed, _index_range, _is_text) = transfer_access(self, &args[0])?;
                     association_arg(self, &args[1])?;
                     let usage_ty = self.builtin_set_type("USAGE").ok_or_else(|| {
                         Error::coded("E0400", span, "internal: missing USAGE mode")
@@ -3630,11 +3647,11 @@ impl Checker {
                             has_usage = true;
                             next += 1;
                         } else if args.len() == 3 && ty.is_int() {
-                            if !indexed || is_text {
+                            if !indexed {
                                 return Err(Error::coded(
                                     "E0400",
                                     span,
-                                    "CONNECT index requires an indexed ACCESS mode",
+                                    "CONNECT index requires an indexed access or text mode",
                                 ));
                             }
                             has_index = true;
@@ -3657,11 +3674,11 @@ impl Checker {
                         }
                     }
                     if let Some(index) = args.get(next) {
-                        if !indexed || is_text {
+                        if !indexed {
                             return Err(Error::coded(
                                 "E0400",
                                 span,
-                                "CONNECT index requires an indexed ACCESS mode",
+                                "CONNECT index requires an indexed access or text mode",
                             ));
                         }
                         let index_ty = self.check_expr(index)?;

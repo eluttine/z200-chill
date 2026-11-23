@@ -223,7 +223,7 @@ impl RefTarget {
             Type::WBoundedString { length, varying } => Self::WBoundedString { length, varying },
             Type::Bits => Self::Bits,
             Type::BoundedBits { length, varying } => Self::BoundedBits { length, varying },
-            Type::Text { length, wide } => Self::Text { length, wide },
+            Type::Text { length, wide, .. } => Self::Text { length, wide },
             Type::Struct(id) => Self::Struct(id),
             Type::Set(id) => Self::Set(id),
             Type::Moreta(id) => Self::Moreta(id),
@@ -262,7 +262,12 @@ impl RefTarget {
             Self::WBoundedString { length, varying } => Type::WBoundedString { length, varying },
             Self::Bits => Type::Bits,
             Self::BoundedBits { length, varying } => Type::BoundedBits { length, varying },
-            Self::Text { length, wide } => Type::Text { length, wide },
+            Self::Text { length, wide } => Type::Text {
+                length,
+                wide,
+                indexed: false,
+                index: None,
+            },
             Self::Struct(id) => Type::Struct(id),
             Self::Set(id) => Type::Set(id),
             Self::Moreta(id) => Type::Moreta(id),
@@ -313,6 +318,8 @@ pub enum Type {
     Text {
         length: usize,
         wide: bool,
+        indexed: bool,
+        index: Option<ArrayDimension>,
     },
     /// `EVENT [(length)]`.
     Event {
@@ -573,6 +580,11 @@ pub fn resolve_mode_ref(
         return Some(Type::Text {
             length: mode.string_length?,
             wide: mode.name == "WTEXT",
+            indexed: mode.access_indexed,
+            index: mode.access_index.map(|bounds| ArrayDimension {
+                low: bounds.low,
+                high: bounds.high,
+            }),
         });
     }
     let base = mode_names

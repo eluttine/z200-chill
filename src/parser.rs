@@ -1787,12 +1787,27 @@ impl<'a> Parser<'a> {
                     "text length must be non-negative",
                 ));
             }
-            // Optional index mode and DYNAMIC are accepted for compatibility with
-            // the surface syntax. The interpreter represents a text location by
-            // its varying text record mode and does not keep a separate index
-            // sub-mode yet.
-            if let Some(TokenKind::Identifier(name)) = self.kind() {
+            let mut access_indexed = false;
+            let mut access_index = None;
+            if matches!(
+                self.kind(),
+                Some(TokenKind::Integer { .. } | TokenKind::Minus)
+            ) {
+                access_indexed = true;
+                let low = self.parse_mode_integer()?;
+                self.expect_colon()?;
+                let high = self.parse_mode_integer()?;
+                if low > high {
+                    return Err(Error::coded(
+                        "E0205",
+                        span,
+                        "TEXT index range lower bound exceeds upper bound",
+                    ));
+                }
+                access_index = Some(ArrayBounds { low, high });
+            } else if let Some(TokenKind::Identifier(name)) = self.kind() {
                 if matches!(name.as_str(), "INT" | "SHORT_INT" | "LONG_INT") {
+                    access_indexed = true;
                     self.advance();
                 }
             }
@@ -1809,8 +1824,8 @@ impl<'a> Parser<'a> {
                 reference: false,
                 row: false,
                 buffer_element: None,
-                access_indexed: false,
-                access_index: None,
+                access_indexed,
+                access_index,
                 span,
             });
         }
