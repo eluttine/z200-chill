@@ -230,8 +230,18 @@ fn expand_generic_modules(program: &mut Program) -> Result<(), Error> {
             instance.span,
             &instance.template,
         )?;
+        if template.module.kind != instance.kind {
+            return Err(Error::new(
+                instance.span,
+                format!(
+                    "generic `{}` instance `{}` has the wrong unit kind",
+                    instance.template, instance.name
+                ),
+            ));
+        }
         let mut module = template.module.clone();
         module.name = Some(instance.name.clone());
+        module.kind = instance.kind;
         module.span = instance.span;
         substitute_module_modes(&mut module, &substitutions)?;
         substitute_module_syns(&mut module, &syn_substitutions, &proc_substitutions);

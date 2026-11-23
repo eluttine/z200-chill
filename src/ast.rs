@@ -36,6 +36,7 @@ pub struct GenericModuleTemplate {
 #[derive(Debug, Clone)]
 pub struct GenericModuleInstance {
     pub name: String,
+    pub kind: ModuleKind,
     pub template: String,
     pub actuals: Vec<GenericActual>,
     pub span: Span,

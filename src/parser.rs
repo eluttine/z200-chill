@@ -298,7 +298,11 @@ impl<'a> Parser<'a> {
     fn at_generic_module_instance(&self) -> bool {
         self.at_identifier()
             && self.kind_at(1) == Some(&TokenKind::Colon)
-            && self.kind_at(2) == Some(&TokenKind::Keyword(Keyword::Module))
+            && matches!(
+                self.kind_at(2),
+                Some(TokenKind::Keyword(Keyword::Module))
+                    | Some(TokenKind::Keyword(Keyword::Region))
+            )
             && self.kind_at(3) == Some(&TokenKind::Eq)
     }
 
@@ -437,7 +441,13 @@ impl<'a> Parser<'a> {
         let start = self.current_span();
         let (name, _) = self.expect_identifier()?;
         self.expect_colon()?;
-        self.expect_keyword(Keyword::Module)?;
+        let kind = if self.at_keyword(Keyword::Region) {
+            self.advance();
+            ModuleKind::Region
+        } else {
+            self.expect_keyword(Keyword::Module)?;
+            ModuleKind::Body
+        };
         self.expect_equal()?;
         self.expect_keyword(Keyword::New)?;
         let (template, _) = self.expect_identifier()?;
@@ -447,7 +457,7 @@ impl<'a> Parser<'a> {
             if trailing != &name {
                 return Err(self.error_here_code(
                     "E0202",
-                    format!("generic module end name `{trailing}` does not match `{name}`"),
+                    format!("generic unit end name `{trailing}` does not match `{name}`"),
                 ));
             }
             self.advance();
@@ -455,6 +465,7 @@ impl<'a> Parser<'a> {
         let end = self.expect_semicolon()?;
         Ok(GenericModuleInstance {
             name,
+            kind,
             template,
             actuals,
             span: Span::new(self.source, start.start, end.end),
