@@ -24,6 +24,7 @@ pub(super) fn build_modes(program: &Program) -> Result<ModeBuildResult, Error> {
     ] {
         table.sets.push(crate::modes::SetMode {
             name: name.to_owned(),
+            path: None,
             package: usize::MAX,
             module: usize::MAX,
             package_name: None,
@@ -81,6 +82,7 @@ fn process_module_modes(
             top_package,
             top_package_name.clone(),
             module.name.clone(),
+            None,
             resolution,
             table,
             moreta_sources,
@@ -134,6 +136,7 @@ fn build_mode_definition(
     top_package: usize,
     top_package_name: Option<String>,
     module_name: Option<String>,
+    mode_path: Option<String>,
     resolution: &mut HashMap<String, Type>,
     table: &mut ModeTable,
     moreta_sources: &mut HashMap<crate::types::MoretaId, MoretaSource>,
@@ -145,6 +148,7 @@ fn build_mode_definition(
             let id = ModeId(table.modes.len());
             table.modes.push(StructMode {
                 name: mode_def.name.clone(),
+                path: mode_path.clone(),
                 package: top_package,
                 module: top,
                 package_name: top_package_name.clone(),
@@ -196,6 +200,7 @@ fn build_mode_definition(
             let id = crate::types::SetId(table.sets.len());
             table.sets.push(crate::modes::SetMode {
                 name: mode_def.name.clone(),
+                path: mode_path.clone(),
                 package: top_package,
                 module: top,
                 package_name: top_package_name.clone(),
@@ -401,19 +406,22 @@ fn build_mode_definition(
                     }
                     Declaration::Visibility(_) => {}
                     Declaration::Mode(nested) => {
+                        let parent_path = mode_path.as_deref().unwrap_or(&mode_def.name);
+                        let nested_path = Some(format!("{parent_path}!{}", nested.name));
                         let ty = build_mode_definition(
                             nested,
                             top,
                             top_package,
                             top_package_name.clone(),
                             module_name.clone(),
+                            nested_path,
                             resolution,
                             table,
                             moreta_sources,
                         )?;
                         for (prefix, ty) in [
                             (nested.name.clone(), ty),
-                            (format!("{}!{}", mode_def.name, nested.name), ty),
+                            (format!("{}!{}", parent_path, nested.name), ty),
                         ] {
                             components.retain(|component| component.name() != prefix);
                             components.push(crate::modes::MoretaComponent::Mode {
@@ -586,6 +594,7 @@ fn build_mode_definition(
             );
             table.moretas.push(crate::modes::MoretaMode {
                 name: mode_def.name.clone(),
+                path: mode_path.clone(),
                 kind: *kind,
                 package: top_package,
                 module: top,

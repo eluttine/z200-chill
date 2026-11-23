@@ -186,6 +186,7 @@ pub fn add_external_modes(
                     ids.ids.insert(symbol.clone(), id);
                     modes.modes.push(StructMode {
                         name: mode.name.clone(),
+                        path: None,
                         // External modes are never the local defining module.
                         package: usize::MAX,
                         module: usize::MAX,
@@ -201,6 +202,7 @@ pub fn add_external_modes(
                     ids.set_ids.insert(symbol.clone(), id);
                     modes.sets.push(crate::modes::SetMode {
                         name: mode.name.clone(),
+                        path: None,
                         package: usize::MAX,
                         module: usize::MAX,
                         package_name: mode.package_name.clone(),
@@ -217,6 +219,7 @@ pub fn add_external_modes(
                     ids.moreta_ids.insert(symbol.clone(), id);
                     modes.moretas.push(crate::modes::MoretaMode {
                         name: mode.name.clone(),
+                        path: None,
                         kind: match mode.kind {
                             ModeInfoKind::Region => crate::ast::MoretaKind::Region,
                             ModeInfoKind::Task => crate::ast::MoretaKind::Task,

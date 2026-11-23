@@ -188,7 +188,7 @@ deferred.
       region/process templates remain deferred.
 - [x] Static-object destructors at reach/lifetime end, including block, procedure,
       process, nested-module, and program-end cleanup.
-- [ ] Complete `Mode!Component` name preservation in grant files.
+- [x] Complete `Mode!Component` path preservation in mode symbols and grant files.
 - [x] First concurrency layer: `PROCESS`, `START`, `STOP`, a cooperative
       action-boundary scheduler, shared module locations, and process-local state.
 - [x] `EVENT`/`EVENT(n)` modes, `DELAY`, `CONTINUE`, priority wake-up, event-length

@@ -92,16 +92,14 @@ Z.200 requirements.
   components, public/internal visibility, interface kind, and `IMPLEMENTS` links.
 - Exported variables and procedure signatures may reference moreta modes
   symbolically.
-- Nested mode components have a limited grant encoding: the underlying modes are
-  serialized as module modes, but preserving `Mode!Component` names across packages
-  is not complete yet.
+- Nested mode components keep their qualified `Mode!Component` path in mode symbols
+  and grant files, e.g. `package!Module!Holder!Point`.
 
 ## Not implemented
 
 - deeper interface inheritance/implementation validation beyond exact component and
   signature matching,
-- complete moreta visibility rules beyond public/internal/private component classes,
-- complete `Mode!Component` name preservation in grant files.
+- complete moreta visibility rules beyond public/internal/private component classes.
 
 These exclusions are deliberate. Adding them should be a separate design step rather
 than an incidental extension.

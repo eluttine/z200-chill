@@ -159,7 +159,7 @@ impl GrantFile {
             .iter()
             .filter(|mode| mode.module_name.is_some())
             .map(|mode| GrantMode {
-                name: mode.name.clone(),
+                name: mode.path.clone().unwrap_or_else(|| mode.name.clone()),
                 implements: Vec::new(),
                 module: mode.module_name.clone(),
                 package: mode.package_name.clone(),
@@ -181,7 +181,7 @@ impl GrantFile {
                     .iter()
                     .filter(|mode| mode.module_name.is_some())
                     .map(|mode| GrantMode {
-                        name: mode.name.clone(),
+                        name: mode.path.clone().unwrap_or_else(|| mode.name.clone()),
                         implements: Vec::new(),
                         module: mode.module_name.clone(),
                         package: mode.package_name.clone(),
@@ -204,7 +204,7 @@ impl GrantFile {
                     .iter()
                     .filter(|mode| mode.module_name.is_some())
                     .map(|mode| GrantMode {
-                        name: mode.name.clone(),
+                        name: mode.path.clone().unwrap_or_else(|| mode.name.clone()),
                         implements: mode
                             .implements
                             .iter()
@@ -1763,6 +1763,54 @@ END M;
             .find(|mode| mode.name == "T")
             .unwrap();
         assert_eq!(info.kind, program::ModeInfoKind::Task);
+    }
+
+    #[test]
+    fn nested_mode_paths_round_trip() {
+        let manifest = Manifest::parse(
+            r#"
+[package]
+name = "nested"
+
+[build]
+entry = "src/main.ch"
+"#,
+        )
+        .unwrap();
+        let tokens = lexer::tokenize(
+            r#"
+M: MODULE
+  GRANT Holder;
+  NEWMODE Holder = MODULE BODY
+    NEWMODE Point = STRUCT (x INT);
+    DCL p Point;
+  END Holder;
+END M;
+"#,
+        )
+        .unwrap();
+        let mut program = parser::parse(&tokens).unwrap();
+        for module in &mut program.modules {
+            module.package_name = Some("nested".to_owned());
+        }
+        let grant = GrantFile::from_package(&manifest, &program).unwrap();
+        let point = grant
+            .modes
+            .iter()
+            .find(|mode| mode.name == "Holder!Point")
+            .expect("nested mode should keep its qualified path");
+        assert_eq!(point.symbol(), "nested!M!Holder!Point");
+
+        let interface = GrantFile::from_toml(&grant.to_toml().unwrap())
+            .unwrap()
+            .to_interface()
+            .unwrap();
+        let point = interface
+            .modes
+            .iter()
+            .find(|mode| mode.name == "Holder!Point")
+            .expect("nested mode path should survive the grant round trip");
+        assert_eq!(point.symbol(), "nested!M!Holder!Point");
     }
 
     #[test]

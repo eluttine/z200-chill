@@ -164,7 +164,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                     let mut forbidden: Vec<String> = mode.forbidden.iter().cloned().collect();
                     forbidden.sort();
                     ExportInfoKind::Mode(ModeInfo {
-                        name: mode.name.clone(),
+                        name: mode.path.clone().unwrap_or_else(|| mode.name.clone()),
                         implements: Vec::new(),
                         module_name: mode.module_name.clone(),
                         package_name: mode.package_name.clone(),
@@ -182,7 +182,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                 ExportKind::Mode(Type::Set(id)) => {
                     let mode = modes.get_set(id);
                     ExportInfoKind::Mode(ModeInfo {
-                        name: mode.name.clone(),
+                        name: mode.path.clone().unwrap_or_else(|| mode.name.clone()),
                         implements: Vec::new(),
                         module_name: mode.module_name.clone(),
                         package_name: mode.package_name.clone(),
@@ -240,7 +240,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                         })
                         .collect();
                     ExportInfoKind::Mode(ModeInfo {
-                        name: mode.name.clone(),
+                        name: mode.path.clone().unwrap_or_else(|| mode.name.clone()),
                         implements: Vec::new(),
                         module_name: mode.module_name.clone(),
                         package_name: mode.package_name.clone(),

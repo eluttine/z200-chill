@@ -10,6 +10,8 @@ pub struct FieldInfo {
 #[derive(Debug, Clone)]
 pub struct StructMode {
     pub name: String,
+    /// Qualified `Mode!Component` path for nested modes.
+    pub path: Option<String>,
     pub package: usize,
     pub module: usize,
     pub package_name: Option<String>,
@@ -25,7 +27,7 @@ impl StructMode {
         mode_symbol(
             self.package_name.as_deref(),
             self.module_name.as_deref(),
-            &self.name,
+            self.path.as_deref().unwrap_or(&self.name),
         )
     }
 }
@@ -88,6 +90,8 @@ impl MoretaComponent {
 #[derive(Debug, Clone)]
 pub struct MoretaMode {
     pub name: String,
+    /// Qualified `Mode!Component` path for nested modes.
+    pub path: Option<String>,
     pub kind: crate::ast::MoretaKind,
     pub package: usize,
     pub module: usize,
@@ -107,7 +111,7 @@ impl MoretaMode {
         mode_symbol(
             self.package_name.as_deref(),
             self.module_name.as_deref(),
-            &self.name,
+            self.path.as_deref().unwrap_or(&self.name),
         )
     }
 }
@@ -115,6 +119,8 @@ impl MoretaMode {
 #[derive(Debug, Clone)]
 pub struct SetMode {
     pub name: String,
+    /// Qualified `Mode!Component` path for nested modes.
+    pub path: Option<String>,
     pub package: usize,
     pub module: usize,
     pub package_name: Option<String>,
@@ -127,7 +133,7 @@ impl SetMode {
         mode_symbol(
             self.package_name.as_deref(),
             self.module_name.as_deref(),
-            &self.name,
+            self.path.as_deref().unwrap_or(&self.name),
         )
     }
 }
