@@ -60,7 +60,8 @@ Z.200 requirements.
   same-named spec components.
 - Every spec procedure component must have a matching body procedure component.
 - A spec without a body is abstract: declaring an object of that mode is rejected.
-- `BASED_ON` inherits base components; derived same-named components override them.
+- `BASED_ON` inherits base components except constructors and destructors; derived
+  same-named components override inherited ones.
 - Base component initializers run before derived initializers.
 - Spec and body invariants are combined with `AND`; inherited invariants are checked
   with derived invariants.

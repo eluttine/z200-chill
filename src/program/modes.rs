@@ -261,6 +261,9 @@ fn build_mode_definition(
                         required_interfaces.push((base.clone(), base_id));
                     } else {
                         for component in &table.moretas[base_id.0].components {
+                            if is_lifecycle_component(component) {
+                                continue;
+                            }
                             if !components
                                 .iter()
                                 .any(|existing| existing.name() == component.name())
@@ -272,6 +275,9 @@ fn build_mode_definition(
                 } else {
                     base_ids.push(base_id);
                     for component in &table.moretas[base_id.0].components {
+                        if is_lifecycle_component(component) {
+                            continue;
+                        }
                         if !components
                             .iter()
                             .any(|existing| existing.name() == component.name())
@@ -803,6 +809,19 @@ pub fn signature_from_params_with(
         result: result_type,
         exceptions: Some(exceptions.to_vec()),
     })
+}
+
+fn is_lifecycle_component(component: &crate::modes::MoretaComponent) -> bool {
+    matches!(
+        component,
+        crate::modes::MoretaComponent::Proc {
+            constructor: true,
+            ..
+        } | crate::modes::MoretaComponent::Proc {
+            destructor: true,
+            ..
+        }
+    )
 }
 
 fn declaration_component_name(declaration: &Declaration) -> Option<String> {

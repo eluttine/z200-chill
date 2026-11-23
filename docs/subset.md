@@ -794,8 +794,8 @@ ASSERT p.x = 1;
   signatures). A matching `MODULE BODY` in the same reach supplies implementations;
   every interface procedure must have a body component.
 - `BASED_ON Base` derives a module mode from another module mode. Base variable and
-  procedure components are inherited; same-named components in the derived body
-  override the base. Base component `INIT` declarations run before derived
+  procedure components are inherited, but constructors and destructors are not;
+  same-named components in the derived body override the base. Base component `INIT` declarations run before derived
   initializers.
 - `INVARIANT boolean-expression` at the end of a module mode body is checked before and
   after every component method call. A false invariant raises `INVFAIL`.
