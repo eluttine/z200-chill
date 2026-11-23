@@ -2590,6 +2590,7 @@ impl<'a> Interpreter<'a> {
         &mut self,
         op: crate::builtins::AssociationOp,
         first: &str,
+        first_ref: Option<&ir::Node>,
         second: Option<&str>,
         index: Option<&ir::Node>,
         usage_node: Option<&ir::Node>,
@@ -2599,6 +2600,7 @@ impl<'a> Interpreter<'a> {
         span: Span,
     ) -> Result<Value, Error> {
         use crate::builtins::AssociationOp;
+        let first_cell = self.transfer_cell(first, first_ref, span)?;
         match op {
             AssociationOp::Associate => {
                 let Some(value) = value else {
@@ -2771,9 +2773,7 @@ impl<'a> Interpreter<'a> {
                     }
                     None => WHERE_FIRST,
                 };
-                let cell = self.find_var_cell(first).ok_or_else(|| {
-                    Error::coded("E0505", span, format!("unknown variable `{first}`"))
-                })?;
+                let cell = first_cell.clone();
                 let (indexed, index_range, is_text, previous_position) = {
                     let var = cell.borrow();
                     match var.ty {
@@ -2845,9 +2845,6 @@ impl<'a> Interpreter<'a> {
                     }
                     None => base,
                 };
-                let cell = self
-                    .find_var_cell(first)
-                    .expect("access cell was just found");
                 let mut var = cell.borrow_mut();
                 if !is_text {
                     association.borrow_mut().indexable = indexed;
@@ -2871,10 +2868,7 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Undefined)
             }
             AssociationOp::Disconnect => {
-                let cell = self.find_var_cell(first).ok_or_else(|| {
-                    Error::coded("E0505", span, format!("unknown variable `{first}`"))
-                })?;
-                let mut var = cell.borrow_mut();
+                let mut var = first_cell.borrow_mut();
                 let is_text = matches!(var.ty, Type::Text { .. });
                 let disconnected = if is_text {
                     let text = var.text.clone().expect("text location has text state");
@@ -2912,9 +2906,7 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Undefined)
             }
             AssociationOp::GetAssociation => {
-                let cell = self.find_var_cell(first).ok_or_else(|| {
-                    Error::coded("E0505", span, format!("unknown variable `{first}`"))
-                })?;
+                let cell = first_cell.clone();
                 let association_name = {
                     let var = cell.borrow();
                     match &var.value {
@@ -2955,12 +2947,12 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Ref(Some(self.intern_ref(association_cell, false))))
             }
             AssociationOp::GetUsage => {
-                let access = self.access_state(first, span)?;
+                let access = self.access_state_cell(&first_cell, span)?;
                 let usage = access.borrow().usage;
                 Ok(Value::Set(usage))
             }
             AssociationOp::OutOfFile => {
-                let access = self.access_state(first, span)?;
+                let access = self.access_state_cell(&first_cell, span)?;
                 let out_of_file = access.borrow().out_of_file;
                 Ok(Value::Bool(out_of_file))
             }
@@ -3134,6 +3126,64 @@ impl<'a> Interpreter<'a> {
             ));
         };
         Ok(state.clone())
+    }
+
+    fn transfer_cell(
+        &mut self,
+        first: &str,
+        first_ref: Option<&ir::Node>,
+        span: Span,
+    ) -> Result<VarCell, Error> {
+        if let Some(reference) = first_ref {
+            return self.eval_reference(reference, span);
+        }
+        self.find_var_cell(first)
+            .ok_or_else(|| Error::coded("E0505", span, format!("unknown variable `{first}`")))
+    }
+
+    fn access_state_cell(
+        &self,
+        cell: &VarCell,
+        span: Span,
+    ) -> Result<Rc<RefCell<AccessState>>, Error> {
+        let var = cell.borrow();
+        let state = match &var.value {
+            Value::Access(state) => state.clone(),
+            _ if matches!(var.ty, Type::Text { .. }) => {
+                let access = var
+                    .text
+                    .as_ref()
+                    .map(|text| text.borrow().access.clone())
+                    .ok_or_else(|| {
+                        Error::coded("E0507", span, "text location has no access state")
+                    })?;
+                let access = access.borrow();
+                match &access.value {
+                    Value::Access(state) => state.clone(),
+                    _ => {
+                        return Err(Error::coded(
+                            "E0507",
+                            span,
+                            "expected an ACCESS or TEXT location",
+                        ))
+                    }
+                }
+            }
+            _ => {
+                return Err(Error::coded(
+                    "E0507",
+                    span,
+                    "expected an ACCESS or TEXT location",
+                ))
+            }
+        };
+        state.ok_or_else(|| {
+            Error::exception(
+                "NOTCONNECTED",
+                span,
+                "NOTCONNECTED: access location is not connected",
+            )
+        })
     }
 
     fn access_state(&self, name: &str, span: Span) -> Result<Rc<RefCell<AccessState>>, Error> {
@@ -4470,6 +4520,7 @@ impl<'a> Interpreter<'a> {
             ir::Expr::Association {
                 op,
                 first,
+                first_ref,
                 second,
                 index,
                 usage,
@@ -4480,6 +4531,7 @@ impl<'a> Interpreter<'a> {
             } => self.exec_association(
                 *op,
                 first,
+                first_ref.as_ref(),
                 second.as_deref(),
                 index.as_ref(),
                 usage.as_ref(),

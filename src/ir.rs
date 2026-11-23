@@ -218,6 +218,7 @@ pub enum Expr {
     Association {
         op: crate::builtins::AssociationOp,
         first: String,
+        first_ref: Option<Node>,
         second: Option<String>,
         index: Option<Node>,
         usage: Option<Node>,
@@ -1354,11 +1355,17 @@ impl Lowerer<'_> {
                     where_expr,
                 }) => {
                     use crate::builtins::AssociationOp;
-                    let AstExpr::Name { name: first, .. } = &ast_args[0] else {
-                        return Err(Error::new(
-                            ast_args[0].span(),
-                            "internal: association argument is not a location",
-                        ));
+                    let (first, first_ref) = match &ast_args[0] {
+                        AstExpr::Name { name, .. } => (name.clone(), None),
+                        AstExpr::Deref { base, .. } => {
+                            (String::new(), Some(self.lower_expr(base)?))
+                        }
+                        _ => {
+                            return Err(Error::new(
+                                ast_args[0].span(),
+                                "internal: association argument is not a location",
+                            ))
+                        }
                     };
                     let mut lowered = args.into_iter();
                     let _first = lowered.next();
@@ -1427,7 +1434,8 @@ impl Lowerer<'_> {
                     };
                     Rc::new(Expr::Association {
                         op: *op,
-                        first: first.clone(),
+                        first,
+                        first_ref,
                         second,
                         index: index_node,
                         usage: usage_node,

@@ -51,15 +51,14 @@ This makes the sub-locations reference-backed:
   Dereferencing it reads or assigns the text record.
 - `SETTEXTACCESS(text, access-location)` makes the text access sub-location alias the
   supplied `ACCESS` location, including its connection state.
-- `GETTEXTACCESS(text)` returns a `REF ACCESS` to the access cell. It can be compared
-  with `NULL`; using such a reference as a `CONNECT`/`DISCONNECT` transfer location is
-  still deferred because transfer arguments are currently simple locations.
+- `GETTEXTACCESS(text)` returns a `REF ACCESS` to the access cell. Dereferenced access
+  references (`ref->`) can be used as `CONNECT`/`DISCONNECT` transfer locations and
+  with `GETUSAGE`, `OUTOFFILE`, and `GETASSOCIATION`.
 
 ## Deferred
 
 - Indexed/dynamic text access. The current text mode does not retain an index mode, so
   `CONNECT(text, ..., index)` is rejected and connected text transfers are sequential.
-- Dereferencing a `GETTEXTACCESS` reference in a transfer-location position.
 - General reference-to-record arguments in `SETTEXTRECORD`; the current form accepts a
   simple string location.
 - Enforcing the text mode's length on assignments through a record reference.

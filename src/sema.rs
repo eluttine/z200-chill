@@ -3484,20 +3484,20 @@ impl Checker {
                 (bool, Option<crate::types::ArrayDimension>, bool),
                 Error,
             > {
-                let Expr::Name { span, .. } = arg else {
+                if !matches!(arg, Expr::Name { .. } | Expr::Deref { .. }) {
                     return Err(Error::coded(
                         "E0400",
                         arg.span(),
                         "transfer-location argument must be a location",
                     ));
-                };
+                }
                 let ty = checker.check_expr(arg)?;
                 match ty {
                     Type::Access(access) => Ok((access.indexed, access.index, false)),
                     Type::Text { .. } => Ok((false, None, true)),
                     _ => Err(Error::coded(
                         "E0400",
-                        *span,
+                        arg.span(),
                         "expected an ACCESS or TEXT location",
                     )),
                 }

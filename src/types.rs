@@ -526,6 +526,17 @@ pub fn resolve_mode_ref(
     mode: &ModeRef,
     mode_names: &std::collections::HashMap<String, Type>,
 ) -> Option<Type> {
+    if mode.reference || mode.row {
+        let mut inner = mode.clone();
+        inner.reference = false;
+        inner.row = false;
+        let base = resolve_mode_ref(&inner, mode_names)?;
+        return if mode.reference {
+            RefTarget::from_type(base).map(Type::Ref)
+        } else {
+            RefTarget::from_type(base).map(Type::Row)
+        };
+    }
     if mode.powerset {
         let member = match resolve_mode(&mode.name)? {
             Type::Int(kind) => PowerSetMember::Int(kind),

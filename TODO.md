@@ -155,8 +155,9 @@ deferred.
 - [x] Text-location access sub-locations: `CONNECT`/`DISCONNECT` on `TEXT`/`WTEXT`,
       file-backed sequential `READTEXT`/`WRITETEXT`, and access attributes for text.
 - [x] Reference-backed text record/access sub-locations:
-      `GETTEXTRECORD`/`SETTEXTRECORD` and `GETTEXTACCESS`/`SETTEXTACCESS`.
-      Indexed text access and transfer-location dereferencing remain deferred.
+      `GETTEXTRECORD`/`SETTEXTRECORD`, `GETTEXTACCESS`/`SETTEXTACCESS`, and
+      dereferenced access references as transfer locations. Indexed text access
+      remains deferred.
 - [x] Processes, signals, buffers, timers, and event selection under the cooperative
       single-threaded scheduler. Faithful preemptive concurrency and main-process
       interleaving remain deferred.

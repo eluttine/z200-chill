@@ -591,9 +591,9 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
   location; `GETTEXTRECORD(text)` returns a reference to it.
 - `SETTEXTACCESS(text, access-location)` makes the text access sub-location alias an
   `ACCESS` location; `GETTEXTACCESS(text)` returns a reference to it.
-- Record references can be dereferenced for reads and assignments. Access references
-  can be compared with `NULL`; transfer-location dereferencing is not implemented yet.
-  See [text.md](text.md).
+- Record references can be dereferenced for reads and assignments. Dereferenced access
+  references can be used as `CONNECT`/`DISCONNECT` transfer locations and with
+  `GETUSAGE`/`OUTOFFILE`/`GETASSOCIATION`. See [text.md](text.md).
 - `BOOLS`, `BOOLS(n)`, and `BOOLS(n) VARYING` are bit-string modes. `B'...'`,
   `O'...'`, and `H'...'` with a closing apostrophe are bit-string literals; without
   the closing apostrophe they are based integer literals (`B'1010` is binary 10).
