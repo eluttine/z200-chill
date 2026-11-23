@@ -518,7 +518,7 @@ pub enum Action {
         span: Span,
     },
     Case {
-        selector: Expr,
+        selectors: Vec<Expr>,
         alternatives: Vec<CaseAlternative>,
         else_actions: Option<Vec<Action>>,
         else_span: Option<Span>,
@@ -560,7 +560,8 @@ pub struct Branch {
 
 #[derive(Debug, Clone)]
 pub struct CaseAlternative {
-    pub labels: Vec<CaseLabel>,
+    /// One label list per `CASE` selector.
+    pub labels: Vec<Vec<CaseLabel>>,
     pub body: Vec<Action>,
     pub span: Span,
 }

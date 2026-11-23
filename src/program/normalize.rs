@@ -746,12 +746,14 @@ fn substitute_actions_syns(
                 substitute_actions_syns(body, syns, procs);
             }
             Action::Case {
-                selector,
+                selectors,
                 alternatives,
                 else_actions,
                 ..
             } => {
-                *selector = substitute_expr_syns(selector, syns, procs);
+                for selector in selectors {
+                    *selector = substitute_expr_syns(selector, syns, procs);
+                }
                 for alternative in alternatives {
                     substitute_actions_syns(&mut alternative.body, syns, procs);
                 }

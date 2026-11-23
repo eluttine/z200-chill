@@ -2505,12 +2505,10 @@ impl<'a> Parser<'a> {
     fn parse_case(&mut self) -> Result<Action, Error> {
         let start = self.current_span();
         self.expect_keyword(Keyword::Case)?;
-        let selector = self.parse_expr()?;
-
-        if self.at_comma() {
-            return Err(
-                self.error_here_code("E0206", "multiple CASE selectors are not implemented yet")
-            );
+        let mut selectors = vec![self.parse_expr()?];
+        while self.at_comma() {
+            self.advance();
+            selectors.push(self.parse_expr()?);
         }
 
         self.expect_keyword(Keyword::Of)?;
@@ -2518,7 +2516,11 @@ impl<'a> Parser<'a> {
         let mut alternatives = Vec::new();
         while self.at_lparen() {
             let alternative_start = self.current_span();
-            let labels = self.parse_case_labels()?;
+            let mut labels = vec![self.parse_case_labels()?];
+            while self.at_comma() {
+                self.advance();
+                labels.push(self.parse_case_labels()?);
+            }
             self.expect_colon()?;
             let body = self.parse_case_body()?;
             let end = body
@@ -2554,7 +2556,7 @@ impl<'a> Parser<'a> {
         }
 
         let action = Action::Case {
-            selector,
+            selectors,
             alternatives,
             else_actions,
             else_span,
@@ -3676,13 +3678,50 @@ END M;
         assert_eq!(alternatives.len(), 3);
         assert_eq!(
             alternatives[0].labels,
-            vec![CaseLabel::Value(1), CaseLabel::Value(2)]
+            vec![vec![CaseLabel::Value(1), CaseLabel::Value(2)]]
         );
         assert_eq!(
             alternatives[1].labels,
-            vec![CaseLabel::Range { low: 3, high: 5 }]
+            vec![vec![CaseLabel::Range { low: 3, high: 5 }]]
         );
-        assert_eq!(alternatives[2].labels, vec![CaseLabel::Else]);
+        assert_eq!(alternatives[2].labels, vec![vec![CaseLabel::Else]]);
+    }
+
+    #[test]
+    fn parses_multiple_case_selectors() {
+        let program = parse_source(
+            r#"
+M: MODULE
+  CASE x, y OF
+    (1, 2), (3:5): ;
+    (ELSE), (*): ;
+  ESAC;
+END M;
+"#,
+        );
+
+        let Action::Case {
+            selectors,
+            alternatives,
+            ..
+        } = &program.modules[0].actions[0]
+        else {
+            panic!("expected CASE");
+        };
+
+        assert_eq!(selectors.len(), 2);
+        assert_eq!(alternatives.len(), 2);
+        assert_eq!(
+            alternatives[0].labels,
+            vec![
+                vec![CaseLabel::Value(1), CaseLabel::Value(2)],
+                vec![CaseLabel::Range { low: 3, high: 5 }],
+            ]
+        );
+        assert_eq!(
+            alternatives[1].labels,
+            vec![vec![CaseLabel::Else], vec![CaseLabel::Any]]
+        );
     }
 
     #[test]

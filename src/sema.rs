@@ -1951,32 +1951,65 @@ impl Checker {
             }
             Action::Exit { label: None, .. } => Ok(()),
             Action::Case {
-                selector,
+                selectors,
                 alternatives,
                 else_actions,
                 else_span,
                 ..
             } => {
-                let selector_ty = self.check_expr(selector)?;
-                if !selector_ty.is_int() {
-                    return Err(Error::coded(
-                        "E0407",
-                        selector.span(),
-                        "CASE selector must be an integer in v0",
-                    ));
+                let mut selector_types = Vec::with_capacity(selectors.len());
+                for selector in selectors {
+                    let selector_ty = self.check_expr(selector)?;
+                    if !selector_ty.is_int() {
+                        return Err(Error::coded(
+                            "E0407",
+                            selector.span(),
+                            "CASE selectors must be integers in v0",
+                        ));
+                    }
+                    selector_types.push(selector_ty);
                 }
 
                 for alternative in alternatives {
-                    for label in &alternative.labels {
-                        match label {
-                            CaseLabel::Value(value) => {
-                                self.check_case_label_value(*value, selector_ty, alternative.span)?;
+                    if alternative.labels.len() != selectors.len() {
+                        return Err(Error::coded(
+                            "E0407",
+                            alternative.span,
+                            format!(
+                                "CASE alternative has {} label list(s) but CASE has {} selector(s)",
+                                alternative.labels.len(),
+                                selectors.len()
+                            ),
+                        ));
+                    }
+                    for (labels, selector_ty) in alternative
+                        .labels
+                        .iter()
+                        .zip(selector_types.iter().copied())
+                    {
+                        for label in labels {
+                            match label {
+                                CaseLabel::Value(value) => {
+                                    self.check_case_label_value(
+                                        *value,
+                                        selector_ty,
+                                        alternative.span,
+                                    )?;
+                                }
+                                CaseLabel::Range { low, high } => {
+                                    self.check_case_label_value(
+                                        *low,
+                                        selector_ty,
+                                        alternative.span,
+                                    )?;
+                                    self.check_case_label_value(
+                                        *high,
+                                        selector_ty,
+                                        alternative.span,
+                                    )?;
+                                }
+                                CaseLabel::Else | CaseLabel::Any => {}
                             }
-                            CaseLabel::Range { low, high } => {
-                                self.check_case_label_value(*low, selector_ty, alternative.span)?;
-                                self.check_case_label_value(*high, selector_ty, alternative.span)?;
-                            }
-                            CaseLabel::Else | CaseLabel::Any => {}
                         }
                     }
                     self.check_block(&alternative.body, alternative.span)?;
@@ -6107,7 +6140,7 @@ END M;
 "#,
         )
         .unwrap_err();
-        assert!(error.message.contains("CASE selector must be an integer"));
+        assert!(error.message.contains("CASE selectors must be integers"));
     }
 
     #[test]

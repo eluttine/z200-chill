@@ -421,7 +421,7 @@ pub enum Stmt {
         span: Span,
     },
     Case {
-        selector: Node,
+        selectors: Vec<Node>,
         alternatives: Vec<CaseAlternativeIr>,
         else_actions: Option<Vec<Stmt>>,
         else_span: Option<Span>,
@@ -468,7 +468,7 @@ pub struct BranchIr {
 
 #[derive(Debug)]
 pub struct CaseAlternativeIr {
-    pub labels: Vec<CaseLabel>,
+    pub labels: Vec<Vec<CaseLabel>>,
     pub body: Vec<Stmt>,
     pub span: Span,
 }
@@ -909,13 +909,16 @@ impl Lowerer<'_> {
                 span: *span,
             }),
             Action::Case {
-                selector,
+                selectors,
                 alternatives,
                 else_actions,
                 else_span,
                 span,
             } => {
-                let selector = self.lower_expr(selector)?;
+                let selectors = selectors
+                    .iter()
+                    .map(|selector| self.lower_expr(selector))
+                    .collect::<Result<Vec<_>, _>>()?;
                 let mut lowered_alternatives = Vec::with_capacity(alternatives.len());
                 for alternative in alternatives {
                     lowered_alternatives.push(CaseAlternativeIr {
@@ -929,7 +932,7 @@ impl Lowerer<'_> {
                     None => None,
                 };
                 Ok(Stmt::Case {
-                    selector,
+                    selectors,
                     alternatives: lowered_alternatives,
                     else_actions,
                     else_span: *else_span,

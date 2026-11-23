@@ -2364,29 +2364,51 @@ impl<'a> Interpreter<'a> {
                 }
                 ir::Stmt::Exit { label, .. } => return Ok(Flow::Exit(label.clone())),
                 ir::Stmt::Case {
-                    selector,
+                    selectors,
                     alternatives,
                     else_actions,
                     else_span,
                     ..
                 } => {
-                    let selector_value = self.eval_ir(selector)?;
-                    let (value, _) = self.expect_int(selector_value, selector.span())?;
+                    let mut values = Vec::with_capacity(selectors.len());
+                    for selector in selectors {
+                        let value = self.eval_ir(selector)?;
+                        let (value, _) = self.expect_int(value, selector.span())?;
+                        values.push(value);
+                    }
 
                     let explicitly_labelled = alternatives.iter().any(|alternative| {
-                        alternative
-                            .labels
-                            .iter()
-                            .any(|label| explicit_label_matches(*label, value))
+                        alternative.labels.len() == values.len()
+                            && alternative.labels.iter().zip(values.iter()).all(
+                                |(labels, value)| {
+                                    labels
+                                        .iter()
+                                        .any(|label| explicit_label_matches(*label, *value))
+                                },
+                            )
                     });
 
                     let mut matched = false;
                     for alternative in alternatives {
-                        let matches = alternative.labels.iter().any(|label| match label {
-                            CaseLabel::Else => !explicitly_labelled,
-                            CaseLabel::Any => true,
-                            other => explicit_label_matches(*other, value),
-                        });
+                        if alternative.labels.len() != values.len() {
+                            return Err(Error::coded(
+                                "E0500",
+                                alternative.span,
+                                "internal: CASE alternative has the wrong number of label lists",
+                            ));
+                        }
+                        let matches =
+                            alternative
+                                .labels
+                                .iter()
+                                .zip(values.iter())
+                                .all(|(labels, value)| {
+                                    labels.iter().any(|label| match label {
+                                        CaseLabel::Else => !explicitly_labelled,
+                                        CaseLabel::Any => true,
+                                        other => explicit_label_matches(*other, *value),
+                                    })
+                                });
                         if matches {
                             matched = true;
                             let flow =

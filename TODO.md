@@ -125,6 +125,7 @@ deferred.
       `EXCEPTIONS` lists are enforced and compared across spec/body signatures.
       Implicit runtime checks such as `OVERFLOW`, range, and text failures are not
       statically inferred yet.
+- [x] Multiple `CASE` selectors with per-selector label lists.
 - [x] Implementation-defined text I/O (`WRITE`, `WRITELINE`, `READLINE`).
 - [x] `READTEXT`/`WRITETEXT` for `CHARS` locations with literal format text.
 - [x] Bounded text modes (`CHARS(n)` and `CHARS(n) VARYING`), including arrays of
