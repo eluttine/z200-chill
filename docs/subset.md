@@ -40,13 +40,14 @@ Current scope includes:
 - procedures and calls (`IN`, `OUT`, `INOUT`, and `LOC` parameters, `RETURNS`,
   `RESULT`/`RETURN`);
 - modules, nested modulions, `GRANT`/`SEIZE`, specs, contexts, regions, remote pieces;
-- `PROCESS` definitions, `START` actions/expressions, `STOP`, `THIS`, `INSTANCE`,
-  `EVENT`, `BUFFER`, `DELAY`, `DELAY CASE`, `CONTINUE`, `SIGNAL`, `SEND`
-  (including `TO instance` and priority), `RECEIVE CASE` (including `SET instance`),
-  process `ON` handlers, relative
-  timing actions, region-call
-  mutual exclusion, and cooperative round-robin process scheduling at action
-  boundaries;
+- cooperative processes: `PROCESS`, `START` actions/expressions, `STOP`, `THIS`,
+  `INSTANCE`, process `ON` handlers, and `IN`/`LOC` process parameters;
+- concurrency primitives: `EVENT`, `DELAY`, `DELAY CASE`, `CONTINUE`, `SIGNAL`,
+  `SEND` (including `TO instance` and priority), `RECEIVE CASE` (including
+  `SET instance`), and `BUFFER`;
+- region-call mutual exclusion, region object modes, and task object modes with
+  per-object task workers;
+- relative, absolute, and cyclic timing actions with `DURATION`/`TIME` values;
 - arrays including slices, multidimensional arrays, literals, and arrays of structures;
 - `REF`/`PTR`/`ROW` modes, `NULL`, `ALLOCATE`/`GETSTACK`/`TERMINATE`, and
   dereferencing;
@@ -57,13 +58,13 @@ Current scope includes:
 
 Explicitly **deferred**:
 
-- process
-  instances/`THIS`, process handlers, process `LOC`/`OUT`/`INOUT` parameters,
-  region object/task modes, and priority scheduling;
+- main-process interleaving with spawned processes;
+- task-object cleanup for statically declared objects, region-call timeout
+  supervision, and scheduler fairness/priority guarantees;
 - general reference targets beyond simple variables and whole allocated locations;
-- constructors/destructors, `SELF`, task/region object modes, and the rest of moreta;
-- generic region/process templates;
-- grant encoding for named set modes and moreta module modes;
+- interface modes, full moreta visibility/assignability attributes, and generic
+  region/process templates;
+- grant encoding for named set modes and reference/row modes;
 - full association/access attribute modification and arbitrary file models.
 
 ### 1.1 Implementation status (v0)
@@ -125,21 +126,23 @@ Implemented in `z200c`:
 - simplified text-file associations/access modes with indexed access;
 - powersets and named set modes;
 - generic procedure/module templates over `MODE`, `SYN`, and `PROC`;
-- moreta module-body objects with methods, inheritance, specs, initializers, and
-  invariants (see [moreta.md](moreta.md));
+- moreta module-body, region, and task objects with methods, inheritance, specs,
+  initializers, invariants, and object-level locking/task workers
+  (see [moreta.md](moreta.md));
 - a tree-walking interpreter: `z200c run examples/hello` prints `Hello, world!`, and
   `z200c run examples/procedures` executes the procedure/conversion example and verifies
   its `ASSERT`.
 
 Not implemented yet (rejected or deferred with a diagnostic):
 
-- interface-only external dependencies for `run`;
+- main-process interleaving with spawned processes;
+- task-object cleanup at static reach end, region-call timeout supervision, and
+  priority/fairness scheduling guarantees;
 - multiple `CASE` selectors and non-integer `CASE` labels;
-- `DELAY`/timers, signals, and region concurrency/mutual exclusion;
 - general reference targets beyond simple variables and whole allocated locations;
-- moreta constructors/destructors, `SELF`, and task/region object modes;
+- interface modes and full moreta visibility/assignability attributes;
 - generic region/process templates;
-- grant encoding for named set modes and moreta module modes.
+- grant encoding for named set modes and reference/row modes.
 
 The interpreter is a bootstrap for validating semantics; native code generation is a
 later milestone.
