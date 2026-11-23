@@ -7,6 +7,8 @@ Z.200 requirements.
 ## Supported
 
 - `NEWMODE Name = MODULE BODY ... END;`
+- `NEWMODE Name = REGION SPEC/BODY ... END;` with per-object mutual exclusion on
+  component method calls
 - paired `MODULE SPEC` / `MODULE BODY` definitions with the same name,
 - variable components,
 - procedure components and static method calls `object.Method(...)`,
@@ -80,7 +82,7 @@ Z.200 requirements.
 
 ## Not implemented
 
-- task modes, region modes, and interface modes,
+- task object modes and interface modes,
 - static-object destructors at reach/lifetime end,
 - `IMPLEMENTS`, assignability attributes, abstract/final attributes,
 - public/private component visibility and `GRANT` inside module-mode specs,

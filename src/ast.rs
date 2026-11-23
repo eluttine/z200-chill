@@ -177,11 +177,19 @@ pub struct ModeDefinition {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoretaKind {
+    Module,
+    Region,
+    Task,
+}
+
 #[derive(Debug, Clone)]
 pub enum ModeDefinitionBody {
     Struct(Vec<FieldDef>),
     Set(Vec<SetElement>),
     Moreta {
+        kind: MoretaKind,
         spec: bool,
         bases: Vec<String>,
         declarations: Vec<Declaration>,

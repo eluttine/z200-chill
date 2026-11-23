@@ -186,12 +186,19 @@ fn build_mode_definition(
             Type::Set(id)
         }
         crate::ast::ModeDefinitionBody::Moreta {
+            kind,
             spec,
             bases,
             declarations,
             invariant,
             ..
         } => {
+            if *kind == crate::ast::MoretaKind::Task {
+                return Err(Error::new(
+                    mode_def.span,
+                    "task object modes are not implemented yet",
+                ));
+            }
             let mut base_ids = Vec::new();
             let mut components: Vec<crate::modes::MoretaComponent> = Vec::new();
             for base in bases {
@@ -384,6 +391,7 @@ fn build_mode_definition(
             );
             table.moretas.push(crate::modes::MoretaMode {
                 name: mode_def.name.clone(),
+                kind: *kind,
                 package: top_package,
                 module: top,
                 package_name: top_package_name.clone(),

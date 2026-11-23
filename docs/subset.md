@@ -53,7 +53,8 @@ Current scope includes:
 - narrow and wide text modes (`TEXT(n)`, `WTEXT(n)`), text I/O, format codes,
   associations/access modes;
 - generic procedure/module templates over `MODE`, `SYN`, and `PROC`;
-- moreta module-body objects in the documented subset.
+- moreta module-body and region objects in the documented subset; task object modes
+  are rejected explicitly.
 
 Explicitly **deferred**:
 

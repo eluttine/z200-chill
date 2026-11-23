@@ -221,7 +221,10 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                         package_name: mode.package_name.clone(),
                         fields: Vec::new(),
                         forbidden: Vec::new(),
-                        kind: ModeInfoKind::Moreta,
+                        kind: match mode.kind {
+                            crate::ast::MoretaKind::Region => ModeInfoKind::Region,
+                            _ => ModeInfoKind::Moreta,
+                        },
                         components,
                     })
                 }

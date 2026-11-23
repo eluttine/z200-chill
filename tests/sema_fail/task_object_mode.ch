@@ -1,0 +1,6 @@
+M: MODULE
+  NEWMODE T = TASK BODY
+    DCL value INT;
+  END T;
+  DCL t T;
+END M;

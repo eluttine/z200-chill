@@ -175,7 +175,7 @@ processes, yielding at action boundaries:
   signal sends, send priorities, buffers, process handlers, and process `LOC`
   parameters are executed;
 - absolute timing, `CYCLE`, and `ABSTIME` are executed;
-- buffers and region object/task modes are not yet executed faithfully;
+- buffers and task object modes are not yet executed faithfully;
 - no resumable continuation or scheduler is required for the first release.
 
 Faithful CHILL concurrency needs an explicit execution-state machine or async runtime

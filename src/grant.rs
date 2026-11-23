@@ -46,6 +46,7 @@ pub enum GrantModeKind {
     #[default]
     Struct,
     Moreta,
+    Region,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,7 +161,10 @@ impl GrantFile {
                         name: mode.name.clone(),
                         module: mode.module_name.clone(),
                         package: mode.package_name.clone(),
-                        kind: GrantModeKind::Moreta,
+                        kind: match mode.kind {
+                            crate::ast::MoretaKind::Region => GrantModeKind::Region,
+                            _ => GrantModeKind::Moreta,
+                        },
                         fields: Vec::new(),
                         components: mode
                             .components
@@ -420,6 +424,7 @@ impl GrantFile {
                 kind: match mode.kind {
                     GrantModeKind::Struct => program::ModeInfoKind::Struct,
                     GrantModeKind::Moreta => program::ModeInfoKind::Moreta,
+                    GrantModeKind::Region => program::ModeInfoKind::Region,
                 },
                 components,
             });
@@ -829,7 +834,9 @@ fn parse_external_type(
         if let Some(definition) = definitions.get(name) {
             return Ok(match definition.kind {
                 GrantModeKind::Struct => program::ExternalType::Mode(name.to_owned()),
-                GrantModeKind::Moreta => program::ExternalType::Moreta(name.to_owned()),
+                GrantModeKind::Moreta | GrantModeKind::Region => {
+                    program::ExternalType::Moreta(name.to_owned())
+                }
             });
         }
         return Err(format!(
@@ -1435,6 +1442,48 @@ END M;
             &obj.kind,
             ExportInfoKind::Var(program::ExternalType::Moreta(_))
         ));
+    }
+
+    #[test]
+    fn encodes_region_modes() {
+        let manifest = Manifest::parse(
+            r#"
+[package]
+name = "regions"
+
+[build]
+entry = "src/main.ch"
+"#,
+        )
+        .unwrap();
+        let tokens = lexer::tokenize(
+            r#"
+M: MODULE
+  GRANT R;
+  NEWMODE R = REGION BODY
+    DCL value INT;
+  END R;
+END M;
+"#,
+        )
+        .unwrap();
+        let mut program = parser::parse(&tokens).unwrap();
+        for module in &mut program.modules {
+            module.package_name = Some("regions".to_owned());
+        }
+        let grant = GrantFile::from_package(&manifest, &program).unwrap();
+        let mode = grant.modes.iter().find(|mode| mode.name == "R").unwrap();
+        assert_eq!(mode.kind, GrantModeKind::Region);
+        let interface = GrantFile::from_toml(&grant.to_toml().unwrap())
+            .unwrap()
+            .to_interface()
+            .unwrap();
+        let info = interface
+            .modes
+            .iter()
+            .find(|mode| mode.name == "R")
+            .unwrap();
+        assert_eq!(info.kind, program::ModeInfoKind::Region);
     }
 
     #[test]

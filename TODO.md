@@ -201,7 +201,9 @@ deferred.
       shared call-argument path; `OUT`/`INOUT` process parameters are rejected.
 - [x] Absolute timing actions (`AT`), cyclic timing actions (`CYCLE`), `TIME`, and
       `ABSTIME` construction.
-- [ ] Region/task object modes.
+- [x] Region object modes with Moreta components and per-object method-call mutual
+      exclusion; region/task object grant-kind preservation.
+- [ ] Task object modes: task thread activation and termination.
 
 ## 8. Cleanup
 

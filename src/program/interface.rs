@@ -35,6 +35,7 @@ pub struct ModeInfo {
 pub enum ModeInfoKind {
     Struct,
     Moreta,
+    Region,
 }
 
 #[derive(Debug, Clone)]
@@ -162,11 +163,15 @@ pub fn add_external_modes(
                     });
                     definitions.push(mode);
                 }
-                ModeInfoKind::Moreta => {
+                ModeInfoKind::Moreta | ModeInfoKind::Region => {
                     let id = crate::types::MoretaId(modes.moretas.len());
                     ids.moreta_ids.insert(symbol.clone(), id);
                     modes.moretas.push(crate::modes::MoretaMode {
                         name: mode.name.clone(),
+                        kind: match mode.kind {
+                            ModeInfoKind::Region => crate::ast::MoretaKind::Region,
+                            _ => crate::ast::MoretaKind::Module,
+                        },
                         package: usize::MAX,
                         module: usize::MAX,
                         package_name: mode.package_name.clone(),
@@ -355,7 +360,9 @@ pub fn add_external_exports(
                     let symbol = mode.symbol();
                     let ty = match mode.kind {
                         ModeInfoKind::Struct => ids.get(&symbol).map(Type::Struct),
-                        ModeInfoKind::Moreta => ids.get_moreta(&symbol).map(Type::Moreta),
+                        ModeInfoKind::Moreta | ModeInfoKind::Region => {
+                            ids.get_moreta(&symbol).map(Type::Moreta)
+                        }
                     }
                     .ok_or_else(|| format!("external mode `{symbol}` was not materialized"))?;
                     ExportKind::Mode(ty)

@@ -214,6 +214,7 @@ pub fn run_checked(
         process_id: usize::MAX,
         process_name: String::new(),
         region_depths: HashMap::new(),
+        object_depths: HashMap::new(),
         deadline: None,
         scheduler: Rc::clone(&scheduler),
         moreta_decls,
@@ -361,6 +362,14 @@ pub fn run_checked(
                             .sleepers
                             .push((deadline, runnable.entry));
                     }
+                    ProcessYield::AcquireObject { object } => {
+                        scheduler
+                            .borrow_mut()
+                            .object_waiters
+                            .entry(object)
+                            .or_default()
+                            .push(runnable.entry);
+                    }
                     ProcessYield::AcquireRegion { region } => {
                         scheduler
                             .borrow_mut()
@@ -392,6 +401,11 @@ pub fn run_checked(
             .receivers
             .values()
             .any(|receivers| receivers.iter().any(|(_, slot, _)| slot.borrow().is_some()))
+        || scheduler
+            .borrow()
+            .object_waiters
+            .values()
+            .any(|waiters| !waiters.is_empty())
         || scheduler.borrow().buffers.values().any(|buffer| {
             buffer
                 .senders
@@ -544,6 +558,9 @@ enum ProcessYield {
     AcquireRegion {
         region: usize,
     },
+    AcquireObject {
+        object: usize,
+    },
 }
 
 #[derive(Clone)]
@@ -639,6 +656,8 @@ struct ScheduleState {
     sleepers: Vec<(Instant, ProcessEntry)>,
     region_owner: HashMap<usize, usize>,
     region_waiters: HashMap<usize, Vec<ProcessEntry>>,
+    object_owner: HashMap<usize, usize>,
+    object_waiters: HashMap<usize, Vec<ProcessEntry>>,
 }
 
 thread_local! {
@@ -761,6 +780,23 @@ fn cooperative_sleep(deadline: Instant) -> Result<(), Error> {
         }
         unsafe {
             let _: ProcessInput = (*ptr).suspend(ProcessYield::Sleep { deadline });
+        }
+        Ok(())
+    })
+}
+
+fn cooperative_acquire_object(object: usize) -> Result<(), Error> {
+    CURRENT_YIELDER.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            return Err(Error::coded(
+                "E0500",
+                Span::new(SourceId(0), 0, 0),
+                "region object call outside a process",
+            ));
+        }
+        unsafe {
+            let _: ProcessInput = (*ptr).suspend(ProcessYield::AcquireObject { object });
         }
         Ok(())
     })
@@ -1021,6 +1057,7 @@ struct Interpreter<'a> {
     process_id: usize,
     process_name: String,
     region_depths: HashMap<usize, usize>,
+    object_depths: HashMap<usize, usize>,
     deadline: Option<Instant>,
     scheduler: Rc<RefCell<ScheduleState>>,
     exprs: ir::ExprTable,
@@ -4083,16 +4120,33 @@ impl<'a> Interpreter<'a> {
                 "method call requires a module-mode object",
             ));
         };
-        let object = self.read_var(object_name, span)?;
-        let Value::Moreta(components) = object else {
-            return Err(Error::coded("E0507", span, "expected a module-mode object"));
-        };
-        let proc_def = self.proc_defs.get(&proc_span).copied().ok_or_else(|| {
-            Error::coded("E0500", proc_span, "internal: missing method definition")
-        })?;
         let object_cell = self.find_var_cell(object_name).ok_or_else(|| {
             Error::coded("E0505", span, format!("unknown object `{object_name}`"))
         })?;
+        let region_object = self.modes.get_moreta(id).kind == crate::ast::MoretaKind::Region;
+        let object_key = Rc::as_ptr(&object_cell) as usize;
+        if region_object {
+            self.acquire_object(object_key)?;
+        }
+        let prepared = (|| {
+            let object = self.read_var(object_name, span)?;
+            let Value::Moreta(components) = object else {
+                return Err(Error::coded("E0507", span, "expected a module-mode object"));
+            };
+            let proc_def = self.proc_defs.get(&proc_span).copied().ok_or_else(|| {
+                Error::coded("E0500", proc_span, "internal: missing method definition")
+            })?;
+            Ok((components, proc_def))
+        })();
+        let (components, proc_def) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if region_object {
+                    self.release_object(object_key);
+                }
+                return Err(error);
+            }
+        };
         self.self_cells.push(object_cell);
         self.self_modes.push(id);
 
@@ -4137,9 +4191,15 @@ impl<'a> Interpreter<'a> {
         self.locals.pop();
         self.self_cells.pop();
         self.self_modes.pop();
-        if let Some(updated) = updated {
-            self.assign_var(object_name, updated, span)?;
+        let update_result = if let Some(updated) = updated {
+            self.assign_var(object_name, updated, span)
+        } else {
+            Ok(())
+        };
+        if region_object {
+            self.release_object(object_key);
         }
+        update_result?;
         let (result, updates) = outcome?;
         for (target, value) in updates {
             self.assign_target(&target, value, span)?;
@@ -5234,6 +5294,50 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    fn acquire_object(&mut self, object: usize) -> Result<(), Error> {
+        if let Some(depth) = self.object_depths.get_mut(&object) {
+            *depth += 1;
+            return Ok(());
+        }
+        let owner = self.scheduler.borrow().object_owner.get(&object).copied();
+        match owner {
+            None => {
+                self.scheduler
+                    .borrow_mut()
+                    .object_owner
+                    .insert(object, self.process_id);
+            }
+            Some(owner) if owner == self.process_id => {}
+            Some(_) => cooperative_acquire_object(object)?,
+        }
+        self.object_depths.insert(object, 1);
+        Ok(())
+    }
+
+    fn release_object(&mut self, object: usize) {
+        let Some(depth) = self.object_depths.get_mut(&object) else {
+            return;
+        };
+        *depth -= 1;
+        if *depth > 0 {
+            return;
+        }
+        self.object_depths.remove(&object);
+        let mut scheduler = self.scheduler.borrow_mut();
+        if let Some(waiters) = scheduler.object_waiters.get_mut(&object) {
+            if !waiters.is_empty() {
+                let entry = waiters.remove(0);
+                scheduler.object_owner.insert(object, entry.id);
+                scheduler.ready.push_back(Runnable {
+                    input: ProcessInput::None,
+                    entry,
+                });
+                return;
+            }
+        }
+        scheduler.object_owner.remove(&object);
+    }
+
     fn acquire_region(&mut self, region: usize) -> Result<(), Error> {
         if let Some(depth) = self.region_depths.get_mut(&region) {
             *depth += 1;
@@ -5719,6 +5823,7 @@ impl<'a> Interpreter<'a> {
             process_id: usize::MAX,
             process_name: String::new(),
             region_depths: HashMap::new(),
+            object_depths: HashMap::new(),
             deadline: None,
             scheduler: Rc::clone(&self.scheduler),
             moreta_decls: self.moreta_decls.clone(),
@@ -5758,7 +5863,7 @@ impl<'a> Interpreter<'a> {
             scheduler.next_process_id += 1;
             id
         };
-        let mut child = self.fork_for_process(process_ref.module, process_ref.scope_key);
+        let mut child = Box::new(self.fork_for_process(process_ref.module, process_ref.scope_key));
         child.process_id = id;
         child.process_name = process_ref.def.name.clone();
         let yielder = Rc::new(Cell::new(std::ptr::null()));

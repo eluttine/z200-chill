@@ -69,6 +69,7 @@ impl MoretaComponent {
 #[derive(Debug, Clone)]
 pub struct MoretaMode {
     pub name: String,
+    pub kind: crate::ast::MoretaKind,
     pub package: usize,
     pub module: usize,
     pub package_name: Option<String>,

@@ -867,7 +867,17 @@ impl<'a> Parser<'a> {
             }
             self.expect_rparen()?;
             ModeDefinitionBody::Set(elements)
-        } else if self.at_keyword(Keyword::Module) {
+        } else if self.at_keyword(Keyword::Module)
+            || self.at_keyword(Keyword::Region)
+            || self.at_keyword(Keyword::Task)
+        {
+            let kind = if self.at_keyword(Keyword::Region) {
+                crate::ast::MoretaKind::Region
+            } else if self.at_keyword(Keyword::Task) {
+                crate::ast::MoretaKind::Task
+            } else {
+                crate::ast::MoretaKind::Module
+            };
             let body_start = self.current_span();
             self.advance();
             let spec = if self.at_keyword(Keyword::Spec) {
@@ -910,6 +920,7 @@ impl<'a> Parser<'a> {
                 self.advance();
             }
             ModeDefinitionBody::Moreta {
+                kind,
                 spec,
                 bases,
                 declarations,
