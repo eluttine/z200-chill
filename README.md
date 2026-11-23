@@ -6,7 +6,15 @@ CHILL was designed for large, long-lived, high-reliability systems (such as tele
 
 ## Project Status
 
-Early development. The `z200c` CLI can currently load and validate `Chill.toml`, tokenize and parse the v0 subset, perform mode checking, enforce qualified `GRANT`/`SEIZE` visibility (`Module!name`, `GRANT ALL` / `SEIZE ALL`, `PREFIXED` output, `TO` friends, static structure-mode `FORBID`) between modules, validate `SPEC MODULE` interfaces against their bodies, compile multi-file packages, link package-directory and source-bearing grant-file dependencies for `run`, lower checked programs to a typed expression/statement IR, and interpret them (including multiple `CASE` selectors, `DO FOR`, labelled `EXIT`, cooperative processes, regions, and task objects). Single `.ch` files can be checked or run without a manifest (`z200c run hello.ch`). `z200c grant` emits a TOML interface file; `check` and `grant` can resolve `SEIZE` against interface-only grant files, while `run` links them only when the grant file records its source package. Modules are identified by package plus name, so different packages may reuse a module name. Diagnostics carry stable codes and multiple checker errors are reported together; see [docs/diagnostics.md](docs/diagnostics.md).
+Early development. `z200c` currently provides:
+
+- **Packages and CLI** — `Chill.toml` loading, multi-file packages, package-directory and grant-file dependencies, and single-file `.ch` scripts without a manifest.
+- **Frontend** — lexer, parser, AST, and a typed expression/statement IR for the supported CHILL subset.
+- **Modes and checks** — mode checking, static exception-flow checks, and stable diagnostic codes with multiple errors reported together; see [docs/diagnostics.md](docs/diagnostics.md).
+- **Modules and interfaces** — `GRANT`/`SEIZE`, qualified names, `GRANT ALL`/`SEIZE ALL`, `PREFIXED`, `TO` friends, structure-mode `FORBID`, `SPEC MODULE` body validation, and TOML grant files.
+- **Interpreter** — procedures, arrays, structures, sets, powersets, text, references, generics, multiple `CASE` selectors, `DO FOR`, labelled `EXIT`, and handlers.
+- **Concurrency and objects** — cooperative processes, signals, buffers, timing, regions, and module/region/task object modes.
+- **Grant files and scripts** — `check`/`grant` resolve interface-only grant files; `run` links them when source metadata is present.
 
 ```sh
 cargo run -- check examples/hello
@@ -14,7 +22,13 @@ cargo run -- run examples/hello
 cargo run -- grant examples/spec
 ```
 
-`examples/hello` is the minimal first-run program: it writes `Hello, world!`. `examples/procedures` is the procedure/conversion acceptance test: it computes `11` and verifies it with `ASSERT`, exiting successfully with no output. `examples/modules` demonstrates `GRANT` / `SEIZE`, including a shared seized location, and `examples/spec` demonstrates a `SPEC MODULE` paired with its body.
+Example programs:
+
+- `examples/hello` — minimal first-run program that writes `Hello, world!`.
+- `examples/procedures` — procedure/conversion acceptance test; computes `11` and verifies it with `ASSERT`.
+- `examples/modules` — `GRANT`/`SEIZE` with a shared seized location.
+- `examples/spec` — a `SPEC MODULE` paired with its body.
+- `examples/pipeline` — end-to-end cooperative concurrency example.
 
 ## Repository Structure
 
@@ -24,7 +38,7 @@ z200-chill/
 ├── Cargo.toml          # Rust package for z200c
 ├── README.md           # This file
 ├── src/                # CLI, lexer, parser, AST, mode checker, interpreter, manifest
-├── tests/              # CLI integration tests
+├── tests/              # CLI integration tests and parser/sema/run fixtures
 ├── examples/
 │   ├── hello/          # Minimal "Hello, world!" package
 │   ├── procedures/     # Procedure, conversion, and ASSERT example
