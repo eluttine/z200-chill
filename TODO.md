@@ -159,6 +159,8 @@ deferred.
       dereferenced access references as transfer locations.
 - [x] Indexed text access: retained text index modes, indexed text `CONNECT`, indexed
       `READTEXT`/`WRITETEXT`, range checking, and grant encoding.
+- [x] Bounded text record cells, length-safe record references, and dereferenced
+      `SETTEXTRECORD` sources.
 - [x] Processes, signals, buffers, timers, and event selection under the cooperative
       single-threaded scheduler. Faithful preemptive concurrency and main-process
       interleaving remain deferred.

@@ -1,8 +1,8 @@
 -- Text record/access sub-locations and reference-backed record storage.
 M: MODULE
   DCL t TEXT(20);
-  DCL s CHARS INIT := "hello";
-  DCL r REF CHARS;
+  DCL s CHARS(20) VARYING INIT := "hello";
+  DCL r REF CHARS(20) VARYING;
   DCL assoc ASSOCIATION;
   DCL access ACCESS CHARS;
 

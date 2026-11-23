@@ -591,12 +591,14 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
   connections reject index expressions.
 - `DYNAMIC` is accepted on text modes; the varying text-record representation already
   provides dynamic record storage.
-- `SETTEXTRECORD(text, chars-location)` makes the text record alias a `CHARS`/`WCHARS`
-  location; `GETTEXTRECORD(text)` returns a reference to it.
+- `SETTEXTRECORD(text, chars-location)` makes the text record alias a bounded varying
+  `CHARS(n)`/`WCHARS(n)` location of the same length; `GETTEXTRECORD(text)` returns a
+  reference to it. The location may be written as a simple name or `ref->`.
 - `SETTEXTACCESS(text, access-location)` makes the text access sub-location alias an
   `ACCESS` location; `GETTEXTACCESS(text)` returns a reference to it.
-- Record references can be dereferenced for reads and assignments. Dereferenced access
-  references can be used as `CONNECT`/`DISCONNECT` transfer locations and with
+- Record references can be dereferenced for reads and assignments, with the declared
+  text length enforced. Dereferenced access references can be used as
+  `CONNECT`/`DISCONNECT` transfer locations and with
   `GETUSAGE`/`OUTOFFILE`/`GETASSOCIATION`. See [text.md](text.md).
 - `BOOLS`, `BOOLS(n)`, and `BOOLS(n) VARYING` are bit-string modes. `B'...'`,
   `O'...'`, and `H'...'` with a closing apostrophe are bit-string literals; without

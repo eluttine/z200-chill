@@ -3885,7 +3885,12 @@ impl Checker {
                 ));
             };
             let target_ty = self.check_expr(&args[0])?;
-            let Type::Text { wide, .. } = target_ty else {
+            let Type::Text {
+                length: text_length,
+                wide,
+                ..
+            } = target_ty
+            else {
                 return Err(Error::coded(
                     "E0400",
                     *target_span,
@@ -3903,9 +3908,15 @@ impl Checker {
                     },
                 ))),
                 TextSubOp::GetRecord => Some(Type::Ref(if wide {
-                    crate::types::RefTarget::WString
+                    crate::types::RefTarget::WBoundedString {
+                        length: text_length,
+                        varying: true,
+                    }
                 } else {
-                    crate::types::RefTarget::String
+                    crate::types::RefTarget::BoundedString {
+                        length: text_length,
+                        varying: true,
+                    }
                 })),
                 TextSubOp::SetAccess => {
                     let Expr::Name { .. } = &args[1] else {
@@ -3929,24 +3940,30 @@ impl Checker {
                     None
                 }
                 TextSubOp::SetRecord => {
-                    let Expr::Name { .. } = &args[1] else {
+                    if !matches!(args[1], Expr::Name { .. } | Expr::Deref { .. }) {
                         return Err(Error::coded(
                             "E0400",
                             args[1].span(),
                             "SETTEXTRECORD requires a character string location",
                         ));
-                    };
+                    }
                     let record_ty = self.check_expr(&args[1])?;
-                    let matches_width = if wide {
-                        is_wide_string_type(record_ty)
+                    let expected = if wide {
+                        Type::WBoundedString {
+                            length: text_length,
+                            varying: true,
+                        }
                     } else {
-                        is_narrow_string_type(record_ty)
+                        Type::BoundedString {
+                            length: text_length,
+                            varying: true,
+                        }
                     };
-                    if !matches_width {
+                    if record_ty != expected {
                         return Err(Error::coded(
                             "E0400",
                             args[1].span(),
-                            "SETTEXTRECORD requires a character string location of the same width",
+                            format!("SETTEXTRECORD requires a {} location", expected.describe()),
                         ));
                     }
                     None

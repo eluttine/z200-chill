@@ -171,6 +171,7 @@ pub enum Expr {
         op: crate::builtins::TextSubOp,
         target: String,
         source: Option<String>,
+        source_ref: Option<Node>,
         ty: Option<Type>,
         span: Span,
     },
@@ -1327,22 +1328,24 @@ impl Lowerer<'_> {
                             "internal: text sub-location argument is not a location",
                         ));
                     };
-                    let source = match op {
-                        TextSubOp::SetAccess | TextSubOp::SetRecord => {
-                            let AstExpr::Name { name, .. } = &ast_args[1] else {
+                    let (source, source_ref) = match op {
+                        TextSubOp::SetAccess | TextSubOp::SetRecord => match &ast_args[1] {
+                            AstExpr::Name { name, .. } => (Some(name.clone()), None),
+                            AstExpr::Deref { base, .. } => (None, Some(self.lower_expr(base)?)),
+                            _ => {
                                 return Err(Error::new(
                                     ast_args[1].span(),
                                     "internal: text sub-location source is not a location",
-                                ));
-                            };
-                            Some(name.clone())
-                        }
-                        TextSubOp::GetAccess | TextSubOp::GetRecord => None,
+                                ))
+                            }
+                        },
+                        TextSubOp::GetAccess | TextSubOp::GetRecord => (None, None),
                     };
                     Rc::new(Expr::TextSub {
                         op: *op,
                         target: target_name.clone(),
                         source,
+                        source_ref,
                         ty,
                         span,
                     })

@@ -46,10 +46,11 @@ A text location now owns shared state containing:
 This makes the sub-locations reference-backed:
 
 - `SETTEXTRECORD(text, string-location)` makes the text record alias the supplied
-  `CHARS`/`WCHARS` location. Assignments through either name are visible through the
-  other.
-- `GETTEXTRECORD(text)` returns a `REF CHARS` or `REF WCHARS` to the record cell.
-  Dereferencing it reads or assigns the text record.
+  bounded varying string location of the same width and length. Assignments through
+  either name are visible through the other.
+- `GETTEXTRECORD(text)` returns a `REF CHARS(n) VARYING` or
+  `REF WCHARS(n) VARYING` to the record cell. Dereferencing it reads or assigns the
+  text record, and the bounded reference mode enforces the text length.
 - `SETTEXTACCESS(text, access-location)` makes the text access sub-location alias the
   supplied `ACCESS` location, including its connection state.
 - `GETTEXTACCESS(text)` returns a `REF ACCESS` to the access cell. Dereferenced access
@@ -74,11 +75,9 @@ DCL bounded TEXT(20) INT;
 - `DYNAMIC` remains accepted on the text mode and is effectively satisfied by the
   varying string record model.
 
-## Deferred
+- `SETTEXTRECORD` accepts either a simple string location or a dereferenced reference
+  (`ref->`) to one.
+- Text transfers and record-reference assignments reject values longer than the text
+  mode's declared length.
 
-- General reference-to-record arguments in `SETTEXTRECORD`; the current form accepts a
-  simple string location.
-- Enforcing the text mode's length on assignments through a record reference.
-
-These are deliberate limits. Reference-backed record/access sub-locations preserve the
-surface syntax documented in [subset.md](subset.md).
+These rules preserve the surface syntax documented in [subset.md](subset.md).

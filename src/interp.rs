@@ -537,8 +537,18 @@ struct Var {
 
 impl Var {
     fn new(ty: Type, value: Value) -> Self {
-        if let Type::Text { wide, .. } = ty {
-            let record_ty = if wide { Type::WString } else { Type::String };
+        if let Type::Text { length, wide, .. } = ty {
+            let record_ty = if wide {
+                Type::WBoundedString {
+                    length,
+                    varying: true,
+                }
+            } else {
+                Type::BoundedString {
+                    length,
+                    varying: true,
+                }
+            };
             let record = Rc::new(RefCell::new(Self::new(record_ty, value.clone())));
             let access_ty = Type::Access(types::AccessType {
                 indexed: false,
@@ -4139,9 +4149,13 @@ impl<'a> Interpreter<'a> {
                 let cell = self.find_var_cell(target).ok_or_else(|| {
                     Error::coded("E0505", *span, format!("unknown variable `{target}`"))
                 })?;
-                let (source, text_index, text_state) = {
+                let (source, text_index, text_state, text_length) = {
                     let var = cell.borrow();
                     if let Some(text) = var.text.clone() {
+                        let text_length = match var.ty {
+                            Type::Text { length, .. } => Some(length),
+                            _ => None,
+                        };
                         let state = text.borrow();
                         let source = match &state.record.borrow().value {
                             Value::String(text) => text.clone(),
@@ -4153,7 +4167,7 @@ impl<'a> Interpreter<'a> {
                                 ))
                             }
                         };
-                        (source, state.index, Some(text.clone()))
+                        (source, state.index, Some(text.clone()), text_length)
                     } else {
                         let source = match &var.value {
                             Value::String(text) => text.clone(),
@@ -4165,7 +4179,7 @@ impl<'a> Interpreter<'a> {
                                 ))
                             }
                         };
-                        (source, 0, None)
+                        (source, 0, None, None)
                     }
                 };
                 let text_access = text_state.as_ref().and_then(|text| {
@@ -4195,7 +4209,17 @@ impl<'a> Interpreter<'a> {
                 let mut chars: Vec<char> = if matches!(kind, crate::builtins::TextIo::Read) {
                     if let Some(access) = &text_access {
                         match self.read_text_record(access, transfer_index, *span)? {
-                            Some(record) => record.chars().collect(),
+                            Some(record) => {
+                                if let Some(length) = text_length {
+                                    if record.chars().count() > length {
+                                        return Err(textfail(
+                                            *span,
+                                            "record exceeds the text length",
+                                        ));
+                                    }
+                                }
+                                record.chars().collect()
+                            }
                             None => return Ok(Value::Undefined),
                         }
                     } else {
@@ -4251,6 +4275,11 @@ impl<'a> Interpreter<'a> {
                             }
                         }
                         let rendered: String = chars.into_iter().collect();
+                        if let Some(length) = text_length {
+                            if rendered.chars().count() > length {
+                                return Err(textfail(*span, "text record exceeds the text length"));
+                            }
+                        }
                         {
                             let mut var = cell.borrow_mut();
                             if let Some(text) = &text_state {
@@ -4386,6 +4415,7 @@ impl<'a> Interpreter<'a> {
                 op,
                 target,
                 source,
+                source_ref,
                 span,
                 ..
             } => {
@@ -4416,12 +4446,11 @@ impl<'a> Interpreter<'a> {
                         Ok(Value::Ref(Some(self.intern_ref(record, false))))
                     }
                     TextSubOp::SetAccess => {
-                        let source = source.as_ref().ok_or_else(|| {
-                            Error::coded("E0500", *span, "SETTEXTACCESS requires a location")
-                        })?;
-                        let source_cell = self.find_var_cell(source).ok_or_else(|| {
-                            Error::coded("E0505", *span, format!("unknown variable `{source}`"))
-                        })?;
+                        let source_cell = self.transfer_cell(
+                            source.as_deref().unwrap_or_default(),
+                            source_ref.as_ref(),
+                            *span,
+                        )?;
                         if !matches!(source_cell.borrow().ty, Type::Access(_)) {
                             return Err(Error::coded(
                                 "E0507",
@@ -4433,12 +4462,11 @@ impl<'a> Interpreter<'a> {
                         Ok(Value::Undefined)
                     }
                     TextSubOp::SetRecord => {
-                        let source = source.as_ref().ok_or_else(|| {
-                            Error::coded("E0500", *span, "SETTEXTRECORD requires a location")
-                        })?;
-                        let source_cell = self.find_var_cell(source).ok_or_else(|| {
-                            Error::coded("E0505", *span, format!("unknown variable `{source}`"))
-                        })?;
+                        let source_cell = self.transfer_cell(
+                            source.as_deref().unwrap_or_default(),
+                            source_ref.as_ref(),
+                            *span,
+                        )?;
                         let record_value = source_cell.borrow().value.clone();
                         {
                             let mut var = cell.borrow_mut();
