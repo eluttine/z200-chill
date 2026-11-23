@@ -1,0 +1,5 @@
+M: MODULE
+  DCL t TEXT(10);
+  DCL s CHARS;
+  SETTEXTACCESS(t, s);
+END M;

@@ -56,6 +56,9 @@ pub enum ApplyResolution {
     TextIndex {
         get: bool,
     },
+    TextSub {
+        op: crate::builtins::TextSubOp,
+    },
     Association {
         op: crate::builtins::AssociationOp,
         index: bool,
@@ -3839,6 +3842,101 @@ impl Checker {
                     where_expr: has_where,
                 },
             );
+            return Ok(result);
+        }
+        if let Some(op) = crate::builtins::lookup_text_sub(name) {
+            use crate::builtins::TextSubOp;
+            let expected = match op {
+                TextSubOp::GetAccess | TextSubOp::GetRecord => 1,
+                TextSubOp::SetAccess | TextSubOp::SetRecord => 2,
+            };
+            if args.len() != expected {
+                return Err(Error::coded(
+                    "E0400",
+                    span,
+                    format!("`{name}` takes {expected} argument(s)"),
+                ));
+            }
+            let Expr::Name {
+                span: target_span, ..
+            } = &args[0]
+            else {
+                return Err(Error::coded(
+                    "E0400",
+                    args[0].span(),
+                    "text sub-location argument must be a TEXT location",
+                ));
+            };
+            let target_ty = self.check_expr(&args[0])?;
+            let Type::Text { wide, .. } = target_ty else {
+                return Err(Error::coded(
+                    "E0400",
+                    *target_span,
+                    format!(
+                        "text sub-location argument must be TEXT or WTEXT, found {}",
+                        target_ty.describe()
+                    ),
+                ));
+            };
+            let result = match op {
+                TextSubOp::GetAccess => Some(Type::Ref(crate::types::RefTarget::Access(
+                    crate::types::AccessType {
+                        indexed: false,
+                        index: None,
+                    },
+                ))),
+                TextSubOp::GetRecord => Some(Type::Ref(if wide {
+                    crate::types::RefTarget::WString
+                } else {
+                    crate::types::RefTarget::String
+                })),
+                TextSubOp::SetAccess => {
+                    let Expr::Name { .. } = &args[1] else {
+                        return Err(Error::coded(
+                            "E0400",
+                            args[1].span(),
+                            "SETTEXTACCESS requires an ACCESS location",
+                        ));
+                    };
+                    let access_ty = self.check_expr(&args[1])?;
+                    if !matches!(access_ty, Type::Access(_)) {
+                        return Err(Error::coded(
+                            "E0400",
+                            args[1].span(),
+                            format!(
+                                "SETTEXTACCESS requires an ACCESS location, found {}",
+                                access_ty.describe()
+                            ),
+                        ));
+                    }
+                    None
+                }
+                TextSubOp::SetRecord => {
+                    let Expr::Name { .. } = &args[1] else {
+                        return Err(Error::coded(
+                            "E0400",
+                            args[1].span(),
+                            "SETTEXTRECORD requires a character string location",
+                        ));
+                    };
+                    let record_ty = self.check_expr(&args[1])?;
+                    let matches_width = if wide {
+                        is_wide_string_type(record_ty)
+                    } else {
+                        is_narrow_string_type(record_ty)
+                    };
+                    if !matches_width {
+                        return Err(Error::coded(
+                            "E0400",
+                            args[1].span(),
+                            "SETTEXTRECORD requires a character string location of the same width",
+                        ));
+                    }
+                    None
+                }
+            };
+            self.resolutions
+                .insert(span, ApplyResolution::TextSub { op });
             return Ok(result);
         }
         if name == "GETTEXTINDEX" || name == "SETTEXTINDEX" {

@@ -519,27 +519,60 @@ const WHERE_FIRST: i128 = 0;
 const WHERE_SAME: i128 = 1;
 const WHERE_LAST: i128 = 2;
 
+struct TextState {
+    /// Text record sub-location.
+    record: VarCell,
+    /// Actual index, used as the default transfer cursor.
+    index: i128,
+    /// Access sub-location.
+    access: VarCell,
+}
+
 struct Var {
     ty: Type,
     value: Value,
-    /// Actual index of a TEXT/WTEXT location, used as the default transfer cursor.
-    text_index: i128,
-    /// Access sub-location of a TEXT/WTEXT location.
-    text_access: Option<Rc<RefCell<AccessState>>>,
+    /// Present for TEXT/WTEXT locations.
+    text: Option<Rc<RefCell<TextState>>>,
 }
 
 impl Var {
     fn new(ty: Type, value: Value) -> Self {
-        Self {
-            ty,
-            value,
-            text_index: 0,
-            text_access: None,
+        if let Type::Text { wide, .. } = ty {
+            let record_ty = if wide { Type::WString } else { Type::String };
+            let record = Rc::new(RefCell::new(Self::new(record_ty, value.clone())));
+            let access_ty = Type::Access(types::AccessType {
+                indexed: false,
+                index: None,
+            });
+            let access = Rc::new(RefCell::new(Self::new(access_ty, Value::Access(None))));
+            Self {
+                ty,
+                value,
+                text: Some(Rc::new(RefCell::new(TextState {
+                    record,
+                    index: 0,
+                    access,
+                }))),
+            }
+        } else {
+            Self {
+                ty,
+                value,
+                text: None,
+            }
         }
     }
 }
 
 type VarCell = Rc<RefCell<Var>>;
+
+fn write_var_value(var: &mut Var, value: Value) {
+    if let Some(text) = &var.text {
+        let record = text.borrow().record.clone();
+        record.borrow_mut().value = value.clone();
+    }
+    var.value = value;
+}
 
 #[derive(Clone, Copy)]
 enum ImportKind {
@@ -2758,14 +2791,17 @@ impl<'a> Interpreter<'a> {
                             };
                             (access.indexed, access.index, false, previous_position)
                         }
-                        Type::Text { .. } => (
-                            false,
-                            None,
-                            true,
-                            var.text_access
-                                .as_ref()
-                                .map(|state| state.borrow().position),
-                        ),
+                        Type::Text { .. } => {
+                            let previous_position = var.text.as_ref().and_then(|text| {
+                                let access = text.borrow().access.clone();
+                                let access = access.borrow();
+                                match &access.value {
+                                    Value::Access(Some(state)) => Some(state.borrow().position),
+                                    _ => None,
+                                }
+                            });
+                            (false, None, true, previous_position)
+                        }
                         _ => {
                             return Err(Error::coded(
                                 "E0507",
@@ -2826,7 +2862,9 @@ impl<'a> Interpreter<'a> {
                     out_of_file: false,
                 }));
                 if is_text {
-                    var.text_access = Some(state);
+                    let text = var.text.clone().expect("text location has text state");
+                    let access = text.borrow().access.clone();
+                    access.borrow_mut().value = Value::Access(Some(state));
                 } else {
                     var.value = Value::Access(Some(state));
                 }
@@ -2838,15 +2876,30 @@ impl<'a> Interpreter<'a> {
                 })?;
                 let mut var = cell.borrow_mut();
                 let is_text = matches!(var.ty, Type::Text { .. });
-                let disconnected = match &mut var.value {
-                    Value::Access(state) => state.take().is_some(),
-                    _ if is_text => var.text_access.take().is_some(),
-                    _ => {
-                        return Err(Error::coded(
-                            "E0507",
-                            span,
-                            "expected an ACCESS or TEXT location",
-                        ))
+                let disconnected = if is_text {
+                    let text = var.text.clone().expect("text location has text state");
+                    let access = text.borrow().access.clone();
+                    let mut access = access.borrow_mut();
+                    match &mut access.value {
+                        Value::Access(state) => state.take().is_some(),
+                        _ => {
+                            return Err(Error::coded(
+                                "E0507",
+                                span,
+                                "expected an ACCESS or TEXT location",
+                            ))
+                        }
+                    }
+                } else {
+                    match &mut var.value {
+                        Value::Access(state) => state.take().is_some(),
+                        _ => {
+                            return Err(Error::coded(
+                                "E0507",
+                                span,
+                                "expected an ACCESS or TEXT location",
+                            ))
+                        }
                     }
                 };
                 if !disconnected {
@@ -2868,10 +2921,18 @@ impl<'a> Interpreter<'a> {
                         Value::Access(state) => state
                             .as_ref()
                             .and_then(|state| state.borrow().association_name.clone()),
-                        _ if matches!(var.ty, Type::Text { .. }) => var
-                            .text_access
-                            .as_ref()
-                            .and_then(|state| state.borrow().association_name.clone()),
+                        _ if matches!(var.ty, Type::Text { .. }) => {
+                            var.text.as_ref().and_then(|text| {
+                                let access = text.borrow().access.clone();
+                                let access = access.borrow();
+                                match &access.value {
+                                    Value::Access(Some(state)) => {
+                                        state.borrow().association_name.clone()
+                                    }
+                                    _ => None,
+                                }
+                            })
+                        }
                         _ => {
                             return Err(Error::coded(
                                 "E0507",
@@ -3082,7 +3143,26 @@ impl<'a> Interpreter<'a> {
         let var = cell.borrow();
         let state = match &var.value {
             Value::Access(state) => state.clone(),
-            _ if matches!(var.ty, Type::Text { .. }) => var.text_access.clone(),
+            _ if matches!(var.ty, Type::Text { .. }) => {
+                let access = var
+                    .text
+                    .as_ref()
+                    .map(|text| text.borrow().access.clone())
+                    .ok_or_else(|| {
+                        Error::coded("E0507", span, "text location has no access state")
+                    })?;
+                let access = access.borrow();
+                match &access.value {
+                    Value::Access(state) => state.clone(),
+                    _ => {
+                        return Err(Error::coded(
+                            "E0507",
+                            span,
+                            "expected an ACCESS or TEXT location",
+                        ))
+                    }
+                }
+            }
             _ => {
                 return Err(Error::coded(
                     "E0507",
@@ -3952,7 +4032,7 @@ impl<'a> Interpreter<'a> {
                                     )?;
                                 }
                             }
-                            cell.borrow_mut().value = Value::Undefined;
+                            write_var_value(&mut cell.borrow_mut(), Value::Undefined);
                         }
                         if let Some(slot) = self.refs.get_mut(*handle) {
                             *slot = None;
@@ -3986,29 +4066,50 @@ impl<'a> Interpreter<'a> {
                 let cell = self.find_var_cell(target).ok_or_else(|| {
                     Error::coded("E0505", *span, format!("unknown variable `{target}`"))
                 })?;
-                let (source, text_index, is_text, text_access) = {
+                let (source, text_index, text_state) = {
                     let var = cell.borrow();
-                    let source = match &var.value {
-                        Value::String(text) => text.clone(),
-                        _ => {
-                            return Err(Error::coded("E0500", *span, "text location must be CHARS"))
-                        }
-                    };
-                    (
-                        source,
-                        var.text_index,
-                        matches!(var.ty, Type::Text { .. }),
-                        var.text_access.clone(),
-                    )
+                    if let Some(text) = var.text.clone() {
+                        let state = text.borrow();
+                        let source = match &state.record.borrow().value {
+                            Value::String(text) => text.clone(),
+                            _ => {
+                                return Err(Error::coded(
+                                    "E0500",
+                                    *span,
+                                    "text record must be CHARS",
+                                ))
+                            }
+                        };
+                        (source, state.index, Some(text.clone()))
+                    } else {
+                        let source = match &var.value {
+                            Value::String(text) => text.clone(),
+                            _ => {
+                                return Err(Error::coded(
+                                    "E0500",
+                                    *span,
+                                    "text location must be CHARS",
+                                ))
+                            }
+                        };
+                        (source, 0, None)
+                    }
                 };
+                let text_access = text_state.as_ref().and_then(|text| {
+                    let access = text.borrow().access.clone();
+                    let access = access.borrow();
+                    match &access.value {
+                        Value::Access(state) => state.clone(),
+                        _ => None,
+                    }
+                });
                 let mut cursor = match index {
                     Some(index) => {
                         let value = self.eval_ir(index)?;
                         let (index, _) = self.expect_int(value, index.span())?;
                         index
                     }
-                    None if is_text => text_index,
-                    None => 0,
+                    None => text_index,
                 };
                 if cursor < 0 {
                     return Err(textfail(*span, "negative text index"));
@@ -4074,15 +4175,14 @@ impl<'a> Interpreter<'a> {
                         let rendered: String = chars.into_iter().collect();
                         {
                             let mut var = cell.borrow_mut();
-                            let Value::String(text) = &mut var.value else {
-                                return Err(Error::coded(
-                                    "E0500",
-                                    *span,
-                                    "text location must be CHARS",
-                                ));
-                            };
-                            *text = rendered.clone();
-                            var.text_index = 0;
+                            if let Some(text) = &text_state {
+                                let record = text.borrow().record.clone();
+                                record.borrow_mut().value = Value::String(rendered.clone());
+                            }
+                            var.value = Value::String(rendered.clone());
+                        }
+                        if let Some(text) = &text_state {
+                            text.borrow_mut().index = 0;
                         }
                         if let Some(access) = &text_access {
                             self.write_text_record(access, &rendered, *span)?;
@@ -4141,22 +4241,19 @@ impl<'a> Interpreter<'a> {
                                 }
                             }
                         }
-                        if let Some(_access) = &text_access {
+                        if text_access.is_some() {
                             let record: String = chars.into_iter().collect();
                             let mut var = cell.borrow_mut();
-                            let Value::String(text) = &mut var.value else {
-                                return Err(Error::coded(
-                                    "E0500",
-                                    *span,
-                                    "text location must be CHARS",
-                                ));
-                            };
-                            *text = record;
+                            if let Some(text) = &text_state {
+                                let record_cell = text.borrow().record.clone();
+                                record_cell.borrow_mut().value = Value::String(record.clone());
+                            }
+                            var.value = Value::String(record);
                         }
                     }
                 }
-                if is_text {
-                    cell.borrow_mut().text_index = 0;
+                if let Some(text) = &text_state {
+                    text.borrow_mut().index = 0;
                 }
                 Ok(Value::Undefined)
             }
@@ -4170,7 +4267,7 @@ impl<'a> Interpreter<'a> {
                 let cell = self.find_var_cell(target).ok_or_else(|| {
                     Error::coded("E0505", *span, format!("unknown variable `{target}`"))
                 })?;
-                let text_length = {
+                let (text_length, text) = {
                     let var = cell.borrow();
                     let Type::Text { length, .. } = var.ty else {
                         return Err(Error::coded(
@@ -4179,10 +4276,13 @@ impl<'a> Interpreter<'a> {
                             "text index requires a TEXT or WTEXT location",
                         ));
                     };
-                    length as i128
+                    let text = var.text.clone().ok_or_else(|| {
+                        Error::coded("E0507", *span, "text location has no text state")
+                    })?;
+                    (length as i128, text)
                 };
                 if *get {
-                    let index = cell.borrow().text_index;
+                    let index = text.borrow().index;
                     Ok(Value::Int {
                         value: index,
                         kind: Some(IntKind::Int),
@@ -4200,8 +4300,75 @@ impl<'a> Interpreter<'a> {
                             format!("TEXTFAIL: text index {index} is outside 0..{text_length}"),
                         ));
                     }
-                    cell.borrow_mut().text_index = index;
+                    text.borrow_mut().index = index;
                     Ok(Value::Undefined)
+                }
+            }
+            ir::Expr::TextSub {
+                op,
+                target,
+                source,
+                span,
+                ..
+            } => {
+                use crate::builtins::TextSubOp;
+                let cell = self.find_var_cell(target).ok_or_else(|| {
+                    Error::coded("E0505", *span, format!("unknown variable `{target}`"))
+                })?;
+                let text = {
+                    let var = cell.borrow();
+                    if !matches!(var.ty, Type::Text { .. }) {
+                        return Err(Error::coded(
+                            "E0507",
+                            *span,
+                            "text sub-location requires a TEXT or WTEXT location",
+                        ));
+                    }
+                    var.text.clone().ok_or_else(|| {
+                        Error::coded("E0500", *span, "text location has no text state")
+                    })?
+                };
+                match op {
+                    TextSubOp::GetAccess => {
+                        let access = text.borrow().access.clone();
+                        Ok(Value::Ref(Some(self.intern_ref(access, false))))
+                    }
+                    TextSubOp::GetRecord => {
+                        let record = text.borrow().record.clone();
+                        Ok(Value::Ref(Some(self.intern_ref(record, false))))
+                    }
+                    TextSubOp::SetAccess => {
+                        let source = source.as_ref().ok_or_else(|| {
+                            Error::coded("E0500", *span, "SETTEXTACCESS requires a location")
+                        })?;
+                        let source_cell = self.find_var_cell(source).ok_or_else(|| {
+                            Error::coded("E0505", *span, format!("unknown variable `{source}`"))
+                        })?;
+                        if !matches!(source_cell.borrow().ty, Type::Access(_)) {
+                            return Err(Error::coded(
+                                "E0507",
+                                *span,
+                                "SETTEXTACCESS requires an ACCESS location",
+                            ));
+                        }
+                        text.borrow_mut().access = source_cell;
+                        Ok(Value::Undefined)
+                    }
+                    TextSubOp::SetRecord => {
+                        let source = source.as_ref().ok_or_else(|| {
+                            Error::coded("E0500", *span, "SETTEXTRECORD requires a location")
+                        })?;
+                        let source_cell = self.find_var_cell(source).ok_or_else(|| {
+                            Error::coded("E0505", *span, format!("unknown variable `{source}`"))
+                        })?;
+                        let record_value = source_cell.borrow().value.clone();
+                        {
+                            let mut var = cell.borrow_mut();
+                            var.value = record_value;
+                        }
+                        text.borrow_mut().record = source_cell;
+                        Ok(Value::Undefined)
+                    }
                 }
             }
             ir::Expr::ArrayLiteral { values, array, .. } => {
@@ -5735,7 +5902,7 @@ impl<'a> Interpreter<'a> {
             if names.contains(&name) {
                 for scope in self.locals.iter_mut().rev() {
                     if let Some(cell) = scope.vars.get(&name) {
-                        cell.borrow_mut().value = value.clone();
+                        write_var_value(&mut cell.borrow_mut(), value.clone());
                         break;
                     }
                 }
@@ -6286,7 +6453,7 @@ impl<'a> Interpreter<'a> {
                         "reference mode does not match the referenced location",
                     ));
                 }
-                cell.borrow_mut().value = value;
+                write_var_value(&mut cell.borrow_mut(), value);
                 Ok(())
             }
             ir::AssignTarget::DerefField {
@@ -6307,6 +6474,18 @@ impl<'a> Interpreter<'a> {
             .find_var_cell(name)
             .ok_or_else(|| Error::coded("E0505", span, format!("unknown variable `{name}`")))?;
         let var = cell.borrow();
+        if let Some(text) = &var.text {
+            let record = text.borrow().record.clone();
+            let value = record.borrow().value.clone();
+            return match value {
+                Value::Undefined => Err(Error::coded(
+                    "E0504",
+                    span,
+                    format!("use of undefined value `{name}`"),
+                )),
+                value => Ok(value),
+            };
+        }
         match &var.value {
             Value::Undefined => Err(Error::coded(
                 "E0504",
@@ -6323,7 +6502,7 @@ impl<'a> Interpreter<'a> {
             .ok_or_else(|| Error::coded("E0505", span, format!("unknown variable `{name}`")))?;
         let ty = cell.borrow().ty;
         let value = self.convert(value, ty, span)?;
-        cell.borrow_mut().value = value;
+        write_var_value(&mut cell.borrow_mut(), value);
         Ok(())
     }
 

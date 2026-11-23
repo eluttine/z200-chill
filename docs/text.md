@@ -34,17 +34,35 @@ sub-location is stored alongside the variable and uses the same `AccessState` as
 - `SETTEXTINDEX`/`GETTEXTINDEX` continue to manage the actual index; text transfers
   reset it to `0`.
 
-## Deferred phase 2
+## Implemented phase 2
+
+A text location now owns shared state containing:
+
+- a record cell (the text record sub-location),
+- the actual index,
+- an access cell (the access sub-location).
+
+This makes the sub-locations reference-backed:
+
+- `SETTEXTRECORD(text, string-location)` makes the text record alias the supplied
+  `CHARS`/`WCHARS` location. Assignments through either name are visible through the
+  other.
+- `GETTEXTRECORD(text)` returns a `REF CHARS` or `REF WCHARS` to the record cell.
+  Dereferencing it reads or assigns the text record.
+- `SETTEXTACCESS(text, access-location)` makes the text access sub-location alias the
+  supplied `ACCESS` location, including its connection state.
+- `GETTEXTACCESS(text)` returns a `REF ACCESS` to the access cell. It can be compared
+  with `NULL`; using such a reference as a `CONNECT`/`DISCONNECT` transfer location is
+  still deferred because transfer arguments are currently simple locations.
+
+## Deferred
 
 - Indexed/dynamic text access. The current text mode does not retain an index mode, so
   `CONNECT(text, ..., index)` is rejected and connected text transfers are sequential.
-- `GETTEXTACCESS` / `SETTEXTACCESS`, which need a program-visible reference to the
-  access sub-location.
-- `GETTEXTRECORD` / `SETTEXTRECORD`, which need a reference to text record storage
-  rather than copying a string value.
-- Assigning text sub-location references or retaining them beyond the text location's
-  lifetime.
+- Dereferencing a `GETTEXTACCESS` reference in a transfer-location position.
+- General reference-to-record arguments in `SETTEXTRECORD`; the current form accepts a
+  simple string location.
+- Enforcing the text mode's length on assignments through a record reference.
 
-These are deliberate limits while text values remain string-valued in the
-interpreter. A future phase can introduce reference-backed text storage without
-changing the surface syntax documented here.
+These are deliberate limits. Reference-backed record/access sub-locations preserve the
+surface syntax documented in [subset.md](subset.md).

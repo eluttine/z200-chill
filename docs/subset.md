@@ -587,9 +587,13 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
   transfer sequential file records; disconnected operations remain in-memory.
 - Connected text access is sequential only: indexed text connections and indexed
   `READTEXT`/`WRITETEXT` are not implemented.
-- `GETTEXTRECORD`, `GETTEXTACCESS`, `SETTEXTRECORD`, and `SETTEXTACCESS` are not
-  implemented; there is no program-visible reference to a text sub-location yet. See
-  [text.md](text.md).
+- `SETTEXTRECORD(text, chars-location)` makes the text record alias a `CHARS`/`WCHARS`
+  location; `GETTEXTRECORD(text)` returns a reference to it.
+- `SETTEXTACCESS(text, access-location)` makes the text access sub-location alias an
+  `ACCESS` location; `GETTEXTACCESS(text)` returns a reference to it.
+- Record references can be dereferenced for reads and assignments. Access references
+  can be compared with `NULL`; transfer-location dereferencing is not implemented yet.
+  See [text.md](text.md).
 - `BOOLS`, `BOOLS(n)`, and `BOOLS(n) VARYING` are bit-string modes. `B'...'`,
   `O'...'`, and `H'...'` with a closing apostrophe are bit-string literals; without
   the closing apostrophe they are based integer literals (`B'1010` is binary 10).

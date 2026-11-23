@@ -400,6 +400,24 @@ pub fn format_items(ops: &[FormatOp]) -> Vec<FormatItem> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextSubOp {
+    GetAccess,
+    SetAccess,
+    GetRecord,
+    SetRecord,
+}
+
+pub fn lookup_text_sub(name: &str) -> Option<TextSubOp> {
+    match name {
+        "GETTEXTACCESS" => Some(TextSubOp::GetAccess),
+        "SETTEXTACCESS" => Some(TextSubOp::SetAccess),
+        "GETTEXTRECORD" => Some(TextSubOp::GetRecord),
+        "SETTEXTRECORD" => Some(TextSubOp::SetRecord),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssociationOp {
     Associate,
     IsAssociated,

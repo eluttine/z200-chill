@@ -154,7 +154,9 @@ deferred.
       `GETUSAGE`, `OUTOFFILE`, `GETASSOCIATION`, usage enforcement, and EOF reporting.
 - [x] Text-location access sub-locations: `CONNECT`/`DISCONNECT` on `TEXT`/`WTEXT`,
       file-backed sequential `READTEXT`/`WRITETEXT`, and access attributes for text.
-      Indexed text access and text sub-location reference built-ins remain deferred.
+- [x] Reference-backed text record/access sub-locations:
+      `GETTEXTRECORD`/`SETTEXTRECORD` and `GETTEXTACCESS`/`SETTEXTACCESS`.
+      Indexed text access and transfer-location dereferencing remain deferred.
 - [x] Processes, signals, buffers, timers, and event selection under the cooperative
       single-threaded scheduler. Faithful preemptive concurrency and main-process
       interleaving remain deferred.

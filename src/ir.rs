@@ -167,6 +167,13 @@ pub enum Expr {
         ty: Option<Type>,
         span: Span,
     },
+    TextSub {
+        op: crate::builtins::TextSubOp,
+        target: String,
+        source: Option<String>,
+        ty: Option<Type>,
+        span: Span,
+    },
     ArrayLiteral {
         values: Vec<Node>,
         array: crate::types::ArrayType,
@@ -250,6 +257,7 @@ impl Expr {
             | Self::Builtin { span, .. }
             | Self::TextIo { span, .. }
             | Self::TextIndex { span, .. }
+            | Self::TextSub { span, .. }
             | Self::ArrayLiteral { span, .. }
             | Self::ArraySlice { span, .. }
             | Self::ArraySliceDynamic { span, .. }
@@ -296,7 +304,8 @@ impl Expr {
             Self::Call { ty, .. }
             | Self::Builtin { ty, .. }
             | Self::Association { ty, .. }
-            | Self::TextIndex { ty, .. } => *ty,
+            | Self::TextIndex { ty, .. }
+            | Self::TextSub { ty, .. } => *ty,
             Self::TextIo { .. } => None,
         }
     }
@@ -1302,6 +1311,37 @@ impl Lowerer<'_> {
                         get: *get,
                         target: target_name.clone(),
                         value,
+                        ty,
+                        span,
+                    })
+                }
+                Some(ApplyResolution::TextSub { op }) => {
+                    use crate::builtins::TextSubOp;
+                    let AstExpr::Name {
+                        name: target_name, ..
+                    } = &ast_args[0]
+                    else {
+                        return Err(Error::new(
+                            ast_args[0].span(),
+                            "internal: text sub-location argument is not a location",
+                        ));
+                    };
+                    let source = match op {
+                        TextSubOp::SetAccess | TextSubOp::SetRecord => {
+                            let AstExpr::Name { name, .. } = &ast_args[1] else {
+                                return Err(Error::new(
+                                    ast_args[1].span(),
+                                    "internal: text sub-location source is not a location",
+                                ));
+                            };
+                            Some(name.clone())
+                        }
+                        TextSubOp::GetAccess | TextSubOp::GetRecord => None,
+                    };
+                    Rc::new(Expr::TextSub {
+                        op: *op,
+                        target: target_name.clone(),
+                        source,
                         ty,
                         span,
                     })
