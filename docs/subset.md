@@ -629,9 +629,18 @@ implementation is an intentional simplification of Z.200 file handling:
 - `DISSOCIATE(association)` clears the association.
 - `CREATE(association)` creates/truncates the associated file.
 - `DELETE(association)` removes the associated file.
-- `CONNECT(access, association)` connects an access location and resets its record
-  position to the beginning. Indexed access accepts an optional integer index:
-  `CONNECT(access, association, index)`.
+- `USAGE` and `WHERE` are predefined set modes:
+  `USAGE = SET(READONLY, WRITEONLY, READWRITE)` and
+  `WHERE = SET(FIRST, SAME, LAST)`.
+- `CONNECT(access, association [, usage [, where [, index]]])` connects an access
+  location; the association must have an existing file. The shorthand `CONNECT(access, association, index)` remains available for
+  indexed access. `FIRST` positions before the first record, `SAME` keeps the current
+  position, and `LAST` positions after the last record. Indexed positions are offset by
+  the access index mode's lower bound.
+- `GETUSAGE(access)` returns the connection's `USAGE` value.
+- `OUTOFFILE(access)` reports whether the last read attempted a record outside the file.
+- `GETASSOCIATION(access)` returns a reference to the connected association location,
+  or `NULL` when the access location is not connected.
 - `DISCONNECT(access)` clears the connection.
 - `WRITERECORD(access, text)` appends one line-based record.
 - `READRECORD(access)` returns the next line; `READRECORD(access, target)` stores it in
@@ -639,10 +648,12 @@ implementation is an intentional simplification of Z.200 file handling:
 - Indexed access also supports `READRECORD(access, index [, target])` and
   `WRITERECORD(access, index, text)`. Indexed writes replace the selected line.
 - Out-of-range indexed transfers raise `RANGEFAIL`.
+- Reading past the end sets `OUTOFFILE` to `TRUE`; a further sequential read raises
+  `READFAIL`.
+- `WRITEONLY` connections reject `READRECORD` with `READFAIL`, and `READONLY`
+  connections reject `WRITERECORD` with `WRITEFAIL`.
 - `MODIFY(association)` validates the association and currently has no modifiable
   parameters; passing parameters is rejected.
-- Access usage/out-of-file attributes (`GETUSAGE`, `OUTOFFILE`, `GETASSOCIATION`) and
-  `CONNECT` usage/where expressions are not implemented.
 - There is no random access outside an indexed `ACCESS` mode.
 
 The built-in routines raise implementation-defined `ASSOCIATEFAIL`, `NOTASSOCIATED`,

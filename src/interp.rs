@@ -484,13 +484,40 @@ struct AssociationState {
     indexable: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct AccessState {
     association: Option<Rc<RefCell<AssociationState>>>,
+    association_name: Option<String>,
     indexed: bool,
     index_range: Option<types::ArrayDimension>,
     position: i128,
+    usage: i128,
+    out_of_file: bool,
 }
+
+impl PartialEq for AccessState {
+    fn eq(&self, other: &Self) -> bool {
+        let same_association = match (&self.association, &other.association) {
+            (Some(left), Some(right)) => Rc::ptr_eq(left, right),
+            (None, None) => true,
+            _ => false,
+        };
+        same_association
+            && self.association_name == other.association_name
+            && self.indexed == other.indexed
+            && self.index_range == other.index_range
+            && self.position == other.position
+            && self.usage == other.usage
+            && self.out_of_file == other.out_of_file
+    }
+}
+
+const USAGE_READONLY: i128 = 0;
+const USAGE_WRITEONLY: i128 = 1;
+const USAGE_READWRITE: i128 = 2;
+const WHERE_FIRST: i128 = 0;
+const WHERE_SAME: i128 = 1;
+const WHERE_LAST: i128 = 2;
 
 struct Var {
     ty: Type,
@@ -2529,6 +2556,8 @@ impl<'a> Interpreter<'a> {
         first: &str,
         second: Option<&str>,
         index: Option<&ir::Node>,
+        usage_node: Option<&ir::Node>,
+        where_node: Option<&ir::Node>,
         value: Option<&ir::Node>,
         ty: Option<Type>,
         span: Span,
@@ -2671,39 +2700,98 @@ impl<'a> Interpreter<'a> {
                     ));
                 };
                 let association = self.association_state(second, span)?;
-                let position = match index {
-                    Some(index) => {
-                        let value = self.eval_ir(index)?;
-                        let (value, _) = self.expect_int(value, index.span())?;
+                if !association.borrow().existing {
+                    return Err(Error::exception(
+                        "CONNECTFAIL",
+                        span,
+                        "CONNECTFAIL: association has no existing file",
+                    ));
+                }
+                let usage = match usage_node {
+                    Some(node) => {
+                        let value = self.eval_ir(node)?;
+                        let Value::Set(value) = value else {
+                            return Err(Error::coded(
+                                "E0500",
+                                span,
+                                "CONNECT usage must be a USAGE value",
+                            ));
+                        };
                         value
                     }
-                    None => 0,
+                    None => USAGE_READWRITE,
+                };
+                let where_value = match where_node {
+                    Some(node) => {
+                        let value = self.eval_ir(node)?;
+                        let Value::Set(value) = value else {
+                            return Err(Error::coded(
+                                "E0500",
+                                span,
+                                "CONNECT where must be a WHERE value",
+                            ));
+                        };
+                        value
+                    }
+                    None => WHERE_FIRST,
                 };
                 let cell = self.find_var_cell(first).ok_or_else(|| {
                     Error::coded("E0505", span, format!("unknown variable `{first}`"))
                 })?;
-                let mut var = cell.borrow_mut();
-                let Type::Access(access) = var.ty else {
-                    return Err(Error::coded("E0507", span, "expected an ACCESS location"));
+                let (access, previous_position) = {
+                    let var = cell.borrow();
+                    let Type::Access(access) = var.ty else {
+                        return Err(Error::coded("E0507", span, "expected an ACCESS location"));
+                    };
+                    let previous_position = match &var.value {
+                        Value::Access(None) => None,
+                        Value::Access(Some(state)) => Some(state.borrow().position),
+                        _ => {
+                            return Err(Error::coded("E0507", span, "expected an ACCESS location"))
+                        }
+                    };
+                    (access, previous_position)
                 };
-                match &var.value {
-                    Value::Access(None) => {}
-                    Value::Access(Some(_)) => {
-                        return Err(Error::exception(
+                let path = association.borrow().path.clone();
+                let contents = std::fs::read_to_string(&path).map_err(|error| {
+                    Error::exception("READFAIL", span, format!("READFAIL: {error}"))
+                })?;
+                let file_len = contents.lines().count() as i128;
+                let base = match where_value {
+                    WHERE_FIRST => 0,
+                    WHERE_SAME => previous_position.ok_or_else(|| {
+                        Error::exception(
                             "CONNECTFAIL",
                             span,
-                            "CONNECTFAIL: access location is already connected",
-                        ));
+                            "CONNECTFAIL: SAME requires an existing connection",
+                        )
+                    })?,
+                    WHERE_LAST => file_len,
+                    _ => return Err(Error::coded("E0500", span, "internal: invalid WHERE value")),
+                };
+                let position = match index {
+                    Some(index) => {
+                        let value = self.eval_ir(index)?;
+                        let (value, _) = self.expect_int(value, index.span())?;
+                        check_index_range(access.index, value, span)?;
+                        let lower = access.index.map(|range| range.low).unwrap_or(0);
+                        base + value - lower
                     }
-                    _ => return Err(Error::coded("E0507", span, "expected an ACCESS location")),
-                }
-                check_index_range(access.index, position, span)?;
+                    None => base,
+                };
+                let cell = self
+                    .find_var_cell(first)
+                    .expect("access cell was just found");
+                let mut var = cell.borrow_mut();
                 association.borrow_mut().indexable = access.indexed;
                 var.value = Value::Access(Some(Rc::new(RefCell::new(AccessState {
                     association: Some(association),
+                    association_name: Some(second.to_owned()),
                     indexed: access.indexed,
                     index_range: access.index,
                     position,
+                    usage,
+                    out_of_file: false,
                 }))));
                 Ok(Value::Undefined)
             }
@@ -2724,9 +2812,44 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(Value::Undefined)
             }
+            AssociationOp::GetAssociation => {
+                let cell = self.find_var_cell(first).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{first}`"))
+                })?;
+                let association_name = {
+                    let var = cell.borrow();
+                    let Value::Access(state) = &var.value else {
+                        return Err(Error::coded("E0507", span, "expected an ACCESS location"));
+                    };
+                    state
+                        .as_ref()
+                        .and_then(|state| state.borrow().association_name.clone())
+                };
+                let Some(association_name) = association_name else {
+                    return Ok(Value::Ref(None));
+                };
+                let association_cell = self.find_var_cell(&association_name).ok_or_else(|| {
+                    Error::coded(
+                        "E0505",
+                        span,
+                        format!("unknown association variable `{association_name}`"),
+                    )
+                })?;
+                Ok(Value::Ref(Some(self.intern_ref(association_cell, false))))
+            }
+            AssociationOp::GetUsage => {
+                let access = self.access_state(first, span)?;
+                let usage = access.borrow().usage;
+                Ok(Value::Set(usage))
+            }
+            AssociationOp::OutOfFile => {
+                let access = self.access_state(first, span)?;
+                let out_of_file = access.borrow().out_of_file;
+                Ok(Value::Bool(out_of_file))
+            }
             AssociationOp::ReadRecord => {
                 let access = self.access_state(first, span)?;
-                let (association, indexed, range, current) = {
+                let (association, indexed, range, current, usage, out_of_file) = {
                     let access = access.borrow();
                     let Some(association) = access.association.clone() else {
                         return Err(Error::exception(
@@ -2740,8 +2863,24 @@ impl<'a> Interpreter<'a> {
                         access.indexed,
                         access.index_range,
                         access.position,
+                        access.usage,
+                        access.out_of_file,
                     )
                 };
+                if usage == USAGE_WRITEONLY {
+                    return Err(Error::exception(
+                        "READFAIL",
+                        span,
+                        "READFAIL: access location is write-only",
+                    ));
+                }
+                if !indexed && out_of_file {
+                    return Err(Error::exception(
+                        "READFAIL",
+                        span,
+                        "READFAIL: access location is at end of file",
+                    ));
+                }
                 let position = match index {
                     Some(index) => {
                         let value = self.eval_ir(index)?;
@@ -2767,9 +2906,14 @@ impl<'a> Interpreter<'a> {
                 })?;
                 let lines: Vec<&str> = contents.lines().collect();
                 let Some(record) = lines.get(position as usize) else {
-                    return Err(Error::exception("READFAIL", span, "READFAIL: end of file"));
+                    access.borrow_mut().out_of_file = true;
+                    return Ok(Value::Undefined);
                 };
-                access.borrow_mut().position = position + 1;
+                {
+                    let mut access = access.borrow_mut();
+                    access.position = position + 1;
+                    access.out_of_file = false;
+                }
                 let record = Value::String((*record).to_owned());
                 if let Some(target) = second {
                     self.assign_var(target, record, span)?;
@@ -2792,7 +2936,7 @@ impl<'a> Interpreter<'a> {
                     ));
                 };
                 let access = self.access_state(first, span)?;
-                let (association, indexed, range, current) = {
+                let (association, indexed, range, current, usage) = {
                     let access = access.borrow();
                     let Some(association) = access.association.clone() else {
                         return Err(Error::exception(
@@ -2806,8 +2950,16 @@ impl<'a> Interpreter<'a> {
                         access.indexed,
                         access.index_range,
                         access.position,
+                        access.usage,
                     )
                 };
+                if usage == USAGE_READONLY {
+                    return Err(Error::exception(
+                        "WRITEFAIL",
+                        span,
+                        "WRITEFAIL: access location is read-only",
+                    ));
+                }
                 let path = association.borrow().path.clone();
                 if indexed || index.is_some() {
                     let position = match index {
@@ -3957,6 +4109,8 @@ impl<'a> Interpreter<'a> {
                 first,
                 second,
                 index,
+                usage,
+                where_expr,
                 value,
                 ty,
                 span,
@@ -3965,6 +4119,8 @@ impl<'a> Interpreter<'a> {
                 first,
                 second.as_deref(),
                 index.as_ref(),
+                usage.as_ref(),
+                where_expr.as_ref(),
                 value.as_ref(),
                 *ty,
                 *span,

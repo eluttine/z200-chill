@@ -60,6 +60,8 @@ pub enum ApplyResolution {
         op: crate::builtins::AssociationOp,
         index: bool,
         target: bool,
+        usage: bool,
+        where_expr: bool,
     },
     SetElement {
         ty: Type,
@@ -1694,7 +1696,29 @@ impl Checker {
                 return Some(*value);
             }
         }
-        None
+        self.builtin_set_value(name)
+    }
+
+    fn builtin_set_type(&self, name: &str) -> Option<Type> {
+        let id = self
+            .modes
+            .sets
+            .iter()
+            .position(|set| set.module_name.is_none() && set.name == name)?;
+        Some(Type::Set(crate::types::SetId(id)))
+    }
+
+    fn builtin_set_value(&self, name: &str) -> Option<(Type, i128)> {
+        let (set, value) = match name {
+            "READONLY" => ("USAGE", 0),
+            "WRITEONLY" => ("USAGE", 1),
+            "READWRITE" => ("USAGE", 2),
+            "FIRST" => ("WHERE", 0),
+            "SAME" => ("WHERE", 1),
+            "LAST" => ("WHERE", 2),
+            _ => return None,
+        };
+        Some((self.builtin_set_type(set)?, value))
     }
 
     fn lookup_var(&self, name: &str) -> Option<Type> {
@@ -3453,6 +3477,8 @@ impl Checker {
                 };
             let mut has_index = false;
             let mut has_target = false;
+            let mut has_usage = false;
+            let mut has_where = false;
             let result = match op {
                 AssociationOp::Associate => {
                     let [association, path] = args else {
@@ -3490,6 +3516,41 @@ impl Checker {
                     association_arg(self, association)?;
                     Some(Type::Bool)
                 }
+                AssociationOp::GetAssociation => {
+                    let [access] = args else {
+                        return Err(Error::coded(
+                            "E0400",
+                            span,
+                            "GETASSOCIATION takes an access location",
+                        ));
+                    };
+                    access_type(self, access)?;
+                    Some(Type::Ref(crate::types::RefTarget::Association))
+                }
+                AssociationOp::GetUsage => {
+                    let [access] = args else {
+                        return Err(Error::coded(
+                            "E0400",
+                            span,
+                            "GETUSAGE takes an access location",
+                        ));
+                    };
+                    access_type(self, access)?;
+                    Some(self.builtin_set_type("USAGE").ok_or_else(|| {
+                        Error::coded("E0400", span, "internal: missing USAGE mode")
+                    })?)
+                }
+                AssociationOp::OutOfFile => {
+                    let [access] = args else {
+                        return Err(Error::coded(
+                            "E0400",
+                            span,
+                            "OUTOFFILE takes an access location",
+                        ));
+                    };
+                    access_type(self, access)?;
+                    Some(Type::Bool)
+                }
                 AssociationOp::Modify => {
                     let Some(association) = args.first() else {
                         return Err(Error::coded(
@@ -3520,16 +3581,55 @@ impl Checker {
                     None
                 }
                 AssociationOp::Connect => {
-                    if args.len() != 2 && args.len() != 3 {
+                    if !(2..=5).contains(&args.len()) {
                         return Err(Error::coded(
                             "E0400",
                             span,
-                            "CONNECT takes an access, an association, and an optional index",
+                            "CONNECT takes an access, an association, and optional usage, where, and index expressions",
                         ));
                     }
                     let access = access_type(self, &args[0])?;
                     association_arg(self, &args[1])?;
-                    if args.len() == 3 {
+                    let usage_ty = self.builtin_set_type("USAGE").ok_or_else(|| {
+                        Error::coded("E0400", span, "internal: missing USAGE mode")
+                    })?;
+                    let where_ty = self.builtin_set_type("WHERE").ok_or_else(|| {
+                        Error::coded("E0400", span, "internal: missing WHERE mode")
+                    })?;
+                    let mut next = 2;
+                    if let Some(argument) = args.get(next) {
+                        let ty = self.check_expr(argument)?;
+                        if ty == usage_ty {
+                            has_usage = true;
+                            next += 1;
+                        } else if args.len() == 3 && ty.is_int() {
+                            if !access.indexed {
+                                return Err(Error::coded(
+                                    "E0400",
+                                    span,
+                                    "CONNECT index requires an indexed ACCESS mode",
+                                ));
+                            }
+                            has_index = true;
+                            next = args.len();
+                        } else {
+                            return Err(Error::coded(
+                                "E0400",
+                                argument.span(),
+                                "CONNECT third argument must be a USAGE value or an index",
+                            ));
+                        }
+                    }
+                    if has_usage {
+                        if let Some(argument) = args.get(next) {
+                            let ty = self.check_expr(argument)?;
+                            if ty == where_ty {
+                                has_where = true;
+                                next += 1;
+                            }
+                        }
+                    }
+                    if let Some(index) = args.get(next) {
                         if !access.indexed {
                             return Err(Error::coded(
                                 "E0400",
@@ -3537,15 +3637,23 @@ impl Checker {
                                 "CONNECT index requires an indexed ACCESS mode",
                             ));
                         }
-                        let index_ty = self.check_expr(&args[2])?;
+                        let index_ty = self.check_expr(index)?;
                         if !index_ty.is_int() {
                             return Err(Error::coded(
                                 "E0400",
-                                args[2].span(),
+                                index.span(),
                                 "CONNECT index must be an integer",
                             ));
                         }
                         has_index = true;
+                        next += 1;
+                    }
+                    if next != args.len() {
+                        return Err(Error::coded(
+                            "E0400",
+                            args[next].span(),
+                            "too many CONNECT arguments",
+                        ));
                     }
                     None
                 }
@@ -3703,6 +3811,8 @@ impl Checker {
                     op,
                     index: has_index,
                     target: has_target,
+                    usage: has_usage,
+                    where_expr: has_where,
                 },
             );
             return Ok(result);

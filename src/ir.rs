@@ -213,6 +213,8 @@ pub enum Expr {
         first: String,
         second: Option<String>,
         index: Option<Node>,
+        usage: Option<Node>,
+        where_expr: Option<Node>,
         value: Option<Node>,
         ty: Option<Type>,
         span: Span,
@@ -1304,7 +1306,13 @@ impl Lowerer<'_> {
                         span,
                     })
                 }
-                Some(ApplyResolution::Association { op, index, target }) => {
+                Some(ApplyResolution::Association {
+                    op,
+                    index,
+                    target,
+                    usage,
+                    where_expr,
+                }) => {
                     use crate::builtins::AssociationOp;
                     let AstExpr::Name { name: first, .. } = &ast_args[0] else {
                         return Err(Error::new(
@@ -1324,13 +1332,36 @@ impl Lowerer<'_> {
                         };
                         Ok(name.clone())
                     };
-                    let (second, index_node, value) = match op {
-                        AssociationOp::Associate => (None, None, rest.first().cloned()),
-                        AssociationOp::Connect => (
-                            Some(target_name(1)?),
-                            if *index { rest.get(1).cloned() } else { None },
-                            None,
-                        ),
+                    let (second, index_node, usage_node, where_node, value) = match op {
+                        AssociationOp::Associate => (None, None, None, None, rest.first().cloned()),
+                        AssociationOp::Connect => {
+                            let mut cursor = 1;
+                            let usage_node = if *usage {
+                                let node = rest.get(cursor).cloned();
+                                cursor += 1;
+                                node
+                            } else {
+                                None
+                            };
+                            let where_node = if *where_expr {
+                                let node = rest.get(cursor).cloned();
+                                cursor += 1;
+                                node
+                            } else {
+                                None
+                            };
+                            (
+                                Some(target_name(1)?),
+                                if *index {
+                                    rest.get(cursor).cloned()
+                                } else {
+                                    None
+                                },
+                                usage_node,
+                                where_node,
+                                None,
+                            )
+                        }
                         AssociationOp::ReadRecord => {
                             let target_position = if *index { 2 } else { 1 };
                             (
@@ -1341,20 +1372,26 @@ impl Lowerer<'_> {
                                 },
                                 if *index { rest.first().cloned() } else { None },
                                 None,
+                                None,
+                                None,
                             )
                         }
                         AssociationOp::WriteRecord => (
                             None,
                             if *index { rest.first().cloned() } else { None },
+                            None,
+                            None,
                             rest.last().cloned(),
                         ),
-                        _ => (None, None, None),
+                        _ => (None, None, None, None, None),
                     };
                     Rc::new(Expr::Association {
                         op: *op,
                         first: first.clone(),
                         second,
                         index: index_node,
+                        usage: usage_node,
+                        where_expr: where_node,
                         value,
                         ty,
                         span,

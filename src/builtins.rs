@@ -417,6 +417,9 @@ pub enum AssociationOp {
     Indexable,
     Sequencible,
     Variable,
+    GetAssociation,
+    GetUsage,
+    OutOfFile,
 }
 
 pub fn lookup_association(name: &str) -> Option<AssociationOp> {
@@ -437,6 +440,9 @@ pub fn lookup_association(name: &str) -> Option<AssociationOp> {
         "INDEXABLE" => Some(AssociationOp::Indexable),
         "SEQUENCIBLE" => Some(AssociationOp::Sequencible),
         "VARIABLE" => Some(AssociationOp::Variable),
+        "GETASSOCIATION" => Some(AssociationOp::GetAssociation),
+        "GETUSAGE" => Some(AssociationOp::GetUsage),
+        "OUTOFFILE" => Some(AssociationOp::OutOfFile),
         _ => None,
     }
 }

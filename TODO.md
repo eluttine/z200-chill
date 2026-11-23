@@ -150,6 +150,8 @@ deferred.
 - [x] Association `MODIFY` (no parameters) and indexed `ACCESS (range) CHARS`,
       indexed `CONNECT`/`READRECORD`/`WRITERECORD`, record-range checks, and
       `INDEXABLE` reporting.
+- [x] Predefined `USAGE`/`WHERE` values, `CONNECT` usage/where/index forms,
+      `GETUSAGE`, `OUTOFFILE`, `GETASSOCIATION`, usage enforcement, and EOF reporting.
 - [x] Processes, signals, buffers, timers, and event selection under the cooperative
       single-threaded scheduler. Faithful preemptive concurrency and main-process
       interleaving remain deferred.

@@ -15,6 +15,25 @@ type ModeBuildResult = (
 
 pub(super) fn build_modes(program: &Program) -> Result<ModeBuildResult, Error> {
     let mut table = ModeTable::default();
+    for (name, elements) in [
+        (
+            "USAGE",
+            vec![("READONLY", 0), ("WRITEONLY", 1), ("READWRITE", 2)],
+        ),
+        ("WHERE", vec![("FIRST", 0), ("SAME", 1), ("LAST", 2)]),
+    ] {
+        table.sets.push(crate::modes::SetMode {
+            name: name.to_owned(),
+            package: usize::MAX,
+            module: usize::MAX,
+            package_name: None,
+            module_name: None,
+            elements: elements
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value))
+                .collect(),
+        });
+    }
     let mut top_maps = Vec::with_capacity(program.modules.len());
     let mut span_maps = HashMap::new();
     let mut moreta_sources = HashMap::new();
