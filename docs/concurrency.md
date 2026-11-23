@@ -47,10 +47,11 @@ asserts end-to-end delivery invariants.
 
 ## Current limitations
 
-- The main module body now pumps one ready process at action boundaries, so spawned
-  processes interleave with main-process actions. The main process is still executed
-  synchronously: blocking `DELAY`/receive operations inside the main body are not yet
-  supported.
+- The main module body pumps one ready process at action boundaries, so spawned
+  processes interleave with main-process actions.
+- Main-process `DELAY` and timed `DELAY` actions block by pumping the scheduler until a
+  continuation or timeout wakes the main process.
+- Main-process signal/buffer receives and full termination semantics remain deferred.
 - Timeouts are enforced at blocking points (`DELAY`, `RECEIVE`, buffer waits), not
   during arbitrary long-running computation.
 - Region-call timeout supervision is not implemented.
@@ -63,8 +64,8 @@ asserts end-to-end delivery invariants.
 - Process definitions outside the module declaration list are not supported.
 - Generic process and region templates are supported; template instances expand before
   semantic analysis.
-- Full coroutine-based main-process blocking and termination semantics remain
-  deferred.
+- Full coroutine-based main-process termination and signal/buffer receive semantics
+  remain deferred.
 
 ## Scheduler stress testing
 

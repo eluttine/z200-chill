@@ -804,6 +804,13 @@ struct ScheduleState {
     region_waiters: HashMap<usize, Vec<ProcessEntry>>,
     object_owner: HashMap<usize, usize>,
     object_waiters: HashMap<usize, Vec<ProcessEntry>>,
+    main_wait: Option<MainWait>,
+    main_wake: Option<ProcessInput>,
+}
+
+struct MainWait {
+    event: usize,
+    priority: i128,
 }
 
 thread_local! {
@@ -2049,7 +2056,12 @@ impl<'a> Interpreter<'a> {
                             ));
                         }
                     }
-                    match cooperative_delay(key, priority, self.deadline)? {
+                    let wake = if self.process_id == usize::MAX {
+                        self.wait_main_event(key, priority, self.deadline, *span)?
+                    } else {
+                        cooperative_delay(key, priority, self.deadline)?
+                    };
+                    match wake {
                         ProcessInput::Timeout => return Ok(Flow::Timeout),
                         ProcessInput::Delay { .. } | ProcessInput::None => {}
                         ProcessInput::Signal { .. }
@@ -2066,6 +2078,25 @@ impl<'a> Interpreter<'a> {
                 ir::Stmt::Continue { event, span } => {
                     let (key, _) = self.event_location(event, *span)?;
                     let mut scheduler = self.scheduler.borrow_mut();
+                    if let Some(main_wait) = &scheduler.main_wait {
+                        if main_wait.event == key {
+                            let process_priority =
+                                scheduler.event_waiters.get(&key).and_then(|waiters| {
+                                    waiters
+                                        .iter()
+                                        .filter(|waiter| waiter.slot.borrow().is_some())
+                                        .map(|waiter| waiter.priority)
+                                        .max()
+                                });
+                            if process_priority
+                                .map(|priority| main_wait.priority >= priority)
+                                .unwrap_or(true)
+                            {
+                                scheduler.main_wake = Some(ProcessInput::Delay { event: key });
+                                continue;
+                            }
+                        }
+                    }
                     let Some(waiting) = scheduler.event_waiters.get_mut(&key) else {
                         continue;
                     };
@@ -3407,6 +3438,65 @@ impl<'a> Interpreter<'a> {
             .map_err(|error| Error::exception("WRITEFAIL", span, format!("WRITEFAIL: {error}")))?;
         access.borrow_mut().position = position + 1;
         Ok(())
+    }
+
+    fn wait_main_event(
+        &mut self,
+        key: usize,
+        priority: i128,
+        deadline: Option<Instant>,
+        span: Span,
+    ) -> Result<ProcessInput, Error> {
+        {
+            let mut scheduler = self.scheduler.borrow_mut();
+            if scheduler.main_wait.is_some() {
+                return Err(Error::coded(
+                    "E0500",
+                    span,
+                    "main process is already waiting",
+                ));
+            }
+            scheduler.main_wait = Some(MainWait {
+                event: key,
+                priority,
+            });
+            scheduler.main_wake = None;
+        }
+        let result = (|| loop {
+            if let Some(wake) = self.scheduler.borrow_mut().main_wake.take() {
+                return Ok(wake);
+            }
+            let now = Instant::now();
+            if deadline.is_some_and(|deadline| now >= deadline) {
+                return Ok(ProcessInput::Timeout);
+            }
+            expire_timed_waiters(&self.scheduler);
+            let next_deadline = next_timed_deadline(&self.scheduler)
+                .into_iter()
+                .chain(deadline)
+                .min();
+            if self.scheduler.borrow().ready.is_empty() {
+                if let Some(next_deadline) = next_deadline {
+                    let now = Instant::now();
+                    if next_deadline > now {
+                        std::thread::sleep(next_deadline - now);
+                    }
+                    continue;
+                }
+                return Err(Error::coded(
+                    "E0500",
+                    span,
+                    "deadlock: main process is waiting and no processes can continue it",
+                ));
+            }
+            pump_one_ready_process(&self.scheduler)?;
+        })();
+        {
+            let mut scheduler = self.scheduler.borrow_mut();
+            scheduler.main_wait = None;
+            scheduler.main_wake = None;
+        }
+        result
     }
 
     fn destroy_scope_objects(&mut self, scope: &Scope<'_>) -> Result<(), Error> {
