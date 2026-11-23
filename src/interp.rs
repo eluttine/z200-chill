@@ -187,6 +187,11 @@ pub fn run_checked(
             moreta_invariants.insert(id, invariant);
         }
     }
+    let yield_interval = std::env::var("Z200C_YIELD_INTERVAL")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(1);
     let scheduler = Rc::new(RefCell::new(ScheduleState::default()));
     let mut interpreter = Interpreter {
         profile,
@@ -197,6 +202,8 @@ pub fn run_checked(
         active_scope_key: None,
         module_floor: 0,
         depth: 0,
+        yield_interval,
+        yield_counter: 0,
         exports,
         modes,
         module_modes,
@@ -1076,6 +1083,8 @@ struct Interpreter<'a> {
     /// Lowest local scope visible in the current module.
     module_floor: usize,
     depth: usize,
+    yield_interval: usize,
+    yield_counter: usize,
     exports: Vec<program::ExportEntry>,
     modes: Rc<crate::modes::ModeTable>,
     module_modes: Vec<HashMap<String, Type>>,
@@ -1673,7 +1682,15 @@ impl<'a> Interpreter<'a> {
 
     fn exec_stmts(&mut self, stmts: &[ir::Stmt], frame: &mut Frame) -> Result<Flow, Error> {
         for stmt in stmts {
-            cooperative_yield();
+            if self.yield_interval <= 1 {
+                cooperative_yield();
+            } else {
+                self.yield_counter += 1;
+                if self.yield_counter >= self.yield_interval {
+                    self.yield_counter = 0;
+                    cooperative_yield();
+                }
+            }
             match stmt {
                 ir::Stmt::Assign {
                     target,
@@ -5964,6 +5981,8 @@ impl<'a> Interpreter<'a> {
             active_scope_key: scope_key,
             module_floor: 0,
             depth: 0,
+            yield_interval: self.yield_interval,
+            yield_counter: 0,
             exports: self.exports.clone(),
             modes: Rc::clone(&self.modes),
             module_modes: self.module_modes.clone(),

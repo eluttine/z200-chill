@@ -62,5 +62,12 @@ asserts end-to-end delivery invariants.
 - Process definitions outside the module declaration list are not supported.
 - Generic region/process templates are not implemented.
 
+## Scheduler stress testing
+
+`Z200C_YIELD_INTERVAL=n` changes the cooperative yield cadence for testing. The default
+is `1` (yield at every action). The CLI integration suite runs `examples/pipeline` with
+several intervals to exercise different interleavings while asserting the same
+end-to-end invariants.
+
 The scheduler is an execution foundation for the supported subset, not yet a complete
 implementation of Z.200 clause 11.

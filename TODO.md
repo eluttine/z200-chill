@@ -210,7 +210,8 @@ deferred.
       calls, task-only `IN` procedure validation, and grant-kind preservation.
 - [x] Mutually exclusive direct task-object field access and `TERMINATE`-based task
       worker termination.
-- [ ] Concurrency scheduler stress/variation tests.
+- [x] Scheduler yield-interval testing and pipeline runs across multiple
+      interleavings.
 
 ## 8. Cleanup
 
