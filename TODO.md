@@ -208,8 +208,9 @@ deferred.
       FIFO/priority message ordering.
 - [x] Task object modes with per-object task workers, asynchronous queued component
       calls, task-only `IN` procedure validation, and grant-kind preservation.
-- [ ] Mutually exclusive direct task-object field access and task-object lifetime
-      termination.
+- [x] Mutually exclusive direct task-object field access and `TERMINATE`-based task
+      worker termination.
+- [ ] Concurrency scheduler stress/variation tests.
 
 ## 8. Cleanup
 

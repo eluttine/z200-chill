@@ -10,7 +10,8 @@ Z.200 requirements.
 - `NEWMODE Name = REGION SPEC/BODY ... END;` with per-object mutual exclusion on
   component method calls
 - `NEWMODE Name = TASK SPEC/BODY ... END;` with a per-object task worker processing
-  queued component procedure calls asynchronously
+  queued component procedure calls asynchronously; direct field access is serialized
+  with the task worker, and `TERMINATE` stops an allocated task worker
 - paired `MODULE SPEC` / `MODULE BODY` definitions with the same name,
 - variable components,
 - procedure components and static method calls `object.Method(...)`,
@@ -90,7 +91,6 @@ Z.200 requirements.
 - public/private component visibility and `GRANT` inside module-mode specs,
 - generic moreta templates,
 - complete `Mode!Component` name preservation in grant files,
-- mutually exclusive direct field access on task objects,
 - grant-file encoding for named set modes.
 
 These exclusions are deliberate. Adding them should be a separate design step rather

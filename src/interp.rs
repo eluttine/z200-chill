@@ -674,6 +674,7 @@ struct ScheduleState {
     task_jobs: HashMap<usize, VecDeque<TaskJob>>,
     task_waiters: HashMap<usize, Vec<ProcessEntry>>,
     task_workers: HashSet<usize>,
+    task_stopped: HashSet<usize>,
     region_owner: HashMap<usize, usize>,
     region_waiters: HashMap<usize, Vec<ProcessEntry>>,
     object_owner: HashMap<usize, usize>,
@@ -3578,6 +3579,9 @@ impl<'a> Interpreter<'a> {
                                 (var.value.clone(), var.ty)
                             };
                             if let Type::Moreta(id) = ty {
+                                if self.modes.get_moreta(id).kind == crate::ast::MoretaKind::Task {
+                                    self.stop_task_worker(Rc::as_ptr(&cell) as usize)?;
+                                }
                                 if let Some((_, destructor_span)) = self.modes.moreta_destructor(id)
                                 {
                                     self.invoke_component_on_value(
@@ -4032,8 +4036,21 @@ impl<'a> Interpreter<'a> {
             ir::Expr::Field {
                 base, field, span, ..
             } => {
-                let value = self.eval_ir(base)?;
-                read_field(value, field, *span)
+                let object = match base.as_ref() {
+                    ir::Expr::Name { name, .. } => self.task_object_key(name),
+                    _ => None,
+                };
+                if let Some(object) = object {
+                    self.acquire_object(object)?;
+                }
+                let result = (|| {
+                    let value = self.eval_ir(base)?;
+                    read_field(value, field, *span)
+                })();
+                if let Some(object) = object {
+                    self.release_object(object);
+                }
+                result
             }
             ir::Expr::Binary {
                 op,
@@ -4183,6 +4200,13 @@ impl<'a> Interpreter<'a> {
         let region_object = mode_kind == crate::ast::MoretaKind::Region;
         let object_key = Rc::as_ptr(&object_cell) as usize;
         if mode_kind == crate::ast::MoretaKind::Task && dispatch_task {
+            if self.scheduler.borrow().task_stopped.contains(&object_key) {
+                return Err(Error::exception(
+                    "EMPTY",
+                    span,
+                    "EMPTY: task object has terminated",
+                ));
+            }
             let mut values = Vec::with_capacity(args.len());
             for arg in args {
                 let CallArgument::Value(value) = arg else {
@@ -5562,6 +5586,17 @@ impl<'a> Interpreter<'a> {
         Some((received, sender))
     }
 
+    fn task_object_key(&self, name: &str) -> Option<usize> {
+        let cell = self.find_var_cell(name)?;
+        let Type::Moreta(id) = cell.borrow().ty else {
+            return None;
+        };
+        if self.modes.get_moreta(id).kind != crate::ast::MoretaKind::Task {
+            return None;
+        }
+        Some(Rc::as_ptr(&cell) as usize)
+    }
+
     fn event_location(&self, name: &str, span: Span) -> Result<(usize, Option<usize>), Error> {
         let cell = self
             .find_var_cell(name)
@@ -5704,24 +5739,34 @@ impl<'a> Interpreter<'a> {
                 path,
                 ty,
             } => {
-                let value = self.convert(value, *ty, span)?;
-                let index = match index {
-                    Some(index) => {
-                        let index_value = self.eval_ir(index)?;
-                        let (index, _) = self.expect_int(index_value, index.span())?;
-                        Some(index)
-                    }
-                    None => None,
-                };
-                let cell = self.find_var_cell(root).ok_or_else(|| {
-                    Error::coded("E0505", span, format!("unknown variable `{root}`"))
-                })?;
-                let mut var = cell.borrow_mut();
-                let target = match index {
-                    Some(index) => array_element_mut(&mut var.value, index, span)?,
-                    None => &mut var.value,
-                };
-                assign_path(target, path, value, span)
+                let object = self.task_object_key(root);
+                if let Some(object) = object {
+                    self.acquire_object(object)?;
+                }
+                let result = (|| {
+                    let value = self.convert(value, *ty, span)?;
+                    let index = match index {
+                        Some(index) => {
+                            let index_value = self.eval_ir(index)?;
+                            let (index, _) = self.expect_int(index_value, index.span())?;
+                            Some(index)
+                        }
+                        None => None,
+                    };
+                    let cell = self.find_var_cell(root).ok_or_else(|| {
+                        Error::coded("E0505", span, format!("unknown variable `{root}`"))
+                    })?;
+                    let mut var = cell.borrow_mut();
+                    let target = match index {
+                        Some(index) => array_element_mut(&mut var.value, index, span)?,
+                        None => &mut var.value,
+                    };
+                    assign_path(target, path, value, span)
+                })();
+                if let Some(object) = object {
+                    self.release_object(object);
+                }
+                result
             }
             ir::AssignTarget::Index {
                 name,
@@ -5946,6 +5991,27 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    fn stop_task_worker(&mut self, object_key: usize) -> Result<(), Error> {
+        self.acquire_object(object_key)?;
+        {
+            let mut scheduler = self.scheduler.borrow_mut();
+            scheduler.task_stopped.insert(object_key);
+            scheduler.task_jobs.remove(&object_key);
+            if let Some(entry) = scheduler
+                .task_waiters
+                .get_mut(&object_key)
+                .and_then(|waiters| waiters.pop())
+            {
+                scheduler.ready.push_back(Runnable {
+                    input: ProcessInput::TaskReady,
+                    entry,
+                });
+            }
+        }
+        self.release_object(object_key);
+        Ok(())
+    }
+
     fn start_task_worker(&mut self, cell: VarCell, span: Span) -> Result<(), Error> {
         let object_key = Rc::as_ptr(&cell) as usize;
         {
@@ -5977,6 +6043,14 @@ impl<'a> Interpreter<'a> {
                     yielder_slot.set(current as *const _);
                     CURRENT_YIELDER.with(|slot| slot.set(current as *const _));
                     loop {
+                        if child.scheduler.borrow().task_stopped.contains(&object_key) {
+                            child
+                                .scheduler
+                                .borrow_mut()
+                                .task_workers
+                                .remove(&object_key);
+                            return Ok(());
+                        }
                         let job = {
                             let mut scheduler = child.scheduler.borrow_mut();
                             scheduler
@@ -5986,6 +6060,14 @@ impl<'a> Interpreter<'a> {
                         };
                         let Some(job) = job else {
                             let _ = cooperative_task_wait(object_key)?;
+                            if child.scheduler.borrow().task_stopped.contains(&object_key) {
+                                child
+                                    .scheduler
+                                    .borrow_mut()
+                                    .task_workers
+                                    .remove(&object_key);
+                                return Ok(());
+                            }
                             continue;
                         };
                         child.locals.push(Scope::default());
@@ -5996,6 +6078,7 @@ impl<'a> Interpreter<'a> {
                             .expect("task scope")
                             .vars
                             .insert(temp.clone(), Rc::clone(&cell_slot));
+                        child.acquire_object(object_key)?;
                         let result = child.call_method(
                             &temp,
                             job.proc_span,
@@ -6003,6 +6086,7 @@ impl<'a> Interpreter<'a> {
                             span,
                             false,
                         );
+                        child.release_object(object_key);
                         child.locals.pop();
                         result?;
                     }
