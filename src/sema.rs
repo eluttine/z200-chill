@@ -3475,6 +3475,30 @@ impl Checker {
                     };
                     Ok(access)
                 };
+            let transfer_access = |checker: &mut Checker,
+                                   arg: &Expr|
+             -> Result<
+                (bool, Option<crate::types::ArrayDimension>, bool),
+                Error,
+            > {
+                let Expr::Name { span, .. } = arg else {
+                    return Err(Error::coded(
+                        "E0400",
+                        arg.span(),
+                        "transfer-location argument must be a location",
+                    ));
+                };
+                let ty = checker.check_expr(arg)?;
+                match ty {
+                    Type::Access(access) => Ok((access.indexed, access.index, false)),
+                    Type::Text { .. } => Ok((false, None, true)),
+                    _ => Err(Error::coded(
+                        "E0400",
+                        *span,
+                        "expected an ACCESS or TEXT location",
+                    )),
+                }
+            };
             let mut has_index = false;
             let mut has_target = false;
             let mut has_usage = false;
@@ -3524,7 +3548,7 @@ impl Checker {
                             "GETASSOCIATION takes an access location",
                         ));
                     };
-                    access_type(self, access)?;
+                    transfer_access(self, access)?;
                     Some(Type::Ref(crate::types::RefTarget::Association))
                 }
                 AssociationOp::GetUsage => {
@@ -3535,7 +3559,7 @@ impl Checker {
                             "GETUSAGE takes an access location",
                         ));
                     };
-                    access_type(self, access)?;
+                    transfer_access(self, access)?;
                     Some(self.builtin_set_type("USAGE").ok_or_else(|| {
                         Error::coded("E0400", span, "internal: missing USAGE mode")
                     })?)
@@ -3548,7 +3572,7 @@ impl Checker {
                             "OUTOFFILE takes an access location",
                         ));
                     };
-                    access_type(self, access)?;
+                    transfer_access(self, access)?;
                     Some(Type::Bool)
                 }
                 AssociationOp::Modify => {
@@ -3588,7 +3612,7 @@ impl Checker {
                             "CONNECT takes an access, an association, and optional usage, where, and index expressions",
                         ));
                     }
-                    let access = access_type(self, &args[0])?;
+                    let (indexed, _index_range, is_text) = transfer_access(self, &args[0])?;
                     association_arg(self, &args[1])?;
                     let usage_ty = self.builtin_set_type("USAGE").ok_or_else(|| {
                         Error::coded("E0400", span, "internal: missing USAGE mode")
@@ -3603,7 +3627,7 @@ impl Checker {
                             has_usage = true;
                             next += 1;
                         } else if args.len() == 3 && ty.is_int() {
-                            if !access.indexed {
+                            if !indexed || is_text {
                                 return Err(Error::coded(
                                     "E0400",
                                     span,
@@ -3630,7 +3654,7 @@ impl Checker {
                         }
                     }
                     if let Some(index) = args.get(next) {
-                        if !access.indexed {
+                        if !indexed || is_text {
                             return Err(Error::coded(
                                 "E0400",
                                 span,
@@ -3662,10 +3686,10 @@ impl Checker {
                         return Err(Error::coded(
                             "E0400",
                             span,
-                            "DISCONNECT takes an access location",
+                            "DISCONNECT takes an access or text location",
                         ));
                     };
-                    access_type(self, access)?;
+                    transfer_access(self, access)?;
                     None
                 }
                 AssociationOp::ReadRecord => {

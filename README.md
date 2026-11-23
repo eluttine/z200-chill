@@ -50,5 +50,5 @@ z200-chill/
 │   ├── app/            # Directory-dependency linking example
 │   └── pipeline/       # End-to-end concurrent pipeline example
 └── docs/               # subset.md, manifest.md, grant-file.md, diagnostics.md, ir.md,
-                        # concurrency.md, moreta.md, contexts.md, piecewise.md,
-                        # decisions.md
+                        # concurrency.md, moreta.md, text.md, contexts.md,
+                        # piecewise.md, decisions.md

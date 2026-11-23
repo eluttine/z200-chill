@@ -582,8 +582,14 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
   index to `0` after a transfer.
 - `READTEXT`/`WRITETEXT` accept `TEXT` and `WTEXT` locations in addition to varying
   `CHARS`/`WCHARS` locations. Format text may be a `CHARS` or `WCHARS` literal.
+- `CONNECT`/`DISCONNECT`, `GETUSAGE`, `OUTOFFILE`, and `GETASSOCIATION` accept text
+  locations and operate on their access sub-location. Connected `READTEXT`/`WRITETEXT`
+  transfer sequential file records; disconnected operations remain in-memory.
+- Connected text access is sequential only: indexed text connections and indexed
+  `READTEXT`/`WRITETEXT` are not implemented.
 - `GETTEXTRECORD`, `GETTEXTACCESS`, `SETTEXTRECORD`, and `SETTEXTACCESS` are not
-  implemented; there is no program-visible reference to a text sub-location yet.
+  implemented; there is no program-visible reference to a text sub-location yet. See
+  [text.md](text.md).
 - `BOOLS`, `BOOLS(n)`, and `BOOLS(n) VARYING` are bit-string modes. `B'...'`,
   `O'...'`, and `H'...'` with a closing apostrophe are bit-string literals; without
   the closing apostrophe they are based integer literals (`B'1010` is binary 10).
@@ -632,16 +638,17 @@ implementation is an intentional simplification of Z.200 file handling:
 - `USAGE` and `WHERE` are predefined set modes:
   `USAGE = SET(READONLY, WRITEONLY, READWRITE)` and
   `WHERE = SET(FIRST, SAME, LAST)`.
-- `CONNECT(access, association [, usage [, where [, index]]])` connects an access
-  location; the association must have an existing file. The shorthand `CONNECT(access, association, index)` remains available for
-  indexed access. `FIRST` positions before the first record, `SAME` keeps the current
+- `CONNECT(transfer, association [, usage [, where [, index]]])` connects an `ACCESS`
+  location or the access sub-location of a `TEXT`/`WTEXT` location; the association
+  must have an existing file. Text connections are sequential. The shorthand
+  `CONNECT(access, association, index)` remains available for indexed access. `FIRST` positions before the first record, `SAME` keeps the current
   position, and `LAST` positions after the last record. Indexed positions are offset by
   the access index mode's lower bound.
-- `GETUSAGE(access)` returns the connection's `USAGE` value.
-- `OUTOFFILE(access)` reports whether the last read attempted a record outside the file.
-- `GETASSOCIATION(access)` returns a reference to the connected association location,
-  or `NULL` when the access location is not connected.
-- `DISCONNECT(access)` clears the connection.
+- `GETUSAGE(transfer)` returns the connection's `USAGE` value.
+- `OUTOFFILE(transfer)` reports whether the last read attempted a record outside the file.
+- `GETASSOCIATION(transfer)` returns a reference to the connected association location,
+  or `NULL` when the transfer location is not connected.
+- `DISCONNECT(transfer)` clears the connection.
 - `WRITERECORD(access, text)` appends one line-based record.
 - `READRECORD(access)` returns the next line; `READRECORD(access, target)` stores it in
   a `CHARS` location.

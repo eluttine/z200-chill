@@ -524,6 +524,8 @@ struct Var {
     value: Value,
     /// Actual index of a TEXT/WTEXT location, used as the default transfer cursor.
     text_index: i128,
+    /// Access sub-location of a TEXT/WTEXT location.
+    text_access: Option<Rc<RefCell<AccessState>>>,
 }
 
 impl Var {
@@ -532,6 +534,7 @@ impl Var {
             ty,
             value,
             text_index: 0,
+            text_access: None,
         }
     }
 }
@@ -2738,19 +2741,39 @@ impl<'a> Interpreter<'a> {
                 let cell = self.find_var_cell(first).ok_or_else(|| {
                     Error::coded("E0505", span, format!("unknown variable `{first}`"))
                 })?;
-                let (access, previous_position) = {
+                let (indexed, index_range, is_text, previous_position) = {
                     let var = cell.borrow();
-                    let Type::Access(access) = var.ty else {
-                        return Err(Error::coded("E0507", span, "expected an ACCESS location"));
-                    };
-                    let previous_position = match &var.value {
-                        Value::Access(None) => None,
-                        Value::Access(Some(state)) => Some(state.borrow().position),
-                        _ => {
-                            return Err(Error::coded("E0507", span, "expected an ACCESS location"))
+                    match var.ty {
+                        Type::Access(access) => {
+                            let previous_position = match &var.value {
+                                Value::Access(None) => None,
+                                Value::Access(Some(state)) => Some(state.borrow().position),
+                                _ => {
+                                    return Err(Error::coded(
+                                        "E0507",
+                                        span,
+                                        "expected an ACCESS location",
+                                    ))
+                                }
+                            };
+                            (access.indexed, access.index, false, previous_position)
                         }
-                    };
-                    (access, previous_position)
+                        Type::Text { .. } => (
+                            false,
+                            None,
+                            true,
+                            var.text_access
+                                .as_ref()
+                                .map(|state| state.borrow().position),
+                        ),
+                        _ => {
+                            return Err(Error::coded(
+                                "E0507",
+                                span,
+                                "expected an ACCESS or TEXT location",
+                            ))
+                        }
+                    }
                 };
                 let path = association.borrow().path.clone();
                 let contents = std::fs::read_to_string(&path).map_err(|error| {
@@ -2771,10 +2794,17 @@ impl<'a> Interpreter<'a> {
                 };
                 let position = match index {
                     Some(index) => {
+                        if is_text {
+                            return Err(Error::coded(
+                                "E0507",
+                                span,
+                                "indexed TEXT access is not implemented",
+                            ));
+                        }
                         let value = self.eval_ir(index)?;
                         let (value, _) = self.expect_int(value, index.span())?;
-                        check_index_range(access.index, value, span)?;
-                        let lower = access.index.map(|range| range.low).unwrap_or(0);
+                        check_index_range(index_range, value, span)?;
+                        let lower = index_range.map(|range| range.low).unwrap_or(0);
                         base + value - lower
                     }
                     None => base,
@@ -2783,16 +2813,23 @@ impl<'a> Interpreter<'a> {
                     .find_var_cell(first)
                     .expect("access cell was just found");
                 let mut var = cell.borrow_mut();
-                association.borrow_mut().indexable = access.indexed;
-                var.value = Value::Access(Some(Rc::new(RefCell::new(AccessState {
+                if !is_text {
+                    association.borrow_mut().indexable = indexed;
+                }
+                let state = Rc::new(RefCell::new(AccessState {
                     association: Some(association),
                     association_name: Some(second.to_owned()),
-                    indexed: access.indexed,
-                    index_range: access.index,
+                    indexed,
+                    index_range,
                     position,
                     usage,
                     out_of_file: false,
-                }))));
+                }));
+                if is_text {
+                    var.text_access = Some(state);
+                } else {
+                    var.value = Value::Access(Some(state));
+                }
                 Ok(Value::Undefined)
             }
             AssociationOp::Disconnect => {
@@ -2800,10 +2837,19 @@ impl<'a> Interpreter<'a> {
                     Error::coded("E0505", span, format!("unknown variable `{first}`"))
                 })?;
                 let mut var = cell.borrow_mut();
-                let Value::Access(state) = &mut var.value else {
-                    return Err(Error::coded("E0507", span, "expected an ACCESS location"));
+                let is_text = matches!(var.ty, Type::Text { .. });
+                let disconnected = match &mut var.value {
+                    Value::Access(state) => state.take().is_some(),
+                    _ if is_text => var.text_access.take().is_some(),
+                    _ => {
+                        return Err(Error::coded(
+                            "E0507",
+                            span,
+                            "expected an ACCESS or TEXT location",
+                        ))
+                    }
                 };
-                if state.take().is_none() {
+                if !disconnected {
                     return Err(Error::exception(
                         "NOTCONNECTED",
                         span,
@@ -2818,12 +2864,22 @@ impl<'a> Interpreter<'a> {
                 })?;
                 let association_name = {
                     let var = cell.borrow();
-                    let Value::Access(state) = &var.value else {
-                        return Err(Error::coded("E0507", span, "expected an ACCESS location"));
-                    };
-                    state
-                        .as_ref()
-                        .and_then(|state| state.borrow().association_name.clone())
+                    match &var.value {
+                        Value::Access(state) => state
+                            .as_ref()
+                            .and_then(|state| state.borrow().association_name.clone()),
+                        _ if matches!(var.ty, Type::Text { .. }) => var
+                            .text_access
+                            .as_ref()
+                            .and_then(|state| state.borrow().association_name.clone()),
+                        _ => {
+                            return Err(Error::coded(
+                                "E0507",
+                                span,
+                                "expected an ACCESS or TEXT location",
+                            ))
+                        }
+                    }
                 };
                 let Some(association_name) = association_name else {
                     return Ok(Value::Ref(None));
@@ -3024,14 +3080,120 @@ impl<'a> Interpreter<'a> {
             .find_var_cell(name)
             .ok_or_else(|| Error::coded("E0505", span, format!("unknown variable `{name}`")))?;
         let var = cell.borrow();
-        let Value::Access(Some(state)) = &var.value else {
-            return Err(Error::exception(
+        let state = match &var.value {
+            Value::Access(state) => state.clone(),
+            _ if matches!(var.ty, Type::Text { .. }) => var.text_access.clone(),
+            _ => {
+                return Err(Error::coded(
+                    "E0507",
+                    span,
+                    "expected an ACCESS or TEXT location",
+                ))
+            }
+        };
+        state.ok_or_else(|| {
+            Error::exception(
                 "NOTCONNECTED",
                 span,
                 "NOTCONNECTED: access location is not connected",
-            ));
+            )
+        })
+    }
+
+    fn read_text_record(
+        &mut self,
+        access: &Rc<RefCell<AccessState>>,
+        span: Span,
+    ) -> Result<Option<String>, Error> {
+        let (association, position, usage, out_of_file) = {
+            let access = access.borrow();
+            let Some(association) = access.association.clone() else {
+                return Err(Error::exception(
+                    "NOTCONNECTED",
+                    span,
+                    "NOTCONNECTED: text location is not connected",
+                ));
+            };
+            (
+                association,
+                access.position,
+                access.usage,
+                access.out_of_file,
+            )
         };
-        Ok(state.clone())
+        if usage == USAGE_WRITEONLY {
+            return Err(Error::exception(
+                "READFAIL",
+                span,
+                "READFAIL: text access location is write-only",
+            ));
+        }
+        if out_of_file {
+            return Err(Error::exception(
+                "READFAIL",
+                span,
+                "READFAIL: text access location is at end of file",
+            ));
+        }
+        if position < 0 {
+            return Err(Error::exception(
+                "RANGEFAIL",
+                span,
+                "RANGEFAIL: negative record index",
+            ));
+        }
+        let path = association.borrow().path.clone();
+        let contents = std::fs::read_to_string(&path)
+            .map_err(|error| Error::exception("READFAIL", span, format!("READFAIL: {error}")))?;
+        let lines: Vec<&str> = contents.lines().collect();
+        let Some(record) = lines.get(position as usize) else {
+            access.borrow_mut().out_of_file = true;
+            return Ok(None);
+        };
+        {
+            let mut access = access.borrow_mut();
+            access.position = position + 1;
+            access.out_of_file = false;
+        }
+        Ok(Some((*record).to_owned()))
+    }
+
+    fn write_text_record(
+        &mut self,
+        access: &Rc<RefCell<AccessState>>,
+        record: &str,
+        span: Span,
+    ) -> Result<(), Error> {
+        let (association, position, usage) = {
+            let access = access.borrow();
+            let Some(association) = access.association.clone() else {
+                return Err(Error::exception(
+                    "NOTCONNECTED",
+                    span,
+                    "NOTCONNECTED: text location is not connected",
+                ));
+            };
+            (association, access.position, access.usage)
+        };
+        if usage == USAGE_READONLY {
+            return Err(Error::exception(
+                "WRITEFAIL",
+                span,
+                "WRITEFAIL: text access location is read-only",
+            ));
+        }
+        if position < 0 {
+            return Err(Error::exception(
+                "RANGEFAIL",
+                span,
+                "RANGEFAIL: negative record index",
+            ));
+        }
+        let path = association.borrow().path.clone();
+        write_line_at(&path, position as usize, record)
+            .map_err(|error| Error::exception("WRITEFAIL", span, format!("WRITEFAIL: {error}")))?;
+        access.borrow_mut().position = position + 1;
+        Ok(())
     }
 
     fn exec_block(
@@ -3824,7 +3986,7 @@ impl<'a> Interpreter<'a> {
                 let cell = self.find_var_cell(target).ok_or_else(|| {
                     Error::coded("E0505", *span, format!("unknown variable `{target}`"))
                 })?;
-                let (source, text_index, is_text) = {
+                let (source, text_index, is_text, text_access) = {
                     let var = cell.borrow();
                     let source = match &var.value {
                         Value::String(text) => text.clone(),
@@ -3832,7 +3994,12 @@ impl<'a> Interpreter<'a> {
                             return Err(Error::coded("E0500", *span, "text location must be CHARS"))
                         }
                     };
-                    (source, var.text_index, matches!(var.ty, Type::Text { .. }))
+                    (
+                        source,
+                        var.text_index,
+                        matches!(var.ty, Type::Text { .. }),
+                        var.text_access.clone(),
+                    )
                 };
                 let mut cursor = match index {
                     Some(index) => {
@@ -3846,7 +4013,18 @@ impl<'a> Interpreter<'a> {
                 if cursor < 0 {
                     return Err(textfail(*span, "negative text index"));
                 }
-                let mut chars: Vec<char> = source.chars().collect();
+                let mut chars: Vec<char> = if matches!(kind, crate::builtins::TextIo::Read) {
+                    if let Some(access) = &text_access {
+                        match self.read_text_record(access, *span)? {
+                            Some(record) => record.chars().collect(),
+                            None => return Ok(Value::Undefined),
+                        }
+                    } else {
+                        source.chars().collect()
+                    }
+                } else {
+                    source.chars().collect()
+                };
                 let mut io_index = 0;
                 match kind {
                     crate::builtins::TextIo::Write => {
@@ -3893,16 +4071,22 @@ impl<'a> Interpreter<'a> {
                                 }
                             }
                         }
-                        let mut var = cell.borrow_mut();
-                        let Value::String(text) = &mut var.value else {
-                            return Err(Error::coded(
-                                "E0500",
-                                *span,
-                                "text location must be CHARS",
-                            ));
-                        };
-                        *text = chars.into_iter().collect();
-                        var.text_index = 0;
+                        let rendered: String = chars.into_iter().collect();
+                        {
+                            let mut var = cell.borrow_mut();
+                            let Value::String(text) = &mut var.value else {
+                                return Err(Error::coded(
+                                    "E0500",
+                                    *span,
+                                    "text location must be CHARS",
+                                ));
+                            };
+                            *text = rendered.clone();
+                            var.text_index = 0;
+                        }
+                        if let Some(access) = &text_access {
+                            self.write_text_record(access, &rendered, *span)?;
+                        }
                     }
                     crate::builtins::TextIo::Read => {
                         for op in ops {
@@ -3956,6 +4140,18 @@ impl<'a> Interpreter<'a> {
                                     apply_io_read(&chars, &mut cursor, *control, *span)?;
                                 }
                             }
+                        }
+                        if let Some(_access) = &text_access {
+                            let record: String = chars.into_iter().collect();
+                            let mut var = cell.borrow_mut();
+                            let Value::String(text) = &mut var.value else {
+                                return Err(Error::coded(
+                                    "E0500",
+                                    *span,
+                                    "text location must be CHARS",
+                                ));
+                            };
+                            *text = record;
                         }
                     }
                 }
