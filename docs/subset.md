@@ -48,7 +48,8 @@ Current scope includes:
 - region-call mutual exclusion, region object modes, and task object modes with
   per-object task workers;
 - relative, absolute, and cyclic timing actions with `DURATION`/`TIME` values;
-- arrays including slices, multidimensional arrays, literals, and arrays of structures;
+- arrays including slices, multidimensional arrays, literals, arrays of structures, sets,
+  powersets, and module-mode objects;
 - `REF`/`PTR`/`ROW` modes, `NULL`, `ALLOCATE`/`GETSTACK`/`TERMINATE`, and
   dereferencing;
 - narrow and wide text modes (`TEXT(n)`, `WTEXT(n)`), text I/O, text index
@@ -298,6 +299,8 @@ mode.
   shape and element mode.
 - Multidimensional array elements can be read and assigned through field selection
   (`a(i, j).field := value`).
+- Array elements may be structures, sets, powersets, associations, access modes, or
+  module-mode objects. Arrays of references, rows, and buffers remain unsupported.
 - Array slices currently apply to one-dimensional arrays only.
 - Array literals currently apply to one-dimensional arrays only.
 

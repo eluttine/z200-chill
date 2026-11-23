@@ -1598,6 +1598,36 @@ impl Checker {
                 Type::Row(target)
             });
         }
+        if !mode.arrays.is_empty() {
+            let element_mode = ModeRef {
+                name: mode.name.clone(),
+                arrays: Vec::new(),
+                string_length: mode.string_length,
+                varying: mode.varying,
+                access: mode.access,
+                access_wide: mode.access_wide,
+                powerset: mode.powerset,
+                reference: mode.reference,
+                row: mode.row,
+                buffer_element: None,
+                access_indexed: mode.access_indexed,
+                access_index: mode.access_index,
+                span: mode.span,
+            };
+            let base = self.resolve_mode(&element_mode)?;
+            let Some(element) = crate::types::ArrayElement::from_type(base) else {
+                return Err(Error::coded(
+                    "E0400",
+                    mode.span,
+                    format!(
+                        "array elements must be value modes, found {}",
+                        base.describe()
+                    ),
+                ));
+            };
+            return crate::types::array_type_from_bounds(&mode.arrays, element)
+                .ok_or_else(|| Error::coded("E0400", mode.span, "unsupported array dimensions"));
+        }
         if mode.powerset {
             let member = match crate::types::resolve_mode(&mode.name) {
                 Some(Type::Int(kind)) => crate::types::PowerSetMember::Int(kind),
@@ -1625,36 +1655,6 @@ impl Checker {
                     }),
                 wide: mode.access_wide,
             }));
-        }
-        if !mode.arrays.is_empty() {
-            let element_mode = ModeRef {
-                name: mode.name.clone(),
-                arrays: Vec::new(),
-                string_length: mode.string_length,
-                varying: mode.varying,
-                access: mode.access,
-                access_wide: mode.access_wide,
-                powerset: mode.powerset,
-                reference: mode.reference,
-                row: mode.row,
-                buffer_element: None,
-                access_indexed: mode.access_indexed,
-                access_index: mode.access_index,
-                span: mode.span,
-            };
-            let base = self.resolve_mode(&element_mode)?;
-            let Some(element) = crate::types::ArrayElement::from_type(base) else {
-                return Err(Error::coded(
-                    "E0400",
-                    mode.span,
-                    format!(
-                        "array elements must be scalar or structure modes, found {}",
-                        base.describe()
-                    ),
-                ));
-            };
-            return crate::types::array_type_from_bounds(&mode.arrays, element)
-                .ok_or_else(|| Error::coded("E0400", mode.span, "unsupported array dimensions"));
         }
         if let Some(length) = mode.string_length {
             return Ok(match mode.name.as_str() {

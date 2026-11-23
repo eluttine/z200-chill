@@ -1708,7 +1708,7 @@ impl<'a> Parser<'a> {
                 varying: element.varying,
                 access: false,
                 access_wide: false,
-                powerset: false,
+                powerset: element.powerset,
                 reference: false,
                 row: false,
                 buffer_element: None,

@@ -54,6 +54,11 @@ pub enum Scalar {
 pub enum ArrayElement {
     Scalar(Scalar),
     Struct(ModeId),
+    Set(SetId),
+    PowerSet(PowerSetType),
+    Moreta(MoretaId),
+    Association,
+    Access(AccessType),
 }
 
 impl ArrayElement {
@@ -77,12 +82,12 @@ impl ArrayElement {
                 Some(Self::Scalar(Scalar::BoundedBits { length, varying }))
             }
             Type::Struct(id) => Some(Self::Struct(id)),
-            Type::Association
-            | Type::Access(_)
-            | Type::PowerSet(_)
-            | Type::Set(_)
-            | Type::Moreta(_)
-            | Type::IntLiteral
+            Type::Set(id) => Some(Self::Set(id)),
+            Type::PowerSet(set) => Some(Self::PowerSet(set)),
+            Type::Moreta(id) => Some(Self::Moreta(id)),
+            Type::Association => Some(Self::Association),
+            Type::Access(access) => Some(Self::Access(access)),
+            Type::IntLiteral
             | Type::Array(_)
             | Type::MultiArray(_)
             | Type::DynamicArray { .. }
@@ -104,6 +109,11 @@ impl ArrayElement {
         match self {
             Self::Scalar(scalar) => Type::from_scalar(scalar),
             Self::Struct(id) => Type::Struct(id),
+            Self::Set(id) => Type::Set(id),
+            Self::PowerSet(set) => Type::PowerSet(set),
+            Self::Moreta(id) => Type::Moreta(id),
+            Self::Association => Type::Association,
+            Self::Access(access) => Type::Access(access),
         }
     }
 }
@@ -545,6 +555,13 @@ pub fn resolve_mode_ref(
             RefTarget::from_type(base).map(Type::Row)
         };
     }
+    if !mode.arrays.is_empty() {
+        let mut element_mode = mode.clone();
+        element_mode.arrays.clear();
+        let base = resolve_mode_ref(&element_mode, mode_names)?;
+        let element = ArrayElement::from_type(base)?;
+        return array_type_from_bounds(&mode.arrays, element);
+    }
     if mode.powerset {
         let member = match resolve_mode(&mode.name)? {
             Type::Int(kind) => PowerSetMember::Int(kind),
@@ -609,12 +626,6 @@ pub fn resolve_mode_ref(
             },
         },
         None => base,
-    };
-    let base = if mode.arrays.is_empty() {
-        base
-    } else {
-        let element = ArrayElement::from_type(base)?;
-        array_type_from_bounds(&mode.arrays, element)?
     };
     if mode.reference {
         return RefTarget::from_type(base).map(Type::Ref);

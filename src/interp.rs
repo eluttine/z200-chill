@@ -5907,7 +5907,7 @@ impl<'a> Interpreter<'a> {
                 Type::Row(target)
             });
         }
-        if mode.powerset {
+        if mode.powerset && mode.arrays.is_empty() {
             let member = match crate::types::resolve_mode_ref(
                 &ModeRef {
                     name: mode.name.clone(),
@@ -5940,7 +5940,7 @@ impl<'a> Interpreter<'a> {
             };
             return Ok(Type::PowerSet(crate::types::PowerSetType { member }));
         }
-        if mode.access {
+        if mode.access && mode.arrays.is_empty() {
             return Ok(Type::Access(crate::types::AccessType {
                 indexed: mode.access_indexed,
                 index: mode
@@ -8177,7 +8177,7 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
         ),
         Type::Array(array) => {
             let element = array.element.ty();
-            let value = if matches!(element, Type::Struct(_)) {
+            let value = if matches!(element, Type::Struct(_) | Type::Moreta(_)) {
                 default_value(modes, element)
             } else {
                 Value::Undefined
@@ -8194,7 +8194,7 @@ fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
         Type::Set(_) => Value::Undefined,
         Type::MultiArray(array) => {
             let element = array.element.ty();
-            let value = if matches!(element, Type::Struct(_)) {
+            let value = if matches!(element, Type::Struct(_) | Type::Moreta(_)) {
                 default_value(modes, element)
             } else {
                 Value::Undefined
