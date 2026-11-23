@@ -1,0 +1,1 @@
+structure mode `A` is recursively embedded without REF/ROW indirection

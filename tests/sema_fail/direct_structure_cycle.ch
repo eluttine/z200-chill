@@ -1,0 +1,3 @@
+M: MODULE
+  NEWMODE A = STRUCT(x A);
+END M;

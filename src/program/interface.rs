@@ -187,6 +187,7 @@ pub fn add_external_modes(
                     modes.modes.push(StructMode {
                         name: mode.name.clone(),
                         path: None,
+                        span: None,
                         // External modes are never the local defining module.
                         package: usize::MAX,
                         module: usize::MAX,

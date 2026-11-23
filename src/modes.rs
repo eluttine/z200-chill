@@ -12,6 +12,7 @@ pub struct StructMode {
     pub name: String,
     /// Qualified `Mode!Component` path for nested modes.
     pub path: Option<String>,
+    pub span: Option<crate::lexer::Span>,
     pub package: usize,
     pub module: usize,
     pub package_name: Option<String>,

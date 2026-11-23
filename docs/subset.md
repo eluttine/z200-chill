@@ -631,9 +631,9 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
 - Dereferencing `NULL` or a terminated reference raises `EMPTY`.
 - References, pointers, and rows are encodable in grant interfaces, including
   references to structure, set, and moreta modes. Arrays may contain `REF`, `ROW`, and
-  `PTR` elements. References to fields and array elements are supported. Nested
-  `REF`/`ROW` modes, references to whole array targets, and mutually recursive
-  structure modes are not implemented yet. Self-referential structure modes (such as linked-list
+  `PTR` elements. References to fields and array elements are supported. Mutually
+  recursive structure modes are supported through `REF`/`ROW` indirection. Nested
+  `REF`/`ROW` modes and references to whole array targets are not implemented yet. Self-referential structure modes (such as linked-list
   nodes) are supported.
 
 ### 5.8 Associations and access modes (simplified)

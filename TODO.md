@@ -194,6 +194,8 @@ deferred.
 - [x] Array elements for sets, powersets, associations, access modes, module-mode
       objects, `REF`, `ROW`, and `PTR`, plus arrays of powerset modes.
 - [x] References to fields and array elements, including multidimensional elements.
+- [x] Forward-declared, mutually recursive structure modes through `REF`/`ROW`, with
+      direct value-cycle rejection.
 - [x] Complete `Mode!Component` path preservation in mode symbols and grant files.
 - [x] First concurrency layer: `PROCESS`, `START`, `STOP`, a cooperative
       action-boundary scheduler, shared module locations, and process-local state.

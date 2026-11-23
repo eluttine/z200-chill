@@ -42,6 +42,17 @@ pub(super) fn build_modes(program: &Program) -> Result<ModeBuildResult, Error> {
     for (index, module) in program.modules.iter().enumerate() {
         let mut local = HashMap::new();
         let mut resolution = HashMap::new();
+        let mut predeclared = HashMap::new();
+        predeclare_struct_modes(
+            &module.declarations,
+            index,
+            module.package,
+            module.package_name.clone(),
+            module.name.clone(),
+            &mut resolution,
+            &mut predeclared,
+            &mut table,
+        );
         process_module_modes(
             module,
             index,
@@ -49,12 +60,14 @@ pub(super) fn build_modes(program: &Program) -> Result<ModeBuildResult, Error> {
             module.package_name.clone(),
             &mut local,
             &mut resolution,
+            &predeclared,
             &mut table,
             &mut span_maps,
             &mut moreta_sources,
         )?;
         top_maps.push(local);
     }
+    detect_structure_cycles(&table)?;
 
     Ok((table, top_maps, span_maps, moreta_sources))
 }
@@ -67,6 +80,7 @@ fn process_module_modes(
     top_package_name: Option<String>,
     local: &mut HashMap<String, Type>,
     resolution: &mut HashMap<String, Type>,
+    predeclared: &HashMap<String, ModeId>,
     table: &mut ModeTable,
     span_maps: &mut HashMap<Span, HashMap<String, Type>>,
     moreta_sources: &mut HashMap<crate::types::MoretaId, MoretaSource>,
@@ -84,6 +98,7 @@ fn process_module_modes(
             module.name.clone(),
             None,
             resolution,
+            predeclared,
             table,
             moreta_sources,
         )?;
@@ -122,11 +137,98 @@ fn process_module_modes(
             top_package_name.clone(),
             &mut child_local,
             &mut child_resolution,
+            &HashMap::new(),
             table,
             span_maps,
             moreta_sources,
         )
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn predeclare_struct_modes(
+    declarations: &[Declaration],
+    top: usize,
+    top_package: usize,
+    top_package_name: Option<String>,
+    module_name: Option<String>,
+    resolution: &mut HashMap<String, Type>,
+    predeclared: &mut HashMap<String, ModeId>,
+    table: &mut ModeTable,
+) {
+    for declaration in declarations {
+        let Declaration::Mode(mode_def) = declaration else {
+            continue;
+        };
+        if !matches!(mode_def.body, crate::ast::ModeDefinitionBody::Struct(_)) {
+            continue;
+        }
+        let id = ModeId(table.modes.len());
+        table.modes.push(StructMode {
+            name: mode_def.name.clone(),
+            path: None,
+            span: Some(mode_def.span),
+            package: top_package,
+            module: top,
+            package_name: top_package_name.clone(),
+            module_name: module_name.clone(),
+            fields: Vec::new(),
+            forbidden: std::collections::HashSet::new(),
+        });
+        predeclared.insert(mode_def.name.clone(), id);
+        resolution.insert(mode_def.name.clone(), Type::Struct(id));
+    }
+}
+
+fn detect_structure_cycles(table: &ModeTable) -> Result<(), Error> {
+    fn visit(
+        index: usize,
+        table: &ModeTable,
+        visiting: &mut HashSet<usize>,
+        done: &mut HashSet<usize>,
+    ) -> Result<(), Error> {
+        if done.contains(&index) {
+            return Ok(());
+        }
+        if !visiting.insert(index) {
+            let mode = &table.modes[index];
+            return Err(Error::new(
+                mode.span
+                    .unwrap_or_else(|| crate::lexer::Span::new(crate::lexer::SourceId(0), 0, 0)),
+                format!(
+                    "structure mode `{}` is recursively embedded without REF/ROW indirection",
+                    mode.name
+                ),
+            ));
+        }
+        for field in &table.modes[index].fields {
+            let mut targets = Vec::new();
+            collect_value_struct_targets(field.ty, &mut targets);
+            for target in targets {
+                visit(target.0, table, visiting, done)?;
+            }
+        }
+        visiting.remove(&index);
+        done.insert(index);
+        Ok(())
+    }
+
+    fn collect_value_struct_targets(ty: Type, out: &mut Vec<ModeId>) {
+        match ty {
+            Type::Struct(id) => out.push(id),
+            Type::Array(array) => collect_value_struct_targets(array.element.ty(), out),
+            Type::MultiArray(array) => collect_value_struct_targets(array.element.ty(), out),
+            Type::DynamicArray { element, .. } => collect_value_struct_targets(element.ty(), out),
+            _ => {}
+        }
+    }
+
+    let mut done = HashSet::new();
+    for index in 0..table.modes.len() {
+        let mut visiting = HashSet::new();
+        visit(index, table, &mut visiting, &mut done)?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -138,23 +240,31 @@ fn build_mode_definition(
     module_name: Option<String>,
     mode_path: Option<String>,
     resolution: &mut HashMap<String, Type>,
+    predeclared: &HashMap<String, ModeId>,
     table: &mut ModeTable,
     moreta_sources: &mut HashMap<crate::types::MoretaId, MoretaSource>,
 ) -> Result<Type, Error> {
     let ty = match &mode_def.body {
         crate::ast::ModeDefinitionBody::Struct(fields) => {
-            // Predeclare the structure so fields may refer to it (directly
-            // or through REF), then resolve and install the fields.
-            let id = ModeId(table.modes.len());
-            table.modes.push(StructMode {
-                name: mode_def.name.clone(),
-                path: mode_path.clone(),
-                package: top_package,
-                module: top,
-                package_name: top_package_name.clone(),
-                module_name: module_name.clone(),
-                fields: Vec::new(),
-                forbidden: std::collections::HashSet::new(),
+            let id = if mode_path.is_none() {
+                predeclared.get(&mode_def.name).copied()
+            } else {
+                None
+            }
+            .unwrap_or_else(|| {
+                let id = ModeId(table.modes.len());
+                table.modes.push(StructMode {
+                    name: mode_def.name.clone(),
+                    path: mode_path.clone(),
+                    span: Some(mode_def.span),
+                    package: top_package,
+                    module: top,
+                    package_name: top_package_name.clone(),
+                    module_name: module_name.clone(),
+                    fields: Vec::new(),
+                    forbidden: std::collections::HashSet::new(),
+                });
+                id
             });
             let ty = Type::Struct(id);
             resolution.insert(mode_def.name.clone(), ty);
@@ -428,6 +538,7 @@ fn build_mode_definition(
                             module_name.clone(),
                             nested_path,
                             resolution,
+                            predeclared,
                             table,
                             moreta_sources,
                         )?;
