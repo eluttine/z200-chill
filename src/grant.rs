@@ -28,6 +28,8 @@ pub struct GrantFile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantMode {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implements: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub module: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -48,6 +50,7 @@ pub enum GrantModeKind {
     Moreta,
     Region,
     Task,
+    Interface,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,6 +149,7 @@ impl GrantFile {
             .filter(|mode| mode.module_name.is_some())
             .map(|mode| GrantMode {
                 name: mode.name.clone(),
+                implements: Vec::new(),
                 module: mode.module_name.clone(),
                 package: mode.package_name.clone(),
                 kind: GrantModeKind::Struct,
@@ -166,11 +170,17 @@ impl GrantFile {
                     .filter(|mode| mode.module_name.is_some())
                     .map(|mode| GrantMode {
                         name: mode.name.clone(),
+                        implements: mode
+                            .implements
+                            .iter()
+                            .map(|id| info.modes.get_moreta(*id).symbol())
+                            .collect(),
                         module: mode.module_name.clone(),
                         package: mode.package_name.clone(),
                         kind: match mode.kind {
                             crate::ast::MoretaKind::Region => GrantModeKind::Region,
                             crate::ast::MoretaKind::Task => GrantModeKind::Task,
+                            crate::ast::MoretaKind::Interface => GrantModeKind::Interface,
                             _ => GrantModeKind::Moreta,
                         },
                         fields: Vec::new(),
@@ -441,6 +451,7 @@ impl GrantFile {
             mode_indices.insert(mode.symbol(), modes.len());
             modes.push(program::ModeInfo {
                 name: mode.name.clone(),
+                implements: mode.implements.clone(),
                 module_name: mode.module.clone(),
                 package_name: mode.package.clone(),
                 fields,
@@ -450,6 +461,7 @@ impl GrantFile {
                     GrantModeKind::Moreta => program::ModeInfoKind::Moreta,
                     GrantModeKind::Region => program::ModeInfoKind::Region,
                     GrantModeKind::Task => program::ModeInfoKind::Task,
+                    GrantModeKind::Interface => program::ModeInfoKind::Interface,
                 },
                 components,
             });
@@ -859,9 +871,10 @@ fn parse_external_type(
         if let Some(definition) = definitions.get(name) {
             return Ok(match definition.kind {
                 GrantModeKind::Struct => program::ExternalType::Mode(name.to_owned()),
-                GrantModeKind::Moreta | GrantModeKind::Region | GrantModeKind::Task => {
-                    program::ExternalType::Moreta(name.to_owned())
-                }
+                GrantModeKind::Moreta
+                | GrantModeKind::Region
+                | GrantModeKind::Task
+                | GrantModeKind::Interface => program::ExternalType::Moreta(name.to_owned()),
             });
         }
         return Err(format!(
@@ -1557,10 +1570,68 @@ END M;
     }
 
     #[test]
+    fn encodes_interface_modes() {
+        let manifest = Manifest::parse(
+            r#"
+[package]
+name = "interfaces"
+
+[build]
+entry = "src/main.ch"
+"#,
+        )
+        .unwrap();
+        let tokens = lexer::tokenize(
+            r#"
+M: MODULE
+  GRANT I, P;
+  NEWMODE I = INTERFACE
+    GRANT Get;
+    Get: PROC () RETURNS (INT) END;
+  END I;
+  NEWMODE P = MODULE BODY IMPLEMENTS I
+    DCL value INT INIT := 3;
+    Get: PROC () RETURNS (INT);
+      RESULT value;
+    END Get;
+  END P;
+END M;
+"#,
+        )
+        .unwrap();
+        let mut program = parser::parse(&tokens).unwrap();
+        for module in &mut program.modules {
+            module.package_name = Some("interfaces".to_owned());
+        }
+        let grant = GrantFile::from_package(&manifest, &program).unwrap();
+        let interface = grant.modes.iter().find(|mode| mode.name == "I").unwrap();
+        assert_eq!(interface.kind, GrantModeKind::Interface);
+        let implementation = grant.modes.iter().find(|mode| mode.name == "P").unwrap();
+        assert_eq!(implementation.implements.len(), 1);
+        let interface_info = GrantFile::from_toml(&grant.to_toml().unwrap())
+            .unwrap()
+            .to_interface()
+            .unwrap();
+        let info = interface_info
+            .modes
+            .iter()
+            .find(|mode| mode.name == "I")
+            .unwrap();
+        assert_eq!(info.kind, program::ModeInfoKind::Interface);
+        let implementation = interface_info
+            .modes
+            .iter()
+            .find(|mode| mode.name == "P")
+            .unwrap();
+        assert_eq!(implementation.implements.len(), 1);
+    }
+
+    #[test]
     fn structure_array_types_round_trip() {
         let symbol = "pkg!M!Point".to_owned();
         let mode = GrantMode {
             name: "Point".to_owned(),
+            implements: Vec::new(),
             module: Some("M".to_owned()),
             package: Some("pkg".to_owned()),
             kind: GrantModeKind::Struct,

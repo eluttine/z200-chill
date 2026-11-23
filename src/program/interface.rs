@@ -23,6 +23,7 @@ pub enum ExternalType {
 #[derive(Debug, Clone)]
 pub struct ModeInfo {
     pub name: String,
+    pub implements: Vec<String>,
     pub module_name: Option<String>,
     pub package_name: Option<String>,
     pub fields: Vec<(String, ExternalType)>,
@@ -37,6 +38,7 @@ pub enum ModeInfoKind {
     Moreta,
     Region,
     Task,
+    Interface,
 }
 
 #[derive(Debug, Clone)]
@@ -167,7 +169,10 @@ pub fn add_external_modes(
                     });
                     definitions.push(mode);
                 }
-                ModeInfoKind::Moreta | ModeInfoKind::Region | ModeInfoKind::Task => {
+                ModeInfoKind::Moreta
+                | ModeInfoKind::Region
+                | ModeInfoKind::Task
+                | ModeInfoKind::Interface => {
                     let id = crate::types::MoretaId(modes.moretas.len());
                     ids.moreta_ids.insert(symbol.clone(), id);
                     modes.moretas.push(crate::modes::MoretaMode {
@@ -175,6 +180,7 @@ pub fn add_external_modes(
                         kind: match mode.kind {
                             ModeInfoKind::Region => crate::ast::MoretaKind::Region,
                             ModeInfoKind::Task => crate::ast::MoretaKind::Task,
+                            ModeInfoKind::Interface => crate::ast::MoretaKind::Interface,
                             _ => crate::ast::MoretaKind::Module,
                         },
                         package: usize::MAX,
@@ -182,6 +188,7 @@ pub fn add_external_modes(
                         package_name: mode.package_name.clone(),
                         module_name: mode.module_name.clone(),
                         bases: Vec::new(),
+                        implements: Vec::new(),
                         abstract_mode: matches!(
                             mode.kind,
                             ModeInfoKind::Region | ModeInfoKind::Task
@@ -274,6 +281,7 @@ pub fn add_external_modes(
                         span: crate::lexer::Span::new(crate::lexer::SourceId(0), 0, 0),
                         constructor: *constructor,
                         destructor: *destructor,
+                        implemented: false,
                         visibility: if *public {
                             crate::modes::ComponentVisibility::Public
                         } else {
@@ -294,7 +302,17 @@ pub fn add_external_modes(
                 }
             }
         }
+        let implements =
+            mode.implements
+                .iter()
+                .map(|symbol| {
+                    ids.moreta_ids.get(symbol).copied().ok_or_else(|| {
+                        format!("external interface references unknown mode `{symbol}`")
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
         modes.moretas[id.0].components = components;
+        modes.moretas[id.0].implements = implements;
     }
 
     Ok(ids)
@@ -386,9 +404,10 @@ pub fn add_external_exports(
                     let symbol = mode.symbol();
                     let ty = match mode.kind {
                         ModeInfoKind::Struct => ids.get(&symbol).map(Type::Struct),
-                        ModeInfoKind::Moreta | ModeInfoKind::Region | ModeInfoKind::Task => {
-                            ids.get_moreta(&symbol).map(Type::Moreta)
-                        }
+                        ModeInfoKind::Moreta
+                        | ModeInfoKind::Region
+                        | ModeInfoKind::Task
+                        | ModeInfoKind::Interface => ids.get_moreta(&symbol).map(Type::Moreta),
                     }
                     .ok_or_else(|| format!("external mode `{symbol}` was not materialized"))?;
                     ExportKind::Mode(ty)

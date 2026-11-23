@@ -165,6 +165,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                     forbidden.sort();
                     ExportInfoKind::Mode(ModeInfo {
                         name: mode.name.clone(),
+                        implements: Vec::new(),
                         module_name: mode.module_name.clone(),
                         package_name: mode.package_name.clone(),
                         fields: mode
@@ -225,6 +226,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                         .collect();
                     ExportInfoKind::Mode(ModeInfo {
                         name: mode.name.clone(),
+                        implements: Vec::new(),
                         module_name: mode.module_name.clone(),
                         package_name: mode.package_name.clone(),
                         fields: Vec::new(),
@@ -232,6 +234,7 @@ pub fn exports(program: &Program) -> Result<Vec<ExportInfo>, Error> {
                         kind: match mode.kind {
                             crate::ast::MoretaKind::Region => ModeInfoKind::Region,
                             crate::ast::MoretaKind::Task => ModeInfoKind::Task,
+                            crate::ast::MoretaKind::Interface => ModeInfoKind::Interface,
                             _ => ModeInfoKind::Moreta,
                         },
                         components,

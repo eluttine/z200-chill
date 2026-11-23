@@ -24,7 +24,8 @@ Z.200 requirements.
 - nested mode components (`NEWMODE`/`SYNMODE` inside a module body) accessed by
   simple name inside the body and as `Mode!Component` outside it,
 - `BASED_ON` single or multiple module-mode inheritance,
-- `IMPLEMENTS interface-mode ...` treated as interface inheritance in this subset,
+- `IMPLEMENTS interface-mode ...` with component/signature matching against the
+  interface, including variables, procedures, and mode components,
 - `ABSTRACT` and `FINAL` mode attributes,
 - `ASSIGNABLE` module modes with whole-object assignment,
 - public/internal component visibility derived from spec `GRANT` statements,
@@ -83,7 +84,7 @@ Z.200 requirements.
 ## Grant interfaces
 
 - Moreta modes are encoded in grant files with their variable, procedure, and mode
-  components, including public/internal visibility.
+  components, public/internal visibility, interface kind, and `IMPLEMENTS` links.
 - Exported variables and procedure signatures may reference moreta modes
   symbolically.
 - Nested mode components have a limited grant encoding: the underlying modes are
@@ -93,8 +94,8 @@ Z.200 requirements.
 ## Not implemented
 
 - static-object destructors at reach/lifetime end,
-- full interface component matching beyond treating `IMPLEMENTS` as interface
-  inheritance,
+- deeper interface inheritance/implementation validation beyond exact component and
+  signature matching,
 - complete internal/private visibility distinction and all standard visibility rules,
 - generic moreta templates,
 - complete `Mode!Component` name preservation in grant files,

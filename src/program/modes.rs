@@ -192,11 +192,14 @@ fn build_mode_definition(
             final_attr,
             assignable,
             bases,
+            implements,
             declarations,
             invariant,
             ..
         } => {
             let mut base_ids = Vec::new();
+            let mut interface_ids = Vec::new();
+            let mut required_interfaces: Vec<(String, crate::types::MoretaId)> = Vec::new();
             let mut components: Vec<crate::modes::MoretaComponent> = Vec::new();
             for base in bases {
                 let base_ref = ModeRef {
@@ -225,15 +228,64 @@ fn build_mode_definition(
                         format!("cannot derive from final mode `{base}`"),
                     ));
                 }
-                base_ids.push(base_id);
-                for component in &table.moretas[base_id.0].components {
-                    if !components
-                        .iter()
-                        .any(|existing| existing.name() == component.name())
-                    {
-                        components.push(component.clone());
+                let base_is_interface =
+                    table.moretas[base_id.0].kind == crate::ast::MoretaKind::Interface;
+                if base_is_interface {
+                    interface_ids.push(base_id);
+                    if *kind != crate::ast::MoretaKind::Interface {
+                        required_interfaces.push((base.clone(), base_id));
+                    } else {
+                        for component in &table.moretas[base_id.0].components {
+                            if !components
+                                .iter()
+                                .any(|existing| existing.name() == component.name())
+                            {
+                                components.push(component.clone());
+                            }
+                        }
+                    }
+                } else {
+                    base_ids.push(base_id);
+                    for component in &table.moretas[base_id.0].components {
+                        if !components
+                            .iter()
+                            .any(|existing| existing.name() == component.name())
+                        {
+                            components.push(component.clone());
+                        }
                     }
                 }
+            }
+            for interface in implements {
+                let interface_ref = ModeRef {
+                    name: interface.clone(),
+                    arrays: Vec::new(),
+                    string_length: None,
+                    varying: false,
+                    access: false,
+                    powerset: false,
+                    reference: false,
+                    row: false,
+                    buffer_element: None,
+                    access_indexed: false,
+                    access_index: None,
+                    span: mode_def.span,
+                };
+                let Type::Moreta(interface_id) = resolve_mode_with(&interface_ref, resolution)?
+                else {
+                    return Err(Error::new(
+                        mode_def.span,
+                        format!("implemented mode `{interface}` is not a moreta mode"),
+                    ));
+                };
+                if table.moretas[interface_id.0].kind != crate::ast::MoretaKind::Interface {
+                    return Err(Error::new(
+                        mode_def.span,
+                        format!("`{interface}` is not an interface mode"),
+                    ));
+                }
+                interface_ids.push(interface_id);
+                required_interfaces.push((interface.clone(), interface_id));
             }
             let mut public_names = HashSet::new();
             for declaration in declarations {
@@ -294,6 +346,7 @@ fn build_mode_definition(
                             constructor: proc_def.constructor,
                             destructor: proc_def.destructor,
                             visibility: visibility_for(&proc_def.name),
+                            implemented: true,
                         });
                     }
                     Declaration::ProcSignature(signature) => {
@@ -317,6 +370,7 @@ fn build_mode_definition(
                             constructor: signature.constructor,
                             destructor: signature.destructor,
                             visibility: visibility_for(&signature.name),
+                            implemented: false,
                         });
                     }
                     Declaration::Visibility(_) => {}
@@ -436,6 +490,47 @@ fn build_mode_definition(
                     }
                 }
             }
+            for (interface_name, interface_id) in &required_interfaces {
+                for component in &table.moretas[interface_id.0].components {
+                    let ok = match component {
+                        crate::modes::MoretaComponent::Var { name, ty, .. } => components
+                            .iter()
+                            .any(|candidate| matches!(
+                                candidate,
+                                crate::modes::MoretaComponent::Var { name: candidate_name, ty: candidate_ty, .. }
+                                    if candidate_name == name && candidate_ty == ty
+                            )),
+                        crate::modes::MoretaComponent::Proc { name, signature, .. } => components
+                            .iter()
+                            .any(|candidate| matches!(
+                                candidate,
+                                crate::modes::MoretaComponent::Proc {
+                                    name: candidate_name,
+                                    signature: candidate_signature,
+                                    implemented: true,
+                                    ..
+                                } if candidate_name == name && candidate_signature == signature
+                            )),
+                        crate::modes::MoretaComponent::Mode { name, ty, .. } => components
+                            .iter()
+                            .any(|candidate| matches!(
+                                candidate,
+                                crate::modes::MoretaComponent::Mode { name: candidate_name, ty: candidate_ty, .. }
+                                    if candidate_name == name && candidate_ty == ty
+                            )),
+                    };
+                    if !ok {
+                        return Err(Error::new(
+                            mode_def.span,
+                            format!(
+                                "mode `{}` does not implement component `{}` of interface `{interface_name}`",
+                                mode_def.name,
+                                component.name()
+                            ),
+                        ));
+                    }
+                }
+            }
             let id = crate::types::MoretaId(table.moretas.len());
             moreta_sources.insert(
                 id,
@@ -452,6 +547,7 @@ fn build_mode_definition(
                 package_name: top_package_name.clone(),
                 module_name: module_name.clone(),
                 bases: base_ids,
+                implements: interface_ids,
                 abstract_mode: *spec
                     || *abstract_attr
                     || *kind == crate::ast::MoretaKind::Interface,

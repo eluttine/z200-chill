@@ -196,6 +196,7 @@ pub enum ModeDefinitionBody {
         final_attr: bool,
         assignable: bool,
         bases: Vec<String>,
+        implements: Vec<String>,
         declarations: Vec<Declaration>,
         invariant: Option<Expr>,
         span: Span,

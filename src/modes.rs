@@ -60,6 +60,7 @@ pub enum MoretaComponent {
         constructor: bool,
         destructor: bool,
         visibility: ComponentVisibility,
+        implemented: bool,
     },
     Mode {
         name: String,
@@ -85,6 +86,7 @@ pub struct MoretaMode {
     pub package_name: Option<String>,
     pub module_name: Option<String>,
     pub bases: Vec<MoretaId>,
+    pub implements: Vec<MoretaId>,
     pub abstract_mode: bool,
     pub final_mode: bool,
     pub assignable: bool,

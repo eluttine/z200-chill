@@ -927,11 +927,12 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+            let mut implements = Vec::new();
             if self.at_keyword(Keyword::Implements) {
                 self.advance();
                 loop {
                     let (base, _) = self.expect_identifier()?;
-                    bases.push(base);
+                    implements.push(base);
                     if self.at_comma() {
                         self.advance();
                     } else {
@@ -963,6 +964,7 @@ impl<'a> Parser<'a> {
                 final_attr,
                 assignable,
                 bases,
+                implements,
                 declarations,
                 invariant,
                 span: Span::new(self.source, body_start.start, self.current_span().start),
