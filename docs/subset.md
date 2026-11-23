@@ -60,8 +60,7 @@ Current scope includes:
 Explicitly **deferred**:
 
 - main-process interleaving with spawned processes;
-- task-object cleanup for statically declared objects, region-call timeout
-  supervision, and scheduler fairness/priority guarantees;
+- region-call timeout supervision and scheduler fairness/priority guarantees;
 - general reference targets beyond simple variables and whole allocated locations;
 - complete internal/private visibility distinctions and deeper interface
   inheritance/implementation rules;
@@ -137,8 +136,7 @@ Implemented in `z200c`:
 Not implemented yet (rejected or deferred with a diagnostic):
 
 - main-process interleaving with spawned processes;
-- task-object cleanup at static reach end, region-call timeout supervision, and
-  priority/fairness scheduling guarantees;
+- region-call timeout supervision and priority/fairness scheduling guarantees;
 - general reference targets beyond simple variables and whole allocated locations;
 - deeper interface/`IMPLEMENTS` rules and complete internal/private visibility.
 

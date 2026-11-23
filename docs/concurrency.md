@@ -53,8 +53,8 @@ asserts end-to-end delivery invariants.
 - Timeouts are enforced at blocking points (`DELAY`, `RECEIVE`, buffer waits), not
   during arbitrary long-running computation.
 - Region-call timeout supervision is not implemented.
-- Task-object workers are stopped explicitly by `TERMINATE`; statically declared task
-  objects are not explicitly terminated at the end of their reach.
+- Task-object workers are stopped by `TERMINATE` or when a statically declared task
+  object's enclosing scope ends.
 - Buffer grant encoding supports referable element modes, including structure modes.
 - Signal `TO process-name` matching uses the process definition name; process
   instance values do not carry separate dynamic names.

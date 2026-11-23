@@ -252,7 +252,6 @@ pub fn run_checked(
         interpreter.run_module(module)?;
     }
 
-    drop(interpreter);
     loop {
         expire_timed_waiters(&scheduler);
         if scheduler.borrow().ready.is_empty() {
@@ -406,6 +405,8 @@ pub fn run_checked(
         }
     }
     CURRENT_YIELDER.with(|slot| slot.set(std::ptr::null()));
+    interpreter.destroy_all_module_objects()?;
+    drop(interpreter);
     if scheduler
         .borrow()
         .event_waiters
@@ -2530,12 +2531,16 @@ impl<'a> Interpreter<'a> {
                         self.locals.push(scope);
                         self.exec_with_handler(*span, actions, frame)
                     })();
-                    self.locals.pop();
+                    let scope = self.locals.pop().expect("begin scope");
+                    let destroy = self.destroy_scope_objects(&scope);
                     let flow = match result {
                         Ok(Flow::Exit(None)) => Flow::Normal,
                         Ok(flow) => flow,
                         Err(error) => return Err(error),
                     };
+                    if matches!(flow, Flow::Normal) {
+                        destroy?;
+                    }
                     if !matches!(flow, Flow::Normal) {
                         return Ok(flow);
                     }
@@ -3359,6 +3364,53 @@ impl<'a> Interpreter<'a> {
         Ok(())
     }
 
+    fn destroy_scope_objects(&mut self, scope: &Scope<'_>) -> Result<(), Error> {
+        let cells: Vec<VarCell> = scope.vars.values().cloned().collect();
+        for cell in cells {
+            self.destroy_static_object(cell)?;
+        }
+        Ok(())
+    }
+
+    fn destroy_all_module_objects(&mut self) -> Result<(), Error> {
+        let cells: Vec<VarCell> = self
+            .modules
+            .iter()
+            .flat_map(|scope| scope.vars.values().cloned())
+            .collect();
+        for cell in cells {
+            self.destroy_static_object(cell)?;
+        }
+        Ok(())
+    }
+
+    fn destroy_static_object(&mut self, cell: VarCell) -> Result<(), Error> {
+        let (ty, value) = {
+            let var = cell.borrow();
+            (var.ty, var.value.clone())
+        };
+        let Type::Moreta(id) = ty else {
+            return Ok(());
+        };
+        if matches!(value, Value::Undefined) {
+            return Ok(());
+        }
+        if self.modes.get_moreta(id).kind == crate::ast::MoretaKind::Task {
+            self.stop_task_worker(Rc::as_ptr(&cell) as usize)?;
+        }
+        if let Some((_, destructor_span)) = self.modes.moreta_destructor(id) {
+            self.invoke_component_on_value(
+                id,
+                destructor_span,
+                value,
+                Vec::new(),
+                destructor_span,
+            )?;
+        }
+        write_var_value(&mut cell.borrow_mut(), Value::Undefined);
+        Ok(())
+    }
+
     fn exec_block(
         &mut self,
         stmts: &[ir::Stmt],
@@ -3371,8 +3423,15 @@ impl<'a> Interpreter<'a> {
         self.seed_reach_exports(span, &mut scope);
         self.locals.push(scope);
         let result = self.exec_stmts(stmts, frame);
-        self.locals.pop();
-        result
+        let scope = self.locals.pop().expect("block scope");
+        let destroy = self.destroy_scope_objects(&scope);
+        match result {
+            Ok(flow) => {
+                destroy?;
+                Ok(flow)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn hoist_block_children(
@@ -3429,8 +3488,15 @@ impl<'a> Interpreter<'a> {
 
         self.module_floor = previous_floor;
         self.active_scope_key = previous_scope;
-        self.locals.pop();
-        result
+        let scope = self.locals.pop().expect("nested module scope");
+        let destroy = self.destroy_scope_objects(&scope);
+        match result {
+            Ok(flow) => {
+                destroy?;
+                Ok(flow)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn exec_hoisted_module(
@@ -5080,14 +5146,23 @@ impl<'a> Interpreter<'a> {
 
         self.depth -= 1;
         self.call_bases.pop();
-        self.locals.pop();
+        let scope = self.locals.pop().expect("procedure scope");
+        let destroy = self.destroy_scope_objects(&scope);
         self.active_module = previous_module;
         self.active_scope_key = previous_scope;
         if let Some(region) = region {
             self.release_region(region);
         }
-
-        let (result, updates) = outcome?;
+        let (result, updates) = match outcome {
+            Ok(outcome) => {
+                destroy?;
+                outcome
+            }
+            Err(error) => {
+                let _ = destroy;
+                return Err(error);
+            }
+        };
         for (target, value) in updates {
             self.assign_target(&target, value, span)?;
         }
@@ -6989,8 +7064,15 @@ impl<'a> Interpreter<'a> {
         })();
         self.depth -= 1;
         self.call_bases.pop();
-        self.locals.pop();
-        result
+        let scope = self.locals.pop().expect("process scope");
+        let destroy = self.destroy_scope_objects(&scope);
+        match result {
+            Ok(()) => {
+                destroy?;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn lookup_proc(&self, name: &str) -> Option<ProcRef<'a>> {

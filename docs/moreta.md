@@ -71,8 +71,9 @@ Z.200 requirements.
 - Constructors run for declared objects and for `ALLOCATE` / `GETSTACK` calls with
   constructor arguments.
 - Destructors run when `TERMINATE` ends an allocated module-mode location.
-- Destructors for statically declared objects at the end of their reach or lifetime are
-  not implemented yet.
+- Statically declared module/region/task objects run their destructor when their
+  enclosing module, procedure, block, or process scope ends. Static task objects also
+  request worker shutdown at that point.
 
 ## Invariants
 
@@ -94,7 +95,6 @@ Z.200 requirements.
 
 ## Not implemented
 
-- static-object destructors at reach/lifetime end,
 - deeper interface inheritance/implementation validation beyond exact component and
   signature matching,
 - complete internal/private visibility distinction and all standard visibility rules,

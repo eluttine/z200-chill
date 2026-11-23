@@ -186,8 +186,9 @@ deferred.
 - [x] Moreta `SELF`, constructors/destructors, constructor arguments, nested mode
       components, and moreta grant-mode encoding. Task/region object modes and generic
       region/process templates remain deferred.
-- [ ] Static-object destructors at reach/lifetime end; complete `Mode!Component` name
-      preservation in grant files.
+- [x] Static-object destructors at reach/lifetime end, including block, procedure,
+      process, nested-module, and program-end cleanup.
+- [ ] Complete `Mode!Component` name preservation in grant files.
 - [x] First concurrency layer: `PROCESS`, `START`, `STOP`, a cooperative
       action-boundary scheduler, shared module locations, and process-local state.
 - [x] `EVENT`/`EVENT(n)` modes, `DELAY`, `CONTINUE`, priority wake-up, event-length
