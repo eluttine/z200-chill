@@ -53,6 +53,9 @@ pub enum ApplyResolution {
         format: Vec<crate::builtins::FormatOp>,
         indexed: bool,
     },
+    TextIndex {
+        get: bool,
+    },
     Association {
         op: crate::builtins::AssociationOp,
         index: bool,
@@ -3677,6 +3680,54 @@ impl Checker {
             );
             return Ok(result);
         }
+        if name == "GETTEXTINDEX" || name == "SETTEXTINDEX" {
+            let get = name == "GETTEXTINDEX";
+            let expected = if get { 1 } else { 2 };
+            if args.len() != expected {
+                return Err(Error::coded(
+                    "E0400",
+                    span,
+                    format!("`{name}` takes {} argument(s)", expected),
+                ));
+            }
+            let Expr::Name {
+                span: target_span, ..
+            } = &args[0]
+            else {
+                return Err(Error::coded(
+                    "E0400",
+                    args[0].span(),
+                    "text index argument must be a TEXT location",
+                ));
+            };
+            let target_ty = self.check_expr(&args[0])?;
+            if !matches!(target_ty, Type::Text { .. }) {
+                return Err(Error::coded(
+                    "E0400",
+                    *target_span,
+                    format!(
+                        "text index argument must be TEXT or WTEXT, found {}",
+                        target_ty.describe()
+                    ),
+                ));
+            }
+            let result = if get {
+                Some(Type::Int(crate::types::IntKind::Int))
+            } else {
+                let index_ty = self.check_expr(&args[1])?;
+                if !index_ty.is_int() {
+                    return Err(Error::coded(
+                        "E0400",
+                        args[1].span(),
+                        "text index must be an integer",
+                    ));
+                }
+                None
+            };
+            self.resolutions
+                .insert(span, ApplyResolution::TextIndex { get });
+            return Ok(result);
+        }
         if let Some(kind) = match name {
             "WRITETEXT" => Some(crate::builtins::TextIo::Write),
             "READTEXT" => Some(crate::builtins::TextIo::Read),
@@ -3745,19 +3796,25 @@ impl Checker {
                 }
             }
             let format_ty = self.check_expr(format)?;
-            if format_ty != Type::String {
+            if !is_string_type(format_ty) {
                 return Err(Error::coded(
                     "E0400",
                     format.span(),
-                    format!("format text must be CHARS, found {}", format_ty.describe()),
+                    format!(
+                        "format text must be CHARS or WCHARS, found {}",
+                        format_ty.describe()
+                    ),
                 ));
             }
-            let Expr::String { value, .. } = format else {
-                return Err(Error::coded(
-                    "E0400",
-                    format.span(),
-                    "format text must be a literal in the current subset",
-                ));
+            let value = match format {
+                Expr::String { value, .. } | Expr::WideString { value, .. } => value,
+                _ => {
+                    return Err(Error::coded(
+                        "E0400",
+                        format.span(),
+                        "format text must be a literal in the current subset",
+                    ))
+                }
             };
             let ops = crate::builtins::parse_format(value)
                 .map_err(|message| Error::coded("E0400", format.span(), message))?;
@@ -3896,6 +3953,13 @@ impl Checker {
                         ));
                     }
                     Some(Type::Duration)
+                }
+                crate::builtins::Builtin::GetTextIndex | crate::builtins::Builtin::SetTextIndex => {
+                    return Err(Error::coded(
+                        "E0400",
+                        span,
+                        "text index built-in was not resolved",
+                    ));
                 }
                 crate::builtins::Builtin::Terminate => {
                     if args.len() != 1 {

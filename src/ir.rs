@@ -160,6 +160,13 @@ pub enum Expr {
         io: Vec<TextIoArg>,
         span: Span,
     },
+    TextIndex {
+        get: bool,
+        target: String,
+        value: Option<Node>,
+        ty: Option<Type>,
+        span: Span,
+    },
     ArrayLiteral {
         values: Vec<Node>,
         array: crate::types::ArrayType,
@@ -240,6 +247,7 @@ impl Expr {
             | Self::Index { span, .. }
             | Self::Builtin { span, .. }
             | Self::TextIo { span, .. }
+            | Self::TextIndex { span, .. }
             | Self::ArrayLiteral { span, .. }
             | Self::ArraySlice { span, .. }
             | Self::ArraySliceDynamic { span, .. }
@@ -283,7 +291,10 @@ impl Expr {
             }),
             Self::PowerSetLiteral { ty, .. } => Some(*ty),
             Self::MethodCall { ty, .. } => *ty,
-            Self::Call { ty, .. } | Self::Builtin { ty, .. } | Self::Association { ty, .. } => *ty,
+            Self::Call { ty, .. }
+            | Self::Builtin { ty, .. }
+            | Self::Association { ty, .. }
+            | Self::TextIndex { ty, .. } => *ty,
             Self::TextIo { .. } => None,
         }
     }
@@ -1271,6 +1282,25 @@ impl Lowerer<'_> {
                         index,
                         ops: format.clone(),
                         io,
+                        span,
+                    })
+                }
+                Some(ApplyResolution::TextIndex { get }) => {
+                    let AstExpr::Name {
+                        name: target_name, ..
+                    } = &ast_args[0]
+                    else {
+                        return Err(Error::new(
+                            ast_args[0].span(),
+                            "internal: text index argument is not a location",
+                        ));
+                    };
+                    let value = if *get { None } else { args.into_iter().nth(1) };
+                    Rc::new(Expr::TextIndex {
+                        get: *get,
+                        target: target_name.clone(),
+                        value,
+                        ty,
                         span,
                     })
                 }

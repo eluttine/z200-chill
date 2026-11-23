@@ -1,0 +1,4 @@
+M: MODULE
+  DCL t TEXT(2);
+  SETTEXTINDEX(t, 3);
+END M;

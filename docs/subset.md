@@ -575,11 +575,15 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
 - `ACCESS`/association record paths and record I/O remain narrow `CHARS` only.
 - `TEXT(n)` and `WTEXT(n)` are text location modes. Their text record is represented
   as a varying `CHARS(n)` / `WCHARS(n)` value, initialized to the empty string.
-- `TEXT(n)`/`WTEXT(n)` accept the optional index-mode and `DYNAMIC` surface syntax;
-  the interpreter does not currently maintain a separate text index sub-mode or
-  access sub-location.
+- `TEXT(n)`/`WTEXT(n)` accept the optional index-mode and `DYNAMIC` surface syntax.
+  A text location carries an actual index used as the default transfer cursor.
+- `GETTEXTINDEX(text)` returns the actual index. `SETTEXTINDEX(text, n)` sets it;
+  values outside `0..text-length` raise `TEXTFAIL`. `READTEXT`/`WRITETEXT` reset the
+  index to `0` after a transfer.
 - `READTEXT`/`WRITETEXT` accept `TEXT` and `WTEXT` locations in addition to varying
-  `CHARS`/`WCHARS` locations.
+  `CHARS`/`WCHARS` locations. Format text may be a `CHARS` or `WCHARS` literal.
+- `GETTEXTRECORD`, `GETTEXTACCESS`, `SETTEXTRECORD`, and `SETTEXTACCESS` are not
+  implemented; there is no program-visible reference to a text sub-location yet.
 - `BOOLS`, `BOOLS(n)`, and `BOOLS(n) VARYING` are bit-string modes. `B'...'`,
   `O'...'`, and `H'...'` with a closing apostrophe are bit-string literals; without
   the closing apostrophe they are based integer literals (`B'1010` is binary 10).
@@ -637,6 +641,8 @@ implementation is an intentional simplification of Z.200 file handling:
 - Out-of-range indexed transfers raise `RANGEFAIL`.
 - `MODIFY(association)` validates the association and currently has no modifiable
   parameters; passing parameters is rejected.
+- Access usage/out-of-file attributes (`GETUSAGE`, `OUTOFFILE`, `GETASSOCIATION`) and
+  `CONNECT` usage/where expressions are not implemented.
 - There is no random access outside an indexed `ACCESS` mode.
 
 The built-in routines raise implementation-defined `ASSOCIATEFAIL`, `NOTASSOCIATED`,

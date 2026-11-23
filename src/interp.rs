@@ -495,6 +495,18 @@ struct AccessState {
 struct Var {
     ty: Type,
     value: Value,
+    /// Actual index of a TEXT/WTEXT location, used as the default transfer cursor.
+    text_index: i128,
+}
+
+impl Var {
+    fn new(ty: Type, value: Value) -> Self {
+        Self {
+            ty,
+            value,
+            text_index: 0,
+        }
+    }
 }
 
 type VarCell = Rc<RefCell<Var>>;
@@ -1483,10 +1495,7 @@ impl<'a> Interpreter<'a> {
                 if let crate::modes::MoretaComponent::Var { name, ty, .. } = component {
                     scope.vars.insert(
                         name.clone(),
-                        Rc::new(RefCell::new(Var {
-                            ty: *ty,
-                            value: default_value(&self.modes, *ty),
-                        })),
+                        Rc::new(RefCell::new(Var::new(*ty, default_value(&self.modes, *ty)))),
                     );
                 }
             }
@@ -1600,10 +1609,7 @@ impl<'a> Interpreter<'a> {
                         }
                         scope.vars.insert(
                             var.name.clone(),
-                            Rc::new(RefCell::new(Var {
-                                ty,
-                                value: default_value(&modes, ty),
-                            })),
+                            Rc::new(RefCell::new(Var::new(ty, default_value(&modes, ty)))),
                         );
                     }
                 }
@@ -2281,7 +2287,7 @@ impl<'a> Interpreter<'a> {
                             let value = self.convert(value, *mode, *span)?;
                             self.locals.last_mut().expect("receive scope").vars.insert(
                                 name.clone(),
-                                Rc::new(RefCell::new(Var { ty: *mode, value })),
+                                Rc::new(RefCell::new(Var::new(*mode, value))),
                             );
                         }
                         self.exec_stmts(&alternative.actions, frame)
@@ -3306,13 +3312,13 @@ impl<'a> Interpreter<'a> {
                         let scope = self.locals.last_mut().expect("local scope");
                         scope.vars.insert(
                             counter.clone(),
-                            Rc::new(RefCell::new(Var {
-                                ty: counter_ty,
-                                value: Value::Int {
+                            Rc::new(RefCell::new(Var::new(
+                                counter_ty,
+                                Value::Int {
                                     value: start_value,
                                     kind,
                                 },
-                            })),
+                            ))),
                         );
                     }
 
@@ -3502,7 +3508,7 @@ impl<'a> Interpreter<'a> {
                         None => default_value(&self.modes, *mode),
                     }
                 };
-                let cell = Rc::new(RefCell::new(Var { ty: *mode, value }));
+                let cell = Rc::new(RefCell::new(Var::new(*mode, value)));
                 if let Type::Moreta(id) = mode {
                     if self.modes.get_moreta(*id).kind == crate::ast::MoretaKind::Task {
                         self.start_task_worker(Rc::clone(&cell), *span)?;
@@ -3641,6 +3647,12 @@ impl<'a> Interpreter<'a> {
                         }
                         Ok(Value::Undefined)
                     }
+                    crate::builtins::Builtin::GetTextIndex
+                    | crate::builtins::Builtin::SetTextIndex => Err(Error::coded(
+                        "E0500",
+                        *span,
+                        "internal: text index built-in was not lowered",
+                    )),
                     crate::builtins::Builtin::ReadLine => {
                         let mut line = String::new();
                         std::io::stdin()
@@ -3659,24 +3671,31 @@ impl<'a> Interpreter<'a> {
                 io,
                 span,
             } => {
+                let cell = self.find_var_cell(target).ok_or_else(|| {
+                    Error::coded("E0505", *span, format!("unknown variable `{target}`"))
+                })?;
+                let (source, text_index, is_text) = {
+                    let var = cell.borrow();
+                    let source = match &var.value {
+                        Value::String(text) => text.clone(),
+                        _ => {
+                            return Err(Error::coded("E0500", *span, "text location must be CHARS"))
+                        }
+                    };
+                    (source, var.text_index, matches!(var.ty, Type::Text { .. }))
+                };
                 let mut cursor = match index {
                     Some(index) => {
                         let value = self.eval_ir(index)?;
                         let (index, _) = self.expect_int(value, index.span())?;
                         index
                     }
+                    None if is_text => text_index,
                     None => 0,
                 };
                 if cursor < 0 {
                     return Err(textfail(*span, "negative text index"));
                 }
-                let cell = self.find_var_cell(target).ok_or_else(|| {
-                    Error::coded("E0505", *span, format!("unknown variable `{target}`"))
-                })?;
-                let source = match &cell.borrow().value {
-                    Value::String(text) => text.clone(),
-                    _ => return Err(Error::coded("E0500", *span, "text location must be CHARS")),
-                };
                 let mut chars: Vec<char> = source.chars().collect();
                 let mut io_index = 0;
                 match kind {
@@ -3733,6 +3752,7 @@ impl<'a> Interpreter<'a> {
                             ));
                         };
                         *text = chars.into_iter().collect();
+                        var.text_index = 0;
                     }
                     crate::builtins::TextIo::Read => {
                         for op in ops {
@@ -3789,7 +3809,54 @@ impl<'a> Interpreter<'a> {
                         }
                     }
                 }
+                if is_text {
+                    cell.borrow_mut().text_index = 0;
+                }
                 Ok(Value::Undefined)
+            }
+            ir::Expr::TextIndex {
+                get,
+                target,
+                value,
+                span,
+                ..
+            } => {
+                let cell = self.find_var_cell(target).ok_or_else(|| {
+                    Error::coded("E0505", *span, format!("unknown variable `{target}`"))
+                })?;
+                let text_length = {
+                    let var = cell.borrow();
+                    let Type::Text { length, .. } = var.ty else {
+                        return Err(Error::coded(
+                            "E0507",
+                            *span,
+                            "text index requires a TEXT or WTEXT location",
+                        ));
+                    };
+                    length as i128
+                };
+                if *get {
+                    let index = cell.borrow().text_index;
+                    Ok(Value::Int {
+                        value: index,
+                        kind: Some(IntKind::Int),
+                    })
+                } else {
+                    let value = value.as_ref().ok_or_else(|| {
+                        Error::coded("E0500", *span, "SETTEXTINDEX requires an index")
+                    })?;
+                    let value = self.eval_ir(value)?;
+                    let (index, _) = self.expect_int(value, *span)?;
+                    if index < 0 || index > text_length {
+                        return Err(Error::exception(
+                            "TEXTFAIL",
+                            *span,
+                            format!("TEXTFAIL: text index {index} is outside 0..{text_length}"),
+                        ));
+                    }
+                    cell.borrow_mut().text_index = index;
+                    Ok(Value::Undefined)
+                }
             }
             ir::Expr::ArrayLiteral { values, array, .. } => {
                 let element = array.element.ty();
@@ -3833,7 +3900,7 @@ impl<'a> Interpreter<'a> {
                         .last_mut()
                         .expect("deref method scope")
                         .vars
-                        .insert(temp.clone(), Rc::new(RefCell::new(Var { ty, value })));
+                        .insert(temp.clone(), Rc::new(RefCell::new(Var::new(ty, value))));
                     let result = self.call_method(&temp, *proc_span, call_args, *span, false);
                     let updated = self
                         .locals
@@ -3864,10 +3931,7 @@ impl<'a> Interpreter<'a> {
                     };
                     let value = self.current_self_value(id, *span)?;
                     let temp = "\u{0}self".to_owned();
-                    let temp_cell = Rc::new(RefCell::new(Var {
-                        ty: Type::Moreta(id),
-                        value,
-                    }));
+                    let temp_cell = Rc::new(RefCell::new(Var::new(Type::Moreta(id), value)));
                     self.locals
                         .last_mut()
                         .expect("local scope")
@@ -4319,7 +4383,7 @@ impl<'a> Interpreter<'a> {
                         .unwrap_or_else(|| default_value(&self.modes, *ty));
                     scope
                         .vars
-                        .insert(name.clone(), Rc::new(RefCell::new(Var { ty: *ty, value })));
+                        .insert(name.clone(), Rc::new(RefCell::new(Var::new(*ty, value))));
                 }
             }
         }
@@ -4463,9 +4527,10 @@ impl<'a> Interpreter<'a> {
                     format!("duplicate declaration of `{}`", param.name),
                 ));
             }
-            scope
-                .vars
-                .insert(param.name.clone(), Rc::new(RefCell::new(Var { ty, value })));
+            scope.vars.insert(
+                param.name.clone(),
+                Rc::new(RefCell::new(Var::new(ty, value))),
+            );
         }
 
         self.declare_local(&proc_def.declarations)?;
@@ -5338,10 +5403,7 @@ impl<'a> Interpreter<'a> {
         span: Span,
     ) -> Result<Value, Error> {
         let temp = "\u{0}component".to_owned();
-        let cell = Rc::new(RefCell::new(Var {
-            ty: Type::Moreta(id),
-            value,
-        }));
+        let cell = Rc::new(RefCell::new(Var::new(Type::Moreta(id), value)));
         self.locals.push(Scope::default());
         self.locals
             .last_mut()
@@ -6217,10 +6279,10 @@ impl<'a> Interpreter<'a> {
             for (param, arg) in def.params.iter().zip(args) {
                 let ty = self.resolve_mode(&param.mode)?;
                 let cell = match (param.passing, arg) {
-                    (Passing::In, CallArgument::Value(value)) => Rc::new(RefCell::new(Var {
+                    (Passing::In, CallArgument::Value(value)) => Rc::new(RefCell::new(Var::new(
                         ty,
-                        value: self.convert(value, ty, param.span)?,
-                    })),
+                        self.convert(value, ty, param.span)?,
+                    ))),
                     (Passing::Loc, CallArgument::Location(cell)) => {
                         if cell.borrow().ty != ty {
                             return Err(Error::coded(
@@ -6452,10 +6514,7 @@ fn declare_into_scope<'a>(
                     }
                     scope.vars.insert(
                         var.name.clone(),
-                        Rc::new(RefCell::new(Var {
-                            ty,
-                            value: default_value(modes, ty),
-                        })),
+                        Rc::new(RefCell::new(Var::new(ty, default_value(modes, ty)))),
                     );
                 }
             }

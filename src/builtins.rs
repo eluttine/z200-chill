@@ -22,6 +22,10 @@ pub enum Builtin {
     Duration(DurationUnit),
     /// Absolute time construction.
     AbsoluteTime,
+    /// Return the actual index of a TEXT/WTEXT location.
+    GetTextIndex,
+    /// Set the actual index of a TEXT/WTEXT location.
+    SetTextIndex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +49,8 @@ pub fn lookup(name: &str) -> Option<Builtin> {
         "HOURS" => Some(Builtin::Duration(DurationUnit::Hours)),
         "DAYS" => Some(Builtin::Duration(DurationUnit::Days)),
         "ABSTIME" => Some(Builtin::AbsoluteTime),
+        "GETTEXTINDEX" => Some(Builtin::GetTextIndex),
+        "SETTEXTINDEX" => Some(Builtin::SetTextIndex),
         _ => None,
     }
 }

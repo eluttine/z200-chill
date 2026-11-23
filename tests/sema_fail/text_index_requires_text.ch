@@ -1,0 +1,4 @@
+M: MODULE
+  DCL s CHARS;
+  SETTEXTINDEX(s, 0);
+END M;

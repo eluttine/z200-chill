@@ -116,8 +116,9 @@ deferred.
       grant encoding for reference/pointer/row modes. Arrays of references, nested
       references, and references to fields/indexes remain deferred.
 - [x] `TEXT(n)` and `WTEXT(n)` text location modes with empty-string initialization,
-      text I/O, bounded length checks, optional index-mode/DYNAMIC surface syntax, and
-      grant encoding. A separate text access/reference sub-location remains deferred.
+      text I/O, bounded length checks, optional index-mode/DYNAMIC surface syntax,
+      grant encoding, actual text index, and `GETTEXTINDEX`/`SETTEXTINDEX`. Text
+      sub-location reference built-ins remain deferred.
 - [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
 - [x] Action-level handlers, including handlers on bracketed actions, assignment,
       assert, and call actions.
