@@ -142,8 +142,9 @@ pub enum GrantKind {
 
 impl GrantFile {
     pub fn from_package(manifest: &Manifest, program: &Program) -> Result<Self, program::Error> {
-        let info = program::analyze(program)?;
-        let exports = program::exports(program)?;
+        let program = program::normalize(program)?;
+        let info = program::analyze(&program)?;
+        let exports = program::exports(&program)?;
         if let Err(message) = validate_exports(&exports, &info.modes) {
             let span = program
                 .modules
@@ -1784,6 +1785,10 @@ M: MODULE
     GRANT Get;
     Get: PROC () RETURNS (INT) END;
   END I;
+  NEWMODE P = MODULE SPEC
+    GRANT Get;
+    Get: PROC () RETURNS (INT) END;
+  END P;
   NEWMODE P = MODULE BODY IMPLEMENTS I
     DCL value INT INIT := 3;
     Get: PROC () RETURNS (INT);

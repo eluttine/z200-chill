@@ -212,6 +212,7 @@ fn build_mode_definition(
             assignable,
             bases,
             implements,
+            spec_components,
             declarations,
             invariant,
             ..
@@ -316,12 +317,18 @@ fn build_mode_definition(
                     }
                 }
             }
-            let restrict_visibility = !public_names.is_empty();
+            let mut spec_components: HashSet<String> = spec_components.iter().cloned().collect();
+            if *spec {
+                spec_components.extend(declarations.iter().filter_map(declaration_component_name));
+            }
+            let is_interface = *kind == crate::ast::MoretaKind::Interface;
             let visibility_for = |name: &str| {
-                if !restrict_visibility || public_names.contains(name) {
+                if is_interface || public_names.contains(name) {
                     ComponentVisibility::Public
-                } else {
+                } else if spec_components.contains(name) {
                     ComponentVisibility::Internal
+                } else {
+                    ComponentVisibility::Private
                 }
             };
             let mut seen = HashSet::new();
@@ -512,31 +519,50 @@ fn build_mode_definition(
             for (interface_name, interface_id) in &required_interfaces {
                 for component in &table.moretas[interface_id.0].components {
                     let ok = match component {
-                        crate::modes::MoretaComponent::Var { name, ty, .. } => components
-                            .iter()
-                            .any(|candidate| matches!(
-                                candidate,
-                                crate::modes::MoretaComponent::Var { name: candidate_name, ty: candidate_ty, .. }
-                                    if candidate_name == name && candidate_ty == ty
-                            )),
-                        crate::modes::MoretaComponent::Proc { name, signature, .. } => components
-                            .iter()
-                            .any(|candidate| matches!(
+                        crate::modes::MoretaComponent::Var { name, ty, .. } => {
+                            components.iter().any(|candidate| {
+                                matches!(
+                                    candidate,
+                                    crate::modes::MoretaComponent::Var {
+                                        name: candidate_name,
+                                        ty: candidate_ty,
+                                        visibility,
+                                    } if candidate_name == name
+                                        && candidate_ty == ty
+                                        && *visibility == ComponentVisibility::Public
+                                )
+                            })
+                        }
+                        crate::modes::MoretaComponent::Proc {
+                            name, signature, ..
+                        } => components.iter().any(|candidate| {
+                            matches!(
                                 candidate,
                                 crate::modes::MoretaComponent::Proc {
                                     name: candidate_name,
                                     signature: candidate_signature,
                                     implemented: true,
+                                    visibility,
                                     ..
-                                } if candidate_name == name && candidate_signature == signature
-                            )),
-                        crate::modes::MoretaComponent::Mode { name, ty, .. } => components
-                            .iter()
-                            .any(|candidate| matches!(
-                                candidate,
-                                crate::modes::MoretaComponent::Mode { name: candidate_name, ty: candidate_ty, .. }
-                                    if candidate_name == name && candidate_ty == ty
-                            )),
+                                } if candidate_name == name
+                                    && candidate_signature == signature
+                                    && *visibility == ComponentVisibility::Public
+                            )
+                        }),
+                        crate::modes::MoretaComponent::Mode { name, ty, .. } => {
+                            components.iter().any(|candidate| {
+                                matches!(
+                                    candidate,
+                                    crate::modes::MoretaComponent::Mode {
+                                        name: candidate_name,
+                                        ty: candidate_ty,
+                                        visibility,
+                                    } if candidate_name == name
+                                        && candidate_ty == ty
+                                        && *visibility == ComponentVisibility::Public
+                                )
+                            })
+                        }
                     };
                     if !ok {
                         return Err(Error::new(
@@ -768,6 +794,16 @@ pub fn signature_from_params_with(
         result: result_type,
         exceptions: Some(exceptions.to_vec()),
     })
+}
+
+fn declaration_component_name(declaration: &Declaration) -> Option<String> {
+    match declaration {
+        Declaration::Var(vars) => vars.first().map(|var| var.name.clone()),
+        Declaration::Proc(proc_def) => Some(proc_def.name.clone()),
+        Declaration::ProcSignature(signature) => Some(signature.name.clone()),
+        Declaration::Mode(mode_def) => Some(mode_def.name.clone()),
+        _ => None,
+    }
 }
 
 pub fn resolve_mode(mode: &ModeRef) -> Result<Type, Error> {

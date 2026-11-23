@@ -6,6 +6,11 @@ M: MODULE
     GetValue: PROC () RETURNS (INT) END;
   END ValueHolder;
 
+  NEWMODE Box = MODULE SPEC BASED_ON ValueHolder
+    GRANT SetValue, GetValue;
+    SetValue: PROC (n INT) END;
+    GetValue: PROC () RETURNS (INT) END;
+  END Box;
   NEWMODE Box = MODULE BODY BASED_ON ValueHolder
     DCL value INT INIT := 0;
 

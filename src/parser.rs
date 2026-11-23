@@ -991,6 +991,7 @@ impl<'a> Parser<'a> {
                 assignable,
                 bases,
                 implements,
+                spec_components: Vec::new(),
                 declarations,
                 invariant,
                 span: Span::new(self.source, body_start.start, self.current_span().start),

@@ -62,8 +62,8 @@ Explicitly **deferred**:
 - main-process interleaving with spawned processes;
 - region-call timeout supervision and scheduler fairness/priority guarantees;
 - general reference targets beyond simple variables and whole allocated locations;
-- complete internal/private visibility distinctions and deeper interface
-  inheritance/implementation rules;
+- complete moreta visibility rules and deeper interface inheritance beyond exact
+  public-component/signature matching;
 - full association/access attribute modification and arbitrary file models.
 
 ### 1.1 Implementation status (v0)
@@ -138,7 +138,8 @@ Not implemented yet (rejected or deferred with a diagnostic):
 - main-process interleaving with spawned processes;
 - region-call timeout supervision and priority/fairness scheduling guarantees;
 - general reference targets beyond simple variables and whole allocated locations;
-- deeper interface/`IMPLEMENTS` rules and complete internal/private visibility.
+- deeper interface/`IMPLEMENTS` rules beyond exact public-component matching and full
+  moreta visibility rules.
 
 The interpreter is a bootstrap for validating semantics; native code generation is a
 later milestone.

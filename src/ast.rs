@@ -218,6 +218,8 @@ pub enum ModeDefinitionBody {
         assignable: bool,
         bases: Vec<String>,
         implements: Vec<String>,
+        /// Components declared in a paired mode specification.
+        spec_components: Vec<String>,
         declarations: Vec<Declaration>,
         invariant: Option<Expr>,
         span: Span,

@@ -83,6 +83,10 @@ fn merge_moreta_specs(module: &mut Module) -> Result<(), Error> {
             .iter()
             .filter_map(declaration_name)
             .collect();
+        let spec_components: Vec<String> = spec_declarations
+            .iter()
+            .filter_map(declaration_name)
+            .collect();
         let mut merged: Vec<Declaration> = spec_declarations
             .into_iter()
             .filter(|declaration| {
@@ -94,12 +98,14 @@ fn merge_moreta_specs(module: &mut Module) -> Result<(), Error> {
             if let crate::ast::ModeDefinitionBody::Moreta {
                 spec,
                 bases,
+                spec_components: components,
                 declarations,
                 invariant,
                 ..
             } = &mut mode_def.body
             {
                 *spec = false;
+                *components = spec_components;
                 if bases.is_empty() {
                     *bases = spec_bases;
                 }

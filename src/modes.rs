@@ -75,6 +75,14 @@ impl MoretaComponent {
             Self::Var { name, .. } | Self::Proc { name, .. } | Self::Mode { name, .. } => name,
         }
     }
+
+    pub fn visibility(&self) -> ComponentVisibility {
+        match self {
+            Self::Var { visibility, .. }
+            | Self::Proc { visibility, .. }
+            | Self::Mode { visibility, .. } => *visibility,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

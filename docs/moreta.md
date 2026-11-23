@@ -36,9 +36,12 @@ Z.200 requirements.
 - A declared module-mode object owns independent component values.
 - Module-mode objects are **not assignable by default**. `ASSIGNABLE` module modes
   support whole-object assignment; region and task modes remain non-assignable.
-- Components granted by a module-mode spec are public. Non-public components are only
-  accessible from the defining module. Internal/private distinction is currently
-  simplified to public/internal.
+- Components granted by a module-mode spec are public. Spec components that are not
+  granted are internal. Components present only in the body are private.
+- External access requires a public component. The defining module can access public,
+  internal, and private components.
+- Inheritance copies components with their visibility. `IMPLEMENTS` requires a public
+  component with a matching mode/signature.
 - Moreta modes can appear in grant interfaces with their component visibility,
   interface kind, and `IMPLEMENTS` links.
 - Objects are initialized when their declaration is executed.
@@ -97,7 +100,7 @@ Z.200 requirements.
 
 - deeper interface inheritance/implementation validation beyond exact component and
   signature matching,
-- complete internal/private visibility distinction and all standard visibility rules,
+- complete moreta visibility rules beyond public/internal/private component classes,
 - complete `Mode!Component` name preservation in grant files.
 
 These exclusions are deliberate. Adding them should be a separate design step rather

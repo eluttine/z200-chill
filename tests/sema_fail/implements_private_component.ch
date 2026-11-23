@@ -1,0 +1,12 @@
+M: MODULE
+  NEWMODE I = INTERFACE
+    GRANT Get;
+    Get: PROC () RETURNS (INT) END;
+  END I;
+
+  NEWMODE P = MODULE BODY IMPLEMENTS I
+    Get: PROC () RETURNS (INT);
+      RESULT 1;
+    END Get;
+  END P;
+END M;
