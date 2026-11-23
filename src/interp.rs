@@ -4755,6 +4755,18 @@ impl<'a> Interpreter<'a> {
                     values: lowered,
                 })
             }
+            ir::Expr::MultiArrayLiteral { values, array, .. } => {
+                let element = array.element.ty();
+                let mut lowered = Vec::with_capacity(values.len());
+                for node in values {
+                    let value = self.eval_ir(node)?;
+                    lowered.push(self.convert(value, element, node.span())?);
+                }
+                Ok(Value::Array {
+                    low: array.dimensions()[0].low,
+                    values: lowered,
+                })
+            }
             ir::Expr::MethodCall {
                 object,
                 deref,

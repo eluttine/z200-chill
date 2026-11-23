@@ -197,6 +197,7 @@ deferred.
 - [x] Forward-declared, mutually recursive structure modes through `REF`/`ROW`, with
       direct value-cycle rejection.
 - [x] References to whole array targets with indexed dereference (`ref->(i)`).
+- [x] Nested multidimensional array literals.
 - [x] Main-process interleaving at action boundaries via scheduler pumping.
 - [x] Main-process blocking `DELAY`, timed `DELAY`, and signal/buffer `RECEIVE CASE`
       through scheduler pumping.

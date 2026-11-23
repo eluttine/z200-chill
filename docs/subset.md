@@ -303,7 +303,8 @@ mode.
   module-mode objects, `REF`, `ROW`, or `PTR` modes. Arrays of buffers and references
   to array targets remain unsupported.
 - Array slices currently apply to one-dimensional arrays only.
-- Array literals currently apply to one-dimensional arrays only.
+- Array literals support one-dimensional arrays and nested multidimensional literals
+  such as `[[1, 2], [3, 4]]`.
 
 
 ### 4.3.1 Floating-point mode

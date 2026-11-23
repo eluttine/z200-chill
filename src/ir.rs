@@ -187,6 +187,11 @@ pub enum Expr {
         array: crate::types::ArrayType,
         span: Span,
     },
+    MultiArrayLiteral {
+        values: Vec<Node>,
+        array: crate::types::MultiArrayType,
+        span: Span,
+    },
     ArraySlice {
         name: String,
         offset: i128,
@@ -269,6 +274,7 @@ impl Expr {
             | Self::TextIndex { span, .. }
             | Self::TextSub { span, .. }
             | Self::ArrayLiteral { span, .. }
+            | Self::MultiArrayLiteral { span, .. }
             | Self::ArraySlice { span, .. }
             | Self::ArraySliceDynamic { span, .. }
             | Self::LabelledArrayLiteral { span, .. }
@@ -303,6 +309,7 @@ impl Expr {
             | Self::Binary { ty, .. }
             | Self::Field { ty, .. }
             | Self::Index { ty, .. } => Some(*ty),
+            Self::MultiArrayLiteral { array, .. } => Some(Type::MultiArray(*array)),
             Self::ArrayLiteral { array, .. }
             | Self::ArraySlice { array, .. }
             | Self::LabelledArrayLiteral { array, .. } => Some(Type::Array(*array)),
@@ -1905,10 +1912,19 @@ impl Lowerer<'_> {
                         span,
                     }));
                 }
+                if let Type::MultiArray(array) = checked {
+                    let mut values = Vec::new();
+                    self.lower_multidim_values(elements, array.rank(), 0, &mut values)?;
+                    return Ok(Rc::new(Expr::MultiArrayLiteral {
+                        values,
+                        array,
+                        span,
+                    }));
+                }
                 let Type::Array(array) = checked else {
                     return Err(Error::new(
                         span,
-                        "array literal requires a one-dimensional array target mode",
+                        "array literal requires an array target mode",
                     ));
                 };
                 if let Some(indices) = self.check.labelled_tuples.get(&span) {
@@ -1940,6 +1956,29 @@ impl Lowerer<'_> {
 
         self.exprs.insert(&lowered);
         Ok(lowered)
+    }
+
+    fn lower_multidim_values(
+        &mut self,
+        elements: &[crate::ast::ArrayTupleElement],
+        rank: usize,
+        level: usize,
+        out: &mut Vec<Node>,
+    ) -> Result<(), Error> {
+        for element in elements {
+            if level + 1 < rank {
+                let AstExpr::ArrayTuple {
+                    elements: nested, ..
+                } = &element.value
+                else {
+                    return Err(Error::new(element.span, "nested array literal expected"));
+                };
+                self.lower_multidim_values(nested, rank, level + 1, out)?;
+            } else {
+                out.push(self.lower_expr(&element.value)?);
+            }
+        }
+        Ok(())
     }
 }
 

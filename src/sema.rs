@@ -4574,6 +4574,62 @@ impl Checker {
         Ok(element.ty())
     }
 
+    fn check_multidim_literal(
+        &mut self,
+        elements: &[ArrayTupleElement],
+        dims: &[types::ArrayDimension],
+        level: usize,
+        element: types::ArrayElement,
+        span: crate::lexer::Span,
+    ) -> Result<(), Error> {
+        let expected = dims[level].length().max(0) as usize;
+        if elements.len() != expected {
+            return Err(Error::coded(
+                "E0400",
+                span,
+                format!(
+                    "multidimensional array literal expects {expected} element(s) at dimension {}, found {}",
+                    level + 1,
+                    elements.len()
+                ),
+            ));
+        }
+        for item in elements {
+            if item.labels.is_some() {
+                return Err(Error::coded(
+                    "E0400",
+                    item.span,
+                    "labeled multidimensional array literals are not implemented yet",
+                ));
+            }
+            if item.range_end.is_some() {
+                return Err(Error::coded(
+                    "E0400",
+                    item.span,
+                    "ranges are not allowed in array literals",
+                ));
+            }
+            if level + 1 < dims.len() {
+                let Expr::ArrayTuple {
+                    elements: nested,
+                    span,
+                } = &item.value
+                else {
+                    return Err(Error::coded(
+                        "E0400",
+                        item.span,
+                        "nested array literal expected",
+                    ));
+                };
+                self.check_multidim_literal(nested, dims, level + 1, element, *span)?;
+            } else {
+                let ty = self.check_expr(&item.value)?;
+                self.ensure_assignable(element.ty(), ty, item.span)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Check a value expression in a context where the target mode is known.
     /// This is what gives array tuples their element and bounds modes.
     fn check_expr_for_mode(&mut self, value: &Expr, target: Type) -> Result<Type, Error> {
@@ -4607,12 +4663,18 @@ impl Checker {
                 "ranges are only allowed in powerset tuples",
             ));
         }
+        if let Type::MultiArray(array) = target {
+            let dims = array.dimensions().to_vec();
+            self.check_multidim_literal(elements, &dims, 0, array.element, *span)?;
+            self.types.insert(*span, target);
+            return Ok(target);
+        }
         let Type::Array(array) = target else {
             return Err(Error::coded(
                 "E0400",
                 *span,
                 format!(
-                    "array literal requires a one-dimensional array target mode, found {}",
+                    "array literal requires an array target mode, found {}",
                     target.describe()
                 ),
             ));
