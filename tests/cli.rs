@@ -839,6 +839,41 @@ END Client;
 }
 
 #[test]
+fn runs_single_file_script_without_manifest() {
+    let dir = TempDir::new("z200c-script");
+    let script = dir.join("hello.ch");
+    std::fs::write(
+        &script,
+        r#"
+Hello: MODULE
+  DCL x INT INIT := 3;
+  ASSERT x = 3;
+END Hello;
+"#,
+    )
+    .unwrap();
+    // A sibling source must not be loaded in script mode.
+    std::fs::write(dir.join("broken.ch"), "this is not CHILL").unwrap();
+
+    let check = z200c().arg("check").arg(&script).output().unwrap();
+    assert!(
+        check.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(String::from_utf8_lossy(&check.stdout).contains("checked hello"));
+
+    let run = z200c().arg("run").arg(&script).output().unwrap();
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
 fn write_and_writeline_text_io() {
     let dir = TempDir::new("z200-text-out");
     std::fs::create_dir_all(dir.join("src")).unwrap();

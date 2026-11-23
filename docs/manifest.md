@@ -105,3 +105,14 @@ z200c grant <path>   # parse, check, and write target/z200c/<package>.grt.toml
 ```
 
 `z200c build` remains an alias for `z200c grant`.
+
+A single `.ch` file can be checked or run without a manifest:
+
+```sh
+z200c check hello.ch
+z200c run hello.ch
+```
+
+Script mode derives the package name from the file stem and loads only that file. It does
+not discover sibling `.ch` files or read dependencies and pieces from a directory
+manifest.

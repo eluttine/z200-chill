@@ -213,6 +213,9 @@ deferred.
 - [x] Scheduler yield-interval testing and pipeline runs across multiple
       interleavings.
 
+- [x] Single-file script mode: `z200c check <file>.ch` and `z200c run <file>.ch`
+      without a manifest, loading only the named script.
+
 ## 8. Cleanup
 
 - [x] Replace message-based error classification with explicit codes at checker and

@@ -3,7 +3,7 @@ use crate::diagnostics;
 use crate::grant;
 use crate::interp;
 use crate::lexer;
-use crate::manifest::Manifest;
+use crate::manifest::{Build, Manifest, Package};
 use crate::parser;
 use crate::program;
 use crate::sema;
@@ -205,6 +205,9 @@ struct Loader {
 }
 
 fn load_package(target: &Path, link_grant_sources: bool) -> Result<LoadedPackage, String> {
+    if target.is_file() && target.extension() == Some(OsStr::new("ch")) {
+        return load_script(target);
+    }
     let manifest_path = resolve_manifest(target)?;
     let manifest =
         Manifest::load(&manifest_path).map_err(|error| format!("error[E0300]: {error}"))?;
@@ -234,6 +237,64 @@ fn load_package(target: &Path, link_grant_sources: bool) -> Result<LoadedPackage
         manifest,
         package_dir,
         entry_path,
+        source_map: loader.source_map,
+        token_count: loader.token_count,
+        program: Program {
+            modules: loader.modules,
+            remotes: Vec::new(),
+            generic_modules: Vec::new(),
+            generic_module_instances: Vec::new(),
+        },
+        external: loader.external,
+    })
+}
+
+fn load_script(target: &Path) -> Result<LoadedPackage, String> {
+    let name = target
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("script")
+        .to_owned();
+    let package_dir = target
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let entry_name = target
+        .file_name()
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("error[E0300]: invalid script path {}", target.display()))?;
+
+    let manifest = Manifest {
+        package: Package { name: name.clone() },
+        build: Build {
+            entry: entry_name,
+            sources: Some(Vec::new()),
+        },
+        dependencies: std::collections::HashMap::new(),
+        pieces: std::collections::HashMap::new(),
+    };
+
+    let mut loader = Loader {
+        source_map: SourceMap::default(),
+        modules: Vec::new(),
+        package_dirs: vec![package_dir.clone()],
+        package_pieces: vec![std::collections::HashMap::new()],
+        piece_visiting: HashSet::new(),
+        token_count: 0,
+        external: Vec::new(),
+        visiting: HashSet::new(),
+        loaded: HashSet::new(),
+        next_package: 1,
+        link_grant_sources: false,
+    };
+    loader.load_source(target, 0, &name)?;
+
+    Ok(LoadedPackage {
+        manifest,
+        package_dir,
+        entry_path: target.to_path_buf(),
         source_map: loader.source_map,
         token_count: loader.token_count,
         program: Program {
@@ -830,6 +891,7 @@ Usage:
   z200c --version
   z200c --help
 
-`path` may be a package directory or a Chill.toml file (default: .)."
+`path` may be a package directory, a Chill.toml file, or a single `.ch` script
+(default: .). A script is checked and run without a manifest."
     );
 }
