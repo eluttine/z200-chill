@@ -104,6 +104,9 @@ pub struct MoretaMode {
     pub final_mode: bool,
     pub assignable: bool,
     pub components: Vec<MoretaComponent>,
+    /// Private components inherited from base modes: stored but not name-visible in
+    /// the derived mode body.
+    pub inherited_private: HashSet<String>,
 }
 
 impl MoretaMode {

@@ -333,6 +333,7 @@ fn build_mode_definition(
             ..
         } => {
             let mut base_ids = Vec::new();
+            let mut inherited_private = HashSet::new();
             let mut interface_ids = Vec::new();
             let mut required_interfaces: Vec<(String, crate::types::MoretaId)> = Vec::new();
             let mut components: Vec<crate::modes::MoretaComponent> = Vec::new();
@@ -381,6 +382,9 @@ fn build_mode_definition(
                                 .iter()
                                 .any(|existing| existing.name() == component.name())
                             {
+                                if component.visibility() == ComponentVisibility::Private {
+                                    inherited_private.insert(component.name().to_owned());
+                                }
                                 components.push(component.clone());
                             }
                         }
@@ -395,6 +399,9 @@ fn build_mode_definition(
                             .iter()
                             .any(|existing| existing.name() == component.name())
                         {
+                            if component.visibility() == ComponentVisibility::Private {
+                                inherited_private.insert(component.name().to_owned());
+                            }
                             components.push(component.clone());
                         }
                     }
@@ -471,6 +478,7 @@ fn build_mode_definition(
                                 ));
                             }
                             components.retain(|component| component.name() != var.name);
+                            inherited_private.remove(&var.name);
                             components.push(crate::modes::MoretaComponent::Var {
                                 name: var.name.clone(),
                                 ty,
@@ -492,6 +500,7 @@ fn build_mode_definition(
                             ));
                         }
                         components.retain(|component| component.name() != proc_def.name);
+                        inherited_private.remove(&proc_def.name);
                         components.push(crate::modes::MoretaComponent::Proc {
                             name: proc_def.name.clone(),
                             signature,
@@ -516,6 +525,7 @@ fn build_mode_definition(
                             ));
                         }
                         components.retain(|component| component.name() != signature.name);
+                        inherited_private.remove(&signature.name);
                         components.push(crate::modes::MoretaComponent::Proc {
                             name: signature.name.clone(),
                             signature: ty,
@@ -547,6 +557,7 @@ fn build_mode_definition(
                             (format!("{}!{}", parent_path, nested.name), ty),
                         ] {
                             components.retain(|component| component.name() != prefix);
+                            inherited_private.remove(&prefix);
                             components.push(crate::modes::MoretaComponent::Mode {
                                 name: prefix.clone(),
                                 ty,
@@ -731,6 +742,7 @@ fn build_mode_definition(
                 final_mode: *final_attr,
                 assignable: *assignable && *kind == crate::ast::MoretaKind::Module,
                 components,
+                inherited_private,
             });
             Type::Moreta(id)
         }

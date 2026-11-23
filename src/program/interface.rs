@@ -240,6 +240,7 @@ pub fn add_external_modes(
                         final_mode: false,
                         assignable: false,
                         components: Vec::new(),
+                        inherited_private: HashSet::new(),
                     });
                     moreta_definitions.push(mode);
                 }

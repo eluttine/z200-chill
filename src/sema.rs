@@ -1062,7 +1062,11 @@ impl Checker {
                             ));
                         };
                         let mut component_scope = Scope::default();
+                        let inherited_private = self.modes.get_moreta(id).inherited_private.clone();
                         for component in &self.modes.get_moreta(id).components {
+                            if inherited_private.contains(component.name()) {
+                                continue;
+                            }
                             match component {
                                 crate::modes::MoretaComponent::Var { name, ty, .. } => {
                                     component_scope.vars.insert(name.clone(), *ty);
@@ -2813,6 +2817,17 @@ impl Checker {
     fn check_field(&mut self, base: &Expr, field: &str, span: Span) -> Result<Type, Error> {
         let base_ty = self.check_expr(base)?;
         if let Type::Moreta(id) = base_ty {
+            if self.current_moreta == Some(id)
+                && self.modes.get_moreta(id).inherited_private.contains(field)
+            {
+                return Err(Error::coded(
+                    "E0400",
+                    span,
+                    format!(
+                        "private inherited component `{field}` is not visible in a derived mode"
+                    ),
+                ));
+            }
             if !self.component_visible(id, field) {
                 return Err(Error::coded(
                     "E0400",

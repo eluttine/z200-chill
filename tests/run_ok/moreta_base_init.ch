@@ -1,5 +1,8 @@
 -- Inherited components keep base initializer behavior.
 M: MODULE
+  NEWMODE Base = MODULE SPEC
+    DCL value INT;
+  END Base;
   NEWMODE Base = MODULE BODY
     DCL value INT INIT := 4;
     Inc: PROC (n INT) RETURNS (INT);

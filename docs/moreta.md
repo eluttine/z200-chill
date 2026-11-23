@@ -40,8 +40,10 @@ Z.200 requirements.
   granted are internal. Components present only in the body are private.
 - External access requires a public component. The defining module can access public,
   internal, and private components.
-- Inheritance copies components with their visibility. `IMPLEMENTS` requires a public
-  component with a matching mode/signature.
+- Inheritance copies components with their visibility. Internal base components remain
+  accessible to derived-mode bodies; private base components are stored but are not
+  name-visible in derived bodies. `IMPLEMENTS` requires a public component with a
+  matching mode/signature.
 - Moreta modes can appear in grant interfaces with their component visibility,
   interface kind, and `IMPLEMENTS` links.
 - Objects are initialized when their declaration is executed.
@@ -100,7 +102,8 @@ Z.200 requirements.
 
 - deeper interface inheritance/implementation validation beyond exact component and
   signature matching,
-- complete moreta visibility rules beyond public/internal/private component classes.
+- complete moreta visibility rules beyond the supported public/internal/private and
+  inherited-private behavior.
 
 These exclusions are deliberate. Adding them should be a separate design step rather
 than an incidental extension.

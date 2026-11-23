@@ -1,5 +1,8 @@
 -- Moreta module-body inheritance.
 M: MODULE
+  NEWMODE Base = MODULE SPEC
+    DCL value INT;
+  END Base;
   NEWMODE Base = MODULE BODY
     DCL value INT;
     Inc: PROC (n INT) RETURNS (INT);
