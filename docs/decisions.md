@@ -166,21 +166,19 @@ See [contexts.md](contexts.md).
 
 ## 10.16 First-release concurrency policy (resolved)
 
-The first release targets **language coverage and static semantics**, not faithful
-concurrent execution. `z200c` now has a single-threaded cooperative scheduler for
-processes, yielding at action boundaries:
+The first release targets **language coverage and static semantics** with a
+single-threaded cooperative scheduler. `z200c` yields at action boundaries:
 
-- regions do not implement mutual exclusion or waiting queues;
-- `PROCESS`, `START`, and `STOP` are executed cooperatively;
-- events, `DELAY`, `CONTINUE`, signals, and region-call mutual exclusion are
-  executed by the cooperative scheduler;
-- relative timing actions, duration values, process instances, `THIS`, targeted
-  signal sends, send priorities, buffers, process handlers, and process `LOC`
-  parameters are executed;
-- absolute timing, `CYCLE`, and `ABSTIME` are executed;
-- buffers are not yet executed faithfully;
-- no resumable continuation or scheduler is required for the first release.
+- region method calls are serialized per object, with queued callers;
+- `PROCESS`, `START`, and `STOP` execute cooperatively;
+- events, `DELAY`, `DELAY CASE`, `CONTINUE`, signals, and targeted sends execute on
+  the cooperative scheduler;
+- relative, absolute, and cyclic timing, duration values, process instances, `THIS`,
+  send priorities, blocks, process handlers, and process `LOC` parameters execute;
+- module, region, and task object modes execute, including task workers and explicit
+  `TERMINATE` shutdown;
+- the main module body still runs before spawned processes are scheduled.
 
-Faithful CHILL concurrency needs an explicit execution-state machine or async runtime
-and is deferred to a post-first-release milestone. This also defers moreta task/region
-object modes.
+Faithful preemptive/parallel CHILL concurrency and main-process interleaving with
+spawned processes are deferred. Static task-object cleanup and region-call timeout
+supervision are also deferred.

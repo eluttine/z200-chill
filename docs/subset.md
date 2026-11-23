@@ -51,8 +51,8 @@ Current scope includes:
 - arrays including slices, multidimensional arrays, literals, and arrays of structures;
 - `REF`/`PTR`/`ROW` modes, `NULL`, `ALLOCATE`/`GETSTACK`/`TERMINATE`, and
   dereferencing;
-- narrow and wide text modes (`TEXT(n)`, `WTEXT(n)`), text I/O, format codes,
-  associations/access modes;
+- narrow and wide text modes (`TEXT(n)`, `WTEXT(n)`), text I/O, text index
+  attributes, format codes, associations/access modes;
 - generic procedure/module/region/process/moreta-mode templates over `MODE`, `SYN`,
   and `PROC`;
 - moreta module-body, region, and task objects in the documented subset.
@@ -726,7 +726,13 @@ PairInt: MODULE = NEW Pair (INT) END;
 
 - Instantiated modules are cloned with formal modes and SYN values substituted through
   declarations, contexts, nested modules, actions, handlers, and invariants.
-- Generic region and process templates are not implemented yet.
+- Generic region templates use the same form:
+  `Name: GENERIC ... REGION ... END Name;` and
+  `Name: REGION = NEW Template(actuals) END;`.
+- Generic process templates use `Name: GENERIC ... PROCESS ... END Name;` and
+  `Name: PROCESS = NEW Template(actuals) END;`.
+- Generic moreta-mode templates use `NEWMODE Name = GENERIC ... <mode body>` and
+  `NEWMODE X = NEW Template(actuals) END;`.
 
 ### 6.3 Minimal moreta module modes
 
@@ -771,7 +777,9 @@ ASSERT p.x = 1;
 - Module-mode types can be exported through grant interfaces with their component
   visibility and `IMPLEMENTS` links.
 
-Not implemented yet: constructors/destructors and task/region object modes.
+Constructors, destructors, and module/region/task mode variants are documented in
+[moreta.md](moreta.md). Remaining limits include static-object destructor timing,
+deeper interface matching, and complete internal/private visibility.
 
 ## 7. Modules and visibility
 

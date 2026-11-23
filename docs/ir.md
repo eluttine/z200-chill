@@ -21,20 +21,32 @@ source -> tokens -> AST -> checker (types + resolutions) -> typed IR -> interpre
 
 `ir::Expr` covers:
 
-- integer, boolean, character, and string literals;
+- integer, float, boolean, character, string, wide-string, bit-string, and `NULL`
+  literals;
 - variable/name references with a checked mode;
-- mode conversions with the resolved `IntKind`;
-- procedure calls with resolved names and arguments;
+- set-element values and powerset literals;
+- mode conversions, including integer and float conversions;
+- procedure, process, and moreta method calls with resolved names and arguments;
+- `THIS`, process `START`, `SELF` values/fields, address-of, dereference, and
+  `ALLOCATE`/`GETSTACK`;
 - unary `-` / `NOT`;
-- binary operators with the checked result mode.
+- binary operators with the checked result mode;
+- field selection, array indexing, constant and dynamic array slices;
+- array literals, labelled array tuples, and powerset literals;
+- association/access operations, text I/O, and text index attributes;
+- other resolved built-ins (I/O, timing, duration, and termination).
 
 ## Statement nodes
 
 `ir::Stmt` covers:
 
-- assignment (the v0 target is always a name);
-- `ASSERT`, procedure-call actions, `RETURN`, `RESULT`, `EXIT`;
-- `IF`, `DO` (while/ever/for), `CASE`, labelled actions, `BEGIN`, empty actions.
+- assignment to variables, fields, array elements, and array slices;
+- `ASSERT`, procedure-call actions, `RETURN`, `RESULT`, and `EXIT`;
+- `IF`, `DO` (while/ever/for), `CASE` with one or more selectors, labelled actions,
+  `BEGIN`, and empty actions;
+- `CAUSE`, handled actions, and nested module actions;
+- process actions (`START`, `STOP`), signal send/receive, `DELAY`/`DELAY CASE`,
+  buffer operations, and timing actions.
 
 All embedded expressions are `ir::Expr`. `BEGIN` keeps its declaration list as AST
 declarations (`DCL` structure), but initializer expressions are lowered IR expressions.

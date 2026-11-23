@@ -60,7 +60,8 @@ asserts end-to-end delivery invariants.
   instance values do not carry separate dynamic names.
 - Scheduler fairness is simple round-robin; no priority scheduling guarantees.
 - Process definitions outside the module declaration list are not supported.
-- Generic region/process templates are not implemented.
+- Generic process and region templates are supported; template instances expand before
+  semantic analysis.
 
 ## Scheduler stress testing
 

@@ -6,7 +6,7 @@ CHILL was designed for large, long-lived, high-reliability systems (such as tele
 
 ## Project Status
 
-Early development. The `z200c` CLI can currently load and validate `Chill.toml`, tokenize and parse the v0 subset, perform mode checking, enforce qualified `GRANT`/`SEIZE` visibility (`Module!name`, `GRANT ALL` / `SEIZE ALL`, `PREFIXED` output, `TO` friends, static structure-mode `FORBID`) between modules, validate `SPEC MODULE` interfaces against their bodies, compile multi-file packages, link package-directory and source-bearing grant-file dependencies for `run`, lower checked programs to a typed expression/statement IR, and interpret them (including `DO FOR`, `CASE`, and labelled `EXIT`). Single `.ch` files can be checked or run without a manifest (`z200c run hello.ch`). `z200c grant` emits a TOML interface file; `check` and `grant` can resolve `SEIZE` against interface-only grant files, while `run` links them only when the grant file records its source package. Modules are identified by package plus name, so different packages may reuse a module name. Diagnostics carry stable codes and multiple checker errors are reported together; see [docs/diagnostics.md](docs/diagnostics.md).
+Early development. The `z200c` CLI can currently load and validate `Chill.toml`, tokenize and parse the v0 subset, perform mode checking, enforce qualified `GRANT`/`SEIZE` visibility (`Module!name`, `GRANT ALL` / `SEIZE ALL`, `PREFIXED` output, `TO` friends, static structure-mode `FORBID`) between modules, validate `SPEC MODULE` interfaces against their bodies, compile multi-file packages, link package-directory and source-bearing grant-file dependencies for `run`, lower checked programs to a typed expression/statement IR, and interpret them (including multiple `CASE` selectors, `DO FOR`, labelled `EXIT`, cooperative processes, regions, and task objects). Single `.ch` files can be checked or run without a manifest (`z200c run hello.ch`). `z200c grant` emits a TOML interface file; `check` and `grant` can resolve `SEIZE` against interface-only grant files, while `run` links them only when the grant file records its source package. Modules are identified by package plus name, so different packages may reuse a module name. Diagnostics carry stable codes and multiple checker errors are reported together; see [docs/diagnostics.md](docs/diagnostics.md).
 
 ```sh
 cargo run -- check examples/hello
@@ -36,4 +36,5 @@ z200-chill/
 │   ├── app/            # Directory-dependency linking example
 │   └── pipeline/       # End-to-end concurrent pipeline example
 └── docs/               # subset.md, manifest.md, grant-file.md, diagnostics.md, ir.md,
-                        # contexts.md, piecewise.md, decisions.md
+                        # concurrency.md, moreta.md, contexts.md, piecewise.md,
+                        # decisions.md

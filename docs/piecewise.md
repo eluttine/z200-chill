@@ -232,7 +232,8 @@ Diagnostics should carry both the referencing span and the resolved piece path.
 - `src/pieces.rs` resolves literal, text-reference, and empty designators; rejects
   absolute/escaping paths; detects cycles via `resolve_checked`.
 - Loader validates that referenced pieces exist (`E0700`).
-- No expansion yet; remote nodes produce `E0701` “remote pieces are not expanded yet”.
+- This phase established resolution only; expansion is added in Phase 1. Unresolved
+  remote nodes reaching analysis still produce `E0701`.
 
 ### Phase 1 — Remote modules, specs, and program units (implemented)
 
