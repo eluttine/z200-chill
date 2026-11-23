@@ -2861,9 +2861,11 @@ impl Checker {
             Expr::Name { .. } => true,
             Expr::Field { base, .. } => self.is_field_location(base),
             Expr::Deref { .. } | Expr::SelfRef { .. } => true,
-            Expr::Apply { name, args, .. } => {
-                args.len() == 1 && matches!(self.lookup_var(name), Some(Type::Array(_)))
-            }
+            Expr::Apply { name, args, .. } => match self.lookup_var(name) {
+                Some(Type::Array(_)) => args.len() == 1,
+                Some(Type::MultiArray(array)) => args.len() == array.dimensions().len(),
+                _ => false,
+            },
             _ => false,
         }
     }

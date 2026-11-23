@@ -6454,16 +6454,27 @@ impl<'a> Interpreter<'a> {
         match target {
             ir::AssignTarget::Var(name) => self.read_var(name, span),
             ir::AssignTarget::Field {
-                root, index, path, ..
+                root,
+                indices,
+                array,
+                path,
+                ..
             } => {
-                let value = match index {
-                    Some(index) => {
-                        let value = self.read_var(root, span)?;
+                let value = self.read_var(root, span)?;
+                let value = if indices.is_empty() {
+                    value
+                } else {
+                    let array = array.ok_or_else(|| {
+                        Error::coded("E0500", span, "internal: indexed field has no array mode")
+                    })?;
+                    let mut index_values = Vec::with_capacity(indices.len());
+                    for index in indices {
                         let index_value = self.eval_ir(index)?;
                         let (index, _) = self.expect_int(index_value, index.span())?;
-                        read_array_element(value, index, span)?
+                        index_values.push(index);
                     }
-                    None => self.read_var(root, span)?,
+                    let offset = array_offset(array, &index_values, span)?;
+                    read_array_at(value, offset, span)?
                 };
                 read_path(value, path, span)
             }
@@ -6555,7 +6566,8 @@ impl<'a> Interpreter<'a> {
             ir::AssignTarget::Var(name) => self.assign_var(name, value, span),
             ir::AssignTarget::Field {
                 root,
-                index,
+                indices,
+                array,
                 path,
                 ty,
             } => {
@@ -6565,20 +6577,26 @@ impl<'a> Interpreter<'a> {
                 }
                 let result = (|| {
                     let value = self.convert(value, *ty, span)?;
-                    let index = match index {
-                        Some(index) => {
+                    let offset = if indices.is_empty() {
+                        None
+                    } else {
+                        let array = array.ok_or_else(|| {
+                            Error::coded("E0500", span, "internal: indexed field has no array mode")
+                        })?;
+                        let mut index_values = Vec::with_capacity(indices.len());
+                        for index in indices {
                             let index_value = self.eval_ir(index)?;
                             let (index, _) = self.expect_int(index_value, index.span())?;
-                            Some(index)
+                            index_values.push(index);
                         }
-                        None => None,
+                        Some(array_offset(array, &index_values, span)?)
                     };
                     let cell = self.find_var_cell(root).ok_or_else(|| {
                         Error::coded("E0505", span, format!("unknown variable `{root}`"))
                     })?;
                     let mut var = cell.borrow_mut();
-                    let target = match index {
-                        Some(index) => array_element_mut(&mut var.value, index, span)?,
+                    let target = match offset {
+                        Some(offset) => array_at_mut(&mut var.value, offset, span)?,
                         None => &mut var.value,
                     };
                     assign_path(target, path, value, span)
@@ -7460,6 +7478,16 @@ fn assign_array_at(
     Ok(())
 }
 
+fn array_at_mut(value: &mut Value, offset: i128, span: Span) -> Result<&mut Value, Error> {
+    let Value::Array { values, .. } = value else {
+        return Err(Error::coded("E0507", span, "expected an array value"));
+    };
+    if offset < 0 || offset as usize >= values.len() {
+        return Err(Error::coded("E0500", span, "array index is out of bounds"));
+    }
+    Ok(&mut values[offset as usize])
+}
+
 fn assign_array_slice(
     value: &mut Value,
     offset: i128,
@@ -7488,43 +7516,6 @@ fn assign_array_slice(
         values[start + index] = item;
     }
     Ok(())
-}
-
-fn read_array_element(value: Value, index: i128, span: Span) -> Result<Value, Error> {
-    let Value::Array { low, values } = value else {
-        return Err(Error::coded("E0507", span, "expected an array value"));
-    };
-    let offset = index - low;
-    if offset < 0 || offset as usize >= values.len() {
-        return Err(Error::coded(
-            "E0500",
-            span,
-            format!("array index `{index}` is out of bounds"),
-        ));
-    }
-    match &values[offset as usize] {
-        Value::Undefined => Err(Error::coded(
-            "E0500",
-            span,
-            format!("use of undefined array element `{index}`"),
-        )),
-        value => Ok(value.clone()),
-    }
-}
-
-fn array_element_mut(value: &mut Value, index: i128, span: Span) -> Result<&mut Value, Error> {
-    let Value::Array { low, values } = value else {
-        return Err(Error::coded("E0507", span, "expected an array value"));
-    };
-    let offset = index - *low;
-    if offset < 0 || offset as usize >= values.len() {
-        return Err(Error::coded(
-            "E0500",
-            span,
-            format!("array index `{index}` is out of bounds"),
-        ));
-    }
-    Ok(&mut values[offset as usize])
 }
 
 fn read_field(value: Value, field: &str, span: Span) -> Result<Value, Error> {

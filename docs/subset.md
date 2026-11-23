@@ -296,9 +296,8 @@ mode.
 - Slice assignment copies elements into the source range at runtime.
 - Whole-array assignment and equality work for multidimensional arrays with the same
   shape and element mode.
-- Multidimensional array elements can be read through field selection
-  (`a(i, j).field`); assigning through a field of a multidimensional element is not
-  implemented yet.
+- Multidimensional array elements can be read and assigned through field selection
+  (`a(i, j).field := value`).
 - Array slices currently apply to one-dimensional arrays only.
 - Array literals currently apply to one-dimensional arrays only.
 

@@ -319,8 +319,9 @@ pub enum AssignTarget {
     Var(String),
     Field {
         root: String,
-        /// When present, the field path starts from this array element.
-        index: Option<Node>,
+        /// Array indices selecting the element that owns the field path.
+        indices: Vec<Node>,
+        array: Option<Type>,
         path: Vec<String>,
         ty: Type,
     },
@@ -1080,7 +1081,8 @@ impl Lowerer<'_> {
                     } else {
                         AssignTarget::Field {
                             root: component,
-                            index: None,
+                            indices: Vec::new(),
+                            array: None,
                             path,
                             ty,
                         }
@@ -1093,19 +1095,28 @@ impl Lowerer<'_> {
                         ty,
                     });
                 }
-                let (root, index, path) = flatten_field_location(target).ok_or_else(|| {
-                    Error::new(
-                        target.span(),
-                        "assignment target must be a variable, array element, or field of one",
-                    )
-                })?;
-                let index = match index {
-                    Some(index) => Some(self.lower_expr(index)?),
+                let (root, array_span, index_exprs, path) = flatten_field_location(target)
+                    .ok_or_else(|| {
+                        Error::new(
+                            target.span(),
+                            "assignment target must be a variable, array element, or field of one",
+                        )
+                    })?;
+                let indices = index_exprs
+                    .into_iter()
+                    .map(|expr| self.lower_expr(expr))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let array = match array_span {
+                    Some(span) => match self.check.resolutions.get(&span) {
+                        Some(ApplyResolution::ArrayIndex(array)) => Some(*array),
+                        _ => None,
+                    },
                     None => None,
                 };
                 Ok(AssignTarget::Field {
                     root,
-                    index,
+                    indices,
+                    array,
                     path,
                     ty,
                 })
@@ -1885,16 +1896,18 @@ fn flatten_deref_field(expr: &AstExpr) -> Option<(&AstExpr, Vec<String>)> {
     }
 }
 
-fn flatten_field_location(expr: &AstExpr) -> Option<(String, Option<&AstExpr>, Vec<String>)> {
+type FieldLocation<'a> = (String, Option<Span>, Vec<&'a AstExpr>, Vec<String>);
+
+fn flatten_field_location(expr: &AstExpr) -> Option<FieldLocation<'_>> {
     match expr {
-        AstExpr::Name { name, .. } => Some((name.clone(), None, Vec::new())),
-        AstExpr::Apply { name, args, .. } if args.len() == 1 => {
-            Some((name.clone(), Some(&args[0]), Vec::new()))
+        AstExpr::Name { name, .. } => Some((name.clone(), None, Vec::new(), Vec::new())),
+        AstExpr::Apply { name, args, span } if !args.is_empty() => {
+            Some((name.clone(), Some(*span), args.iter().collect(), Vec::new()))
         }
         AstExpr::Field { base, field, .. } => {
-            let (root, index, mut path) = flatten_field_location(base)?;
+            let (root, array_span, indices, mut path) = flatten_field_location(base)?;
             path.push(field.clone());
-            Some((root, index, path))
+            Some((root, array_span, indices, path))
         }
         _ => None,
     }
