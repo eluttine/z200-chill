@@ -369,6 +369,11 @@ pub enum AssignTarget {
         low: i128,
         ty: Type,
     },
+    MultiSlice {
+        name: String,
+        source: crate::types::MultiArrayType,
+        result: crate::types::MultiArrayType,
+    },
     Deref {
         reference: Node,
         ty: Type,
@@ -1193,6 +1198,21 @@ impl Lowerer<'_> {
                     indices,
                     array: *array,
                     ty,
+                })
+            }
+            AstExpr::MultiSlice { name, span, .. } => {
+                let Some(ApplyResolution::MultiSlice { source, result }) =
+                    self.check.resolutions.get(span)
+                else {
+                    return Err(Error::new(
+                        *span,
+                        "internal: multidimensional slice has no resolution",
+                    ));
+                };
+                Ok(AssignTarget::MultiSlice {
+                    name: name.clone(),
+                    source: *source,
+                    result: *result,
                 })
             }
             AstExpr::ArraySlice {

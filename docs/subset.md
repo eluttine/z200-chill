@@ -303,8 +303,8 @@ mode.
   module-mode objects, `REF`, `ROW`, or `PTR` modes. Arrays of buffers and references
   to array targets remain unsupported.
 - Full-dimensional multidimensional slices with constant bounds are supported,
-  including the `UP size` form. Partial-dimensional and dynamic multidimensional
-  slices remain unsupported.
+  including the `UP size` form and rectangular slice assignment. Partial-dimensional
+  and dynamic multidimensional slices remain unsupported.
 - Array literals support one-dimensional arrays and nested multidimensional literals
   such as `[[1, 2], [3, 4]]`.
 

@@ -6809,6 +6809,7 @@ impl<'a> Interpreter<'a> {
             | ir::AssignTarget::Deref { ty, .. }
             | ir::AssignTarget::DerefField { ty, .. }
             | ir::AssignTarget::DerefIndex { ty, .. } => Ok(*ty),
+            ir::AssignTarget::MultiSlice { result, .. } => Ok(Type::MultiArray(*result)),
         }
     }
 
@@ -6889,6 +6890,14 @@ impl<'a> Interpreter<'a> {
                 let (offset, count) =
                     dynamic_slice_range(len, *low, first_value, last_value, *up, span)?;
                 read_array_slice(value, offset, count, *low, span)
+            }
+            ir::AssignTarget::MultiSlice {
+                name,
+                source,
+                result,
+            } => {
+                let value = self.read_var(name, span)?;
+                extract_multidim_slice(value, *source, *result, span)
             }
             ir::AssignTarget::DerefIndex {
                 reference,
@@ -7037,6 +7046,18 @@ impl<'a> Interpreter<'a> {
                 let (offset, count) =
                     dynamic_slice_range(len, *low, first_value, last_value, *up, span)?;
                 assign_array_slice(&mut var.value, offset, count, value, span)
+            }
+            ir::AssignTarget::MultiSlice {
+                name,
+                source,
+                result,
+            } => {
+                let value = self.convert(value, Type::MultiArray(*result), span)?;
+                let cell = self.find_var_cell(name).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{name}`"))
+                })?;
+                let mut var = cell.borrow_mut();
+                assign_multidim_slice(&mut var.value, *source, *result, value, span)
             }
             ir::AssignTarget::DerefIndex {
                 reference,
@@ -7855,6 +7876,45 @@ fn extract_multidim_slice(
         low: result.dimensions()[0].low,
         values: extracted,
     })
+}
+
+fn assign_multidim_slice(
+    target: &mut Value,
+    source: crate::types::MultiArrayType,
+    result: crate::types::MultiArrayType,
+    value: Value,
+    span: Span,
+) -> Result<(), Error> {
+    let Value::Array {
+        values: replacement,
+        ..
+    } = value
+    else {
+        return Err(Error::coded("E0507", span, "expected an array value"));
+    };
+    if replacement.len() != result.total_len().max(0) as usize {
+        return Err(Error::coded(
+            "E0500",
+            span,
+            "multidimensional slice assignment shape mismatch",
+        ));
+    }
+    for (flat, replacement) in replacement.into_iter().enumerate() {
+        let mut remainder = flat as i128;
+        let mut indices = Vec::with_capacity(result.rank());
+        for dim in result.dimensions().iter().rev() {
+            let length = dim.length();
+            if length <= 0 {
+                break;
+            }
+            indices.push(dim.low + remainder % length);
+            remainder /= length;
+        }
+        indices.reverse();
+        let offset = array_offset(Type::MultiArray(source), &indices, span)?;
+        assign_array_at(target, offset, replacement, span)?;
+    }
+    Ok(())
 }
 
 fn read_array_slice(

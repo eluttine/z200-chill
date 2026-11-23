@@ -198,7 +198,8 @@ deferred.
       direct value-cycle rejection.
 - [x] References to whole array targets with indexed dereference (`ref->(i)`).
 - [x] Nested multidimensional array literals.
-- [x] Full-dimensional constant-bound multidimensional slices, including `UP` size.
+- [x] Full-dimensional constant-bound multidimensional slices, including `UP` size
+      and rectangular slice assignment.
 - [x] Main-process interleaving at action boundaries via scheduler pumping.
 - [x] Main-process blocking `DELAY`, timed `DELAY`, and signal/buffer `RECEIVE CASE`
       through scheduler pumping.

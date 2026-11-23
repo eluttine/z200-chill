@@ -2605,6 +2605,7 @@ impl Checker {
                     Error::coded("E0403", *span, format!("unknown variable `{name}`"))
                 })
             }
+            Expr::MultiSlice { .. } => self.check_expr(target),
             Expr::Deref { .. } | Expr::DerefIndex { .. } | Expr::Null { .. } => {
                 self.check_expr(target)
             }
