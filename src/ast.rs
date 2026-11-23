@@ -358,6 +358,8 @@ pub struct ModeRef {
     pub access_indexed: bool,
     /// Literal index range for an indexed ACCESS mode, if specified.
     pub access_index: Option<ArrayBounds>,
+    /// True when ACCESS uses a WCHARS record mode.
+    pub access_wide: bool,
     pub span: Span,
 }
 

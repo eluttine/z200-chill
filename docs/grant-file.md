@@ -152,7 +152,8 @@ survive a round trip. Module, region, task, and interface modes are recorded wit
 corresponding `kind` and component list.
 
 Text types with an index mode are encoded as `TEXT(n) INT` or `TEXT(n) low:high`
-(and likewise for `WTEXT`). Reference, pointer, row, and buffer types are encoded as
+(and likewise for `WTEXT`). Access types use `ACCESS CHARS`/`ACCESS WCHARS` and the
+indexed forms `ACCESS(INT) ...` or `ACCESS(low:high) ...`. Reference, pointer, row, and buffer types are encoded as
 `REF <mode>`, `PTR`, `ROW <mode>`, and `BUFFER[(length)] <element-mode>`. The element of a buffer may be any
 referable mode, including a symbolic structure-mode reference. Arrays of references,
 nested `REF`/`ROW` targets, and references to fields or indexes remain unsupported.

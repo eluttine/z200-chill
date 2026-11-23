@@ -554,6 +554,7 @@ impl Var {
             let access_ty = Type::Access(types::AccessType {
                 indexed: false,
                 index: None,
+                wide: false,
             });
             let access = Rc::new(RefCell::new(Self::new(access_ty, Value::Access(None))));
             Self {
@@ -5914,6 +5915,7 @@ impl<'a> Interpreter<'a> {
                     string_length: None,
                     varying: false,
                     access: false,
+                    access_wide: false,
                     powerset: false,
                     reference: false,
                     row: false,
@@ -5947,6 +5949,7 @@ impl<'a> Interpreter<'a> {
                         low: bounds.low,
                         high: bounds.high,
                     }),
+                wide: mode.access_wide,
             }));
         }
         if !mode.arrays.is_empty() {
@@ -5956,6 +5959,7 @@ impl<'a> Interpreter<'a> {
                 string_length: mode.string_length,
                 varying: mode.varying,
                 access: mode.access,
+                access_wide: mode.access_wide,
                 powerset: mode.powerset,
                 reference: mode.reference,
                 row: mode.row,

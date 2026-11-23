@@ -754,11 +754,12 @@ fn parse_external_type(
             types::PowerSetType { member },
         )));
     }
-    if name == "ACCESS CHARS" {
+    if name == "ACCESS CHARS" || name == "ACCESS WCHARS" {
         return Ok(program::ExternalType::Builtin(Type::Access(
             types::AccessType {
                 indexed: false,
                 index: None,
+                wide: name.ends_with("WCHARS"),
             },
         )));
     }
@@ -766,14 +767,17 @@ fn parse_external_type(
         let (index, suffix) = rest
             .split_once(')')
             .ok_or_else(|| format!("invalid access mode `{name}` in grant file"))?;
-        if suffix.trim() != "CHARS" {
-            return Err(format!("invalid access record mode in `{name}`"));
-        }
+        let wide = match suffix.trim() {
+            "CHARS" => false,
+            "WCHARS" => true,
+            _ => return Err(format!("invalid access record mode in `{name}`")),
+        };
         let index = index.trim();
         let access = if index == "INT" || index == "SHORT_INT" || index == "LONG_INT" {
             types::AccessType {
                 indexed: true,
                 index: None,
+                wide,
             }
         } else {
             let (low, high) = index
@@ -790,6 +794,7 @@ fn parse_external_type(
             types::AccessType {
                 indexed: true,
                 index: Some(types::ArrayDimension { low, high }),
+                wide,
             }
         };
         return Ok(program::ExternalType::Builtin(Type::Access(access)));
@@ -1087,12 +1092,13 @@ fn type_name(ty: Type) -> String {
             }
         ),
         Type::Access(access) => {
+            let record = if access.wide { "WCHARS" } else { "CHARS" };
             if !access.indexed {
-                "ACCESS CHARS".to_owned()
+                format!("ACCESS {record}")
             } else if let Some(index) = access.index {
-                format!("ACCESS({}:{}) CHARS", index.low, index.high)
+                format!("ACCESS({}:{}) {record}", index.low, index.high)
             } else {
-                "ACCESS(INT) CHARS".to_owned()
+                format!("ACCESS(INT) {record}")
             }
         }
         Type::ArrayTuple | Type::DynamicArray { .. } => "ARRAY".to_owned(),
@@ -1390,14 +1396,22 @@ END M;
             types::AccessType {
                 indexed: false,
                 index: None,
+                wide: false,
             },
             types::AccessType {
                 indexed: true,
                 index: None,
+                wide: false,
+            },
+            types::AccessType {
+                indexed: false,
+                index: None,
+                wide: true,
             },
             types::AccessType {
                 indexed: true,
                 index: Some(types::ArrayDimension { low: 0, high: 3 }),
+                wide: true,
             },
         ] {
             let ty = Type::Access(access);

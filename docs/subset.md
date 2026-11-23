@@ -570,7 +570,8 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
 - `WCHARS`, `WCHARS(n)`, and `WCHARS(n) VARYING` are the wide-string counterparts of
   `CHARS` modes. Narrow and wide strings are distinct modes and are not implicitly
   assignable to one another.
-- `ACCESS`/association record paths and record I/O remain narrow `CHARS` only.
+- `ACCESS`/association record paths support narrow `CHARS` and wide `WCHARS`
+  line-record modes; other record modes remain unimplemented.
 - `TEXT(n)` and `WTEXT(n)` are text location modes. Their text record is represented
   as a varying `CHARS(n)` / `WCHARS(n)` value, initialized to the empty string.
 - `TEXT(n)`/`WTEXT(n)` accept the optional index-mode and `DYNAMIC` surface syntax.
@@ -631,8 +632,9 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
 
 ### 5.8 Associations and access modes (simplified)
 
-`ASSOCIATION` is an opaque association-mode location. `ACCESS CHARS` is an opaque
-sequential access-mode location for character-string line records. The current
+`ASSOCIATION` is an opaque association-mode location. `ACCESS CHARS` and
+`ACCESS WCHARS` are access-mode locations for narrow/wide character-string line
+records. The current
 implementation is an intentional simplification of Z.200 file handling:
 
 - `ASSOCIATE(association, "path")` attaches an implementation-defined host-file path.
@@ -657,7 +659,8 @@ implementation is an intentional simplification of Z.200 file handling:
 - `GETASSOCIATION(transfer)` returns a reference to the connected association location,
   or `NULL` when the transfer location is not connected.
 - `DISCONNECT(transfer)` clears the connection.
-- `WRITERECORD(access, text)` appends one line-based record.
+- `WRITERECORD(access, text)` appends one line-based record in the access record
+  mode (`CHARS` or `WCHARS`).
 - `READRECORD(access)` returns the next line; `READRECORD(access, target)` stores it in
   a `CHARS` location.
 - Indexed access also supports `READRECORD(access, index [, target])` and
@@ -804,8 +807,8 @@ ASSERT p.x = 1;
   visibility and `IMPLEMENTS` links.
 
 Constructors, destructors, and module/region/task mode variants are documented in
-[moreta.md](moreta.md). Remaining limits include static-object destructor timing,
-deeper interface matching, and complete internal/private visibility.
+[moreta.md](moreta.md). Remaining limits include deeper interface matching and broader
+moreta visibility rules.
 
 ## 7. Modules and visibility
 

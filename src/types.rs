@@ -132,6 +132,7 @@ pub struct PowerSetType {
 pub struct AccessType {
     pub indexed: bool,
     pub index: Option<ArrayDimension>,
+    pub wide: bool,
 }
 
 pub const MAX_ARRAY_RANK: usize = 4;
@@ -561,6 +562,7 @@ pub fn resolve_mode_ref(
                 low: bounds.low,
                 high: bounds.high,
             }),
+            wide: mode.access_wide,
         }));
     }
     if mode.name == "BUFFER" {

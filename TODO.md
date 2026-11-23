@@ -190,6 +190,7 @@ deferred.
       process, nested-module, and program-end cleanup.
 - [x] Base constructors/destructors are excluded from `BASED_ON` inheritance.
 - [x] Assignment through fields of multidimensional array elements.
+- [x] Wide `ACCESS WCHARS` records, including grant encoding and indexed forms.
 - [x] Complete `Mode!Component` path preservation in mode symbols and grant files.
 - [x] First concurrency layer: `PROCESS`, `START`, `STOP`, a cooperative
       action-boundary scheduler, shared module locations, and process-local state.

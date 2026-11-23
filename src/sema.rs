@@ -1039,6 +1039,7 @@ impl Checker {
                             string_length: None,
                             varying: false,
                             access: false,
+                            access_wide: false,
                             powerset: false,
                             reference: false,
                             row: false,
@@ -1108,6 +1109,7 @@ impl Checker {
                         string_length: None,
                         varying: false,
                         access: false,
+                        access_wide: false,
                         powerset: false,
                         reference: false,
                         row: false,
@@ -1621,6 +1623,7 @@ impl Checker {
                         low: bounds.low,
                         high: bounds.high,
                     }),
+                wide: mode.access_wide,
             }));
         }
         if !mode.arrays.is_empty() {
@@ -1630,6 +1633,7 @@ impl Checker {
                 string_length: mode.string_length,
                 varying: mode.varying,
                 access: mode.access,
+                access_wide: mode.access_wide,
                 powerset: mode.powerset,
                 reference: mode.reference,
                 row: mode.row,
@@ -3729,9 +3733,16 @@ impl Checker {
                                 let second_ty = self.check_expr(&args[1])?;
                                 if second_ty.is_int() {
                                     has_index = true;
-                                    Some(Type::String)
-                                } else if is_narrow_string_type(second_ty)
-                                    && matches!(args[1], Expr::Name { .. })
+                                    Some(if access.wide {
+                                        Type::WString
+                                    } else {
+                                        Type::String
+                                    })
+                                } else if (if access.wide {
+                                    is_wide_string_type(second_ty)
+                                } else {
+                                    is_narrow_string_type(second_ty)
+                                }) && matches!(args[1], Expr::Name { .. })
                                 {
                                     has_target = true;
                                     None
@@ -3760,7 +3771,11 @@ impl Checker {
                                     ));
                                 };
                                 let target_ty = self.check_expr(&args[2])?;
-                                if !is_narrow_string_type(target_ty) {
+                                if !(if access.wide {
+                                    is_wide_string_type(target_ty)
+                                } else {
+                                    is_narrow_string_type(target_ty)
+                                }) {
                                     return Err(Error::coded(
                                         "E0400",
                                         args[2].span(),
@@ -3780,7 +3795,11 @@ impl Checker {
                         }
                     } else {
                         match args {
-                            [_] => Some(Type::String),
+                            [_] => Some(if access.wide {
+                                Type::WString
+                            } else {
+                                Type::String
+                            }),
                             [_, target] => {
                                 let Expr::Name { .. } = target else {
                                     return Err(Error::coded(
@@ -3790,7 +3809,11 @@ impl Checker {
                                     ));
                                 };
                                 let target_ty = self.check_expr(target)?;
-                                if !is_narrow_string_type(target_ty) {
+                                if !(if access.wide {
+                                    is_wide_string_type(target_ty)
+                                } else {
+                                    is_narrow_string_type(target_ty)
+                                }) {
                                     return Err(Error::coded(
                                         "E0400",
                                         target.span(),
@@ -3841,7 +3864,11 @@ impl Checker {
                         &args[1]
                     };
                     let value_ty = self.check_expr(value)?;
-                    if !is_narrow_string_type(value_ty) {
+                    if !(if access.wide {
+                        is_wide_string_type(value_ty)
+                    } else {
+                        is_narrow_string_type(value_ty)
+                    }) {
                         return Err(Error::coded(
                             "E0400",
                             value.span(),
@@ -3907,6 +3934,7 @@ impl Checker {
                     crate::types::AccessType {
                         indexed: false,
                         index: None,
+                        wide: false,
                     },
                 ))),
                 TextSubOp::GetRecord => Some(Type::Ref(if wide {

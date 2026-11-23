@@ -1605,7 +1605,7 @@ impl<'a> Parser<'a> {
                 self.expect_rparen()?;
             }
             let record = self.parse_mode_ref()?;
-            if record.name != "CHARS" || !record.arrays.is_empty() {
+            if !matches!(record.name.as_str(), "CHARS" | "WCHARS") || !record.arrays.is_empty() {
                 return Err(Error::coded(
                     "E0205",
                     record.span,
@@ -1618,6 +1618,7 @@ impl<'a> Parser<'a> {
                 string_length: None,
                 varying: false,
                 access: true,
+                access_wide: record.name == "WCHARS",
                 powerset: false,
                 reference: false,
                 row: false,
@@ -1648,6 +1649,7 @@ impl<'a> Parser<'a> {
                 string_length: None,
                 varying: false,
                 access: false,
+                access_wide: false,
                 powerset: true,
                 reference: false,
                 row: false,
@@ -1705,6 +1707,7 @@ impl<'a> Parser<'a> {
                 string_length: element.string_length,
                 varying: element.varying,
                 access: false,
+                access_wide: false,
                 powerset: false,
                 reference: false,
                 row: false,
@@ -1765,6 +1768,7 @@ impl<'a> Parser<'a> {
                 string_length: length,
                 varying,
                 access: false,
+                access_wide: false,
                 powerset: false,
                 reference: false,
                 row: false,
@@ -1821,6 +1825,7 @@ impl<'a> Parser<'a> {
                 string_length: Some(length as usize),
                 varying: true,
                 access: false,
+                access_wide: false,
                 powerset: false,
                 reference: false,
                 row: false,
@@ -1855,6 +1860,7 @@ impl<'a> Parser<'a> {
                 string_length: length,
                 varying: false,
                 access: false,
+                access_wide: false,
                 powerset: false,
                 reference: false,
                 row: false,
@@ -1884,6 +1890,7 @@ impl<'a> Parser<'a> {
                 string_length: length,
                 varying: false,
                 access: false,
+                access_wide: false,
                 powerset: false,
                 reference: false,
                 row: false,
@@ -1925,6 +1932,7 @@ impl<'a> Parser<'a> {
             string_length: None,
             varying: false,
             access: false,
+            access_wide: false,
             powerset: false,
             reference: false,
             row: false,
