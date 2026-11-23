@@ -53,7 +53,8 @@ Current scope includes:
   dereferencing;
 - narrow and wide text modes (`TEXT(n)`, `WTEXT(n)`), text I/O, format codes,
   associations/access modes;
-- generic procedure/module/region/process templates over `MODE`, `SYN`, and `PROC`;
+- generic procedure/module/region/process/moreta-mode templates over `MODE`, `SYN`,
+  and `PROC`;
 - moreta module-body, region, and task objects in the documented subset.
 
 Explicitly **deferred**:
@@ -64,7 +65,6 @@ Explicitly **deferred**:
 - general reference targets beyond simple variables and whole allocated locations;
 - complete internal/private visibility distinctions and deeper interface
   inheritance/implementation rules;
-- generic moreta-mode templates;
 - grant encoding for named set modes and reference/row modes;
 - full association/access attribute modification and arbitrary file models.
 
@@ -126,7 +126,8 @@ Implemented in `z200c`:
   control clauses;
 - simplified text-file associations/access modes with indexed access;
 - powersets and named set modes;
-- generic procedure/module/region/process templates over `MODE`, `SYN`, and `PROC`;
+- generic procedure/module/region/process/moreta-mode templates over `MODE`, `SYN`,
+  and `PROC`;
 - moreta module-body, region, and task objects with methods, inheritance, specs,
   initializers, invariants, and object-level locking/task workers
   (see [moreta.md](moreta.md));
@@ -142,7 +143,6 @@ Not implemented yet (rejected or deferred with a diagnostic):
 - multiple `CASE` selectors and non-integer `CASE` labels;
 - general reference targets beyond simple variables and whole allocated locations;
 - deeper interface/`IMPLEMENTS` rules and complete internal/private visibility;
-- generic moreta-mode templates;
 - grant encoding for named set modes and reference/row modes.
 
 The interpreter is a bootstrap for validating semantics; native code generation is a

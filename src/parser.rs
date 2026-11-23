@@ -834,12 +834,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_mode_definition(&mut self) -> Result<ModeDefinition, Error> {
-        let start = self.current_span();
-        self.advance(); // NEWMODE or SYNMODE
-        let (name, _) = self.expect_identifier()?;
-        self.expect_equal()?;
-
+    fn parse_mode_body(&mut self, name: &str) -> Result<ModeDefinitionBody, Error> {
         let body = if self.at_keyword(Keyword::Struct) {
             self.advance();
             self.expect_lparen()?;
@@ -980,7 +975,7 @@ impl<'a> Parser<'a> {
             };
             self.expect_keyword(Keyword::End)?;
             if let Some(TokenKind::Identifier(trailing)) = self.kind() {
-                if trailing != &name {
+                if trailing != name {
                     return Err(self.error_here_code(
                         "E0202",
                         format!("module mode end name `{trailing}` does not match `{name}`"),
@@ -1002,6 +997,39 @@ impl<'a> Parser<'a> {
             }
         } else {
             ModeDefinitionBody::Alias(self.parse_mode_ref()?)
+        };
+        Ok(body)
+    }
+
+    fn parse_mode_definition(&mut self) -> Result<ModeDefinition, Error> {
+        let start = self.current_span();
+        self.advance(); // NEWMODE or SYNMODE
+        let (name, _) = self.expect_identifier()?;
+        self.expect_equal()?;
+
+        let body = if self.at_keyword(Keyword::Generic) {
+            let body_start = self.current_span();
+            self.advance();
+            let formals = self.parse_generic_formals()?;
+            let body = self.parse_mode_body(&name)?;
+            ModeDefinitionBody::Generic {
+                formals,
+                body: Box::new(body),
+                span: Span::new(self.source, body_start.start, self.current_span().start),
+            }
+        } else if self.at_keyword(Keyword::New) {
+            let body_start = self.current_span();
+            self.advance();
+            let (template, _) = self.expect_identifier()?;
+            let actuals = self.parse_generic_actuals()?;
+            let end = self.expect_keyword(Keyword::End)?;
+            ModeDefinitionBody::GenericInstance {
+                template,
+                actuals,
+                span: Span::new(self.source, body_start.start, end.end),
+            }
+        } else {
+            self.parse_mode_body(&name)?
         };
 
         let end = self.expect_semicolon()?;

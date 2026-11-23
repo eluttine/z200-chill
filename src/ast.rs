@@ -223,6 +223,16 @@ pub enum ModeDefinitionBody {
         span: Span,
     },
     Alias(ModeRef),
+    Generic {
+        formals: Vec<GenericFormal>,
+        body: Box<ModeDefinitionBody>,
+        span: Span,
+    },
+    GenericInstance {
+        template: String,
+        actuals: Vec<GenericActual>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]

@@ -1,4 +1,4 @@
-use crate::ast::{Action, Declaration, Expr, ModeRef, Module, Program};
+use crate::ast::{Action, Declaration, Expr, ModeDefinitionBody, ModeRef, Module, Program};
 use crate::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
@@ -9,6 +9,7 @@ pub fn normalize(program: &Program) -> Result<Program, Error> {
     apply_virtual_grants(&mut normalized.modules)?;
     for module in &mut normalized.modules {
         expand_module_generics(module)?;
+        expand_mode_generics(module)?;
         merge_moreta_specs(module)?;
     }
     expand_generic_modules(&mut normalized)?;
@@ -197,6 +198,103 @@ fn merge_moreta_specs_in_action(action: &mut Action) -> Result<(), Error> {
         }
         _ => Ok(()),
     }
+}
+
+fn expand_mode_generics(module: &mut Module) -> Result<(), Error> {
+    let mut templates: HashMap<String, (Vec<crate::ast::GenericFormal>, ModeDefinitionBody)> =
+        HashMap::new();
+    for declaration in &module.declarations {
+        if let Declaration::Mode(mode_def) = declaration {
+            if let ModeDefinitionBody::Generic { formals, body, .. } = &mode_def.body {
+                if templates
+                    .insert(mode_def.name.clone(), (formals.clone(), (**body).clone()))
+                    .is_some()
+                {
+                    return Err(Error::new(
+                        mode_def.span,
+                        format!("duplicate generic mode `{}`", mode_def.name),
+                    ));
+                }
+            }
+        }
+    }
+    let mut declarations = Vec::with_capacity(module.declarations.len());
+    for declaration in module.declarations.drain(..) {
+        match declaration {
+            Declaration::Mode(mut mode_def) => match mode_def.body {
+                ModeDefinitionBody::Generic { .. } => {}
+                ModeDefinitionBody::GenericInstance {
+                    template: instance_template,
+                    actuals,
+                    span,
+                } => {
+                    let Some((formals, body)) = templates.get(&instance_template) else {
+                        return Err(Error::new(
+                            span,
+                            format!("unknown generic mode `{instance_template}`"),
+                        ));
+                    };
+                    let (substitutions, syn_substitutions, proc_substitutions) =
+                        generic_substitutions(formals, &actuals, span, &instance_template)?;
+                    let mut concrete = body.clone();
+                    substitute_mode_definition_body(
+                        &mut concrete,
+                        &substitutions,
+                        &syn_substitutions,
+                        &proc_substitutions,
+                    )?;
+                    mode_def.body = concrete;
+                    mode_def.span = span;
+                    declarations.push(Declaration::Mode(mode_def));
+                }
+                _ => declarations.push(Declaration::Mode(mode_def)),
+            },
+            other => declarations.push(other),
+        }
+    }
+    module.declarations = declarations;
+    Ok(())
+}
+
+fn substitute_mode_definition_body(
+    body: &mut ModeDefinitionBody,
+    substitutions: &HashMap<&str, &ModeRef>,
+    syns: &HashMap<&str, &Expr>,
+    procs: &HashMap<&str, &str>,
+) -> Result<(), Error> {
+    match body {
+        ModeDefinitionBody::Struct(fields) => {
+            for field in fields {
+                substitute_mode(&mut field.mode, substitutions)?;
+            }
+        }
+        ModeDefinitionBody::Set(_) => {}
+        ModeDefinitionBody::Moreta {
+            declarations,
+            invariant,
+            ..
+        } => {
+            substitute_declaration_modes(declarations, substitutions)?;
+            substitute_declarations_syns(declarations, syns, procs);
+            if let Some(invariant) = invariant {
+                *invariant = substitute_expr_syns(invariant, syns, procs);
+            }
+        }
+        ModeDefinitionBody::Alias(mode) => substitute_mode(mode, substitutions)?,
+        ModeDefinitionBody::Generic { .. } => {
+            return Err(Error::new(
+                crate::lexer::Span::new(crate::lexer::SourceId(0), 0, 0),
+                "nested generic mode templates are not implemented",
+            ));
+        }
+        ModeDefinitionBody::GenericInstance { .. } => {
+            return Err(Error::new(
+                crate::lexer::Span::new(crate::lexer::SourceId(0), 0, 0),
+                "nested generic mode instances are not implemented",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn expand_generic_modules(program: &mut Program) -> Result<(), Error> {
@@ -863,6 +961,21 @@ fn substitute_declaration_modes(
                 }
             }
             Declaration::Mode(mode_def) => match &mut mode_def.body {
+                ModeDefinitionBody::Generic { formals, body, .. } => {
+                    for formal in formals {
+                        if let crate::ast::GenericFormal::Mode(_) = formal {
+                            // Formal names are substituted when the template is expanded.
+                        }
+                    }
+                    substitute_mode_definition_body(
+                        body,
+                        substitutions,
+                        &HashMap::new(),
+                        &HashMap::new(),
+                    )?;
+                }
+                ModeDefinitionBody::GenericInstance { .. } => {}
+
                 crate::ast::ModeDefinitionBody::Struct(fields) => {
                     for field in fields {
                         substitute_mode(&mut field.mode, substitutions)?;

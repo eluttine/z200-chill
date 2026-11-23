@@ -558,6 +558,13 @@ fn build_mode_definition(
             Type::Moreta(id)
         }
         crate::ast::ModeDefinitionBody::Alias(mode) => resolve_mode_with(mode, resolution)?,
+        crate::ast::ModeDefinitionBody::Generic { .. }
+        | crate::ast::ModeDefinitionBody::GenericInstance { .. } => {
+            return Err(Error::new(
+                mode_def.span,
+                "internal: generic mode was not expanded",
+            ));
+        }
     };
     Ok(ty)
 }
