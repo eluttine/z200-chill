@@ -2601,7 +2601,9 @@ impl Checker {
                     Error::coded("E0403", *span, format!("unknown variable `{name}`"))
                 })
             }
-            Expr::Deref { .. } | Expr::Null { .. } => self.check_expr(target),
+            Expr::Deref { .. } | Expr::DerefIndex { .. } | Expr::Null { .. } => {
+                self.check_expr(target)
+            }
             _ => Err(Error::coded(
                 "E0400",
                 target.span(),
@@ -3059,6 +3061,44 @@ impl Checker {
                     Error::coded("E0400", *span, "this location cannot be referenced")
                 })?;
                 Ok(Type::Ref(target))
+            }
+            Expr::DerefIndex {
+                base,
+                indices,
+                span,
+            } => {
+                let array = self.check_expr(base)?;
+                let (rank, element) = match array {
+                    Type::Array(array) => (1, array.element.ty()),
+                    Type::MultiArray(array) => (array.dimensions().len(), array.element.ty()),
+                    _ => {
+                        return Err(Error::coded(
+                            "E0400",
+                            *span,
+                            "dereferenced indexing requires an array reference",
+                        ))
+                    }
+                };
+                if indices.len() != rank {
+                    return Err(Error::coded(
+                        "E0400",
+                        *span,
+                        format!("array requires exactly {rank} index expression(s)"),
+                    ));
+                }
+                for index in indices {
+                    let ty = self.check_expr(index)?;
+                    if !ty.is_int() {
+                        return Err(Error::coded(
+                            "E0400",
+                            index.span(),
+                            "array index must be an integer",
+                        ));
+                    }
+                }
+                self.resolutions
+                    .insert(*span, ApplyResolution::ArrayIndex(array));
+                Ok(element)
             }
             Expr::Deref { base, mode, span } => {
                 let base_ty = self.check_expr(base)?;

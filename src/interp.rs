@@ -4179,6 +4179,29 @@ impl<'a> Interpreter<'a> {
                 let slot = self.slot_for_target(target, *span)?;
                 Ok(Value::Ref(Some(self.intern_slot(slot))))
             }
+            ir::Expr::DerefIndex {
+                reference,
+                indices,
+                array,
+                ty,
+                span,
+            } => {
+                let slot = self.eval_reference(reference, *span)?;
+                let value = self.read_slot(&slot, *span)?;
+                let mut index_values = Vec::with_capacity(indices.len());
+                for index in indices {
+                    let index_value = self.eval_ir(index)?;
+                    let (index, _) = self.expect_int(index_value, index.span())?;
+                    index_values.push(index);
+                }
+                let offset = array_offset(*array, &index_values, *span)?;
+                let value = read_array_at(value, offset, *span)?;
+                if self.slot_ty(&slot) == *ty {
+                    Ok(value)
+                } else {
+                    self.convert(value, *ty, *span)
+                }
+            }
             ir::Expr::Deref { base, ty, span, .. } => {
                 let slot = self.eval_reference(base, *span)?;
                 let cell_ty = self.slot_ty(&slot);
@@ -6763,7 +6786,8 @@ impl<'a> Interpreter<'a> {
             ir::AssignTarget::Slice { ty, .. }
             | ir::AssignTarget::SliceDynamic { ty, .. }
             | ir::AssignTarget::Deref { ty, .. }
-            | ir::AssignTarget::DerefField { ty, .. } => Ok(*ty),
+            | ir::AssignTarget::DerefField { ty, .. }
+            | ir::AssignTarget::DerefIndex { ty, .. } => Ok(*ty),
         }
     }
 
@@ -6844,6 +6868,23 @@ impl<'a> Interpreter<'a> {
                 let (offset, count) =
                     dynamic_slice_range(len, *low, first_value, last_value, *up, span)?;
                 read_array_slice(value, offset, count, *low, span)
+            }
+            ir::AssignTarget::DerefIndex {
+                reference,
+                indices,
+                array,
+                ..
+            } => {
+                let slot = self.eval_reference(reference, span)?;
+                let value = self.read_slot(&slot, span)?;
+                let mut index_values = Vec::with_capacity(indices.len());
+                for index in indices {
+                    let index_value = self.eval_ir(index)?;
+                    let (index, _) = self.expect_int(index_value, index.span())?;
+                    index_values.push(index);
+                }
+                let offset = array_offset(*array, &index_values, span)?;
+                read_array_at(value, offset, span)
             }
             ir::AssignTarget::Deref { reference, ty } => {
                 let slot = self.eval_reference(reference, span)?;
@@ -6975,6 +7016,25 @@ impl<'a> Interpreter<'a> {
                 let (offset, count) =
                     dynamic_slice_range(len, *low, first_value, last_value, *up, span)?;
                 assign_array_slice(&mut var.value, offset, count, value, span)
+            }
+            ir::AssignTarget::DerefIndex {
+                reference,
+                indices,
+                array,
+                ty,
+            } => {
+                let value = self.convert(value, *ty, span)?;
+                let slot = self.eval_reference(reference, span)?;
+                let mut object = self.read_slot(&slot, span)?;
+                let mut index_values = Vec::with_capacity(indices.len());
+                for index in indices {
+                    let index_value = self.eval_ir(index)?;
+                    let (index, _) = self.expect_int(index_value, index.span())?;
+                    index_values.push(index);
+                }
+                let offset = array_offset(*array, &index_values, span)?;
+                assign_array_at(&mut object, offset, value, span)?;
+                self.write_slot(&slot, object, span)
             }
             ir::AssignTarget::Deref { reference, ty } => {
                 let value = self.convert(value, *ty, span)?;

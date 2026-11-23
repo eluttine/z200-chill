@@ -679,6 +679,11 @@ pub enum Expr {
         mode: Option<Box<ModeRef>>,
         span: Span,
     },
+    DerefIndex {
+        base: Box<Expr>,
+        indices: Vec<Expr>,
+        span: Span,
+    },
     /// `ALLOCATE(mode [, value])` or `GETSTACK(mode [, value])`.
     Allocate {
         mode: Box<ModeRef>,
@@ -753,6 +758,7 @@ impl Expr {
             | Self::Start { span, .. }
             | Self::AddressOf { span, .. }
             | Self::Deref { span, .. }
+            | Self::DerefIndex { span, .. }
             | Self::Allocate { span, .. }
             | Self::Name { span, .. }
             | Self::Apply { span, .. }

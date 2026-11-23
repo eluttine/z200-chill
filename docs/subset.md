@@ -618,7 +618,7 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
 - `NULL` is the empty reference value.
 - `-> location` creates a reference to a variable, array element, or field path;
   `ref->` dereferences it. A dereference is usable as a value or as an assignment
-  target, including `ref->.field`.
+  target, including `ref->.field` and indexed `ref->(i)` for whole-array references.
 - `ALLOCATE(mode [, value])` and `GETSTACK(mode [, value])` create a location and
   return a reference to it. `GETSTACK` is currently treated like `ALLOCATE`; both
   create interpreter-managed locations.
@@ -631,9 +631,9 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
 - Dereferencing `NULL` or a terminated reference raises `EMPTY`.
 - References, pointers, and rows are encodable in grant interfaces, including
   references to structure, set, and moreta modes. Arrays may contain `REF`, `ROW`, and
-  `PTR` elements. References to fields and array elements are supported. Mutually
-  recursive structure modes are supported through `REF`/`ROW` indirection. Nested
-  `REF`/`ROW` modes and references to whole array targets are not implemented yet. Self-referential structure modes (such as linked-list
+  `PTR` elements. References to fields, array elements, and whole array targets are
+  supported. Mutually recursive structure modes are supported through `REF`/`ROW`
+  indirection. Nested `REF`/`ROW` modes are not implemented yet. Self-referential structure modes (such as linked-list
   nodes) are supported.
 
 ### 5.8 Associations and access modes (simplified)

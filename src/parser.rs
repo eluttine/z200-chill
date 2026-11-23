@@ -2916,6 +2916,26 @@ impl<'a> Parser<'a> {
                     mode,
                     span: Span::new(self.source, start, end),
                 };
+            } else if self.at_lparen() && matches!(expr, Expr::Deref { .. }) {
+                let start = expr.span().start;
+                self.advance();
+                let mut indices = Vec::new();
+                if !self.at_rparen() {
+                    loop {
+                        indices.push(self.parse_expr()?);
+                        if self.at_comma() {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                let end = self.expect_rparen()?;
+                expr = Expr::DerefIndex {
+                    base: Box::new(expr),
+                    indices,
+                    span: Span::new(self.source, start, end.end),
+                };
             } else {
                 break;
             }

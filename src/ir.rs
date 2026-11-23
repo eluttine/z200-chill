@@ -89,6 +89,13 @@ pub enum Expr {
         ty: Type,
         span: Span,
     },
+    DerefIndex {
+        reference: Node,
+        indices: Vec<Node>,
+        array: Type,
+        ty: Type,
+        span: Span,
+    },
     Allocate {
         mode: Type,
         value: Option<Node>,
@@ -247,6 +254,7 @@ impl Expr {
             | Self::SelfField { span, .. }
             | Self::AddressOf { span, .. }
             | Self::Deref { span, .. }
+            | Self::DerefIndex { span, .. }
             | Self::Allocate { span, .. }
             | Self::Name { span, .. }
             | Self::SetValue { span, .. }
@@ -286,6 +294,7 @@ impl Expr {
             | Self::SelfField { ty, .. }
             | Self::AddressOf { ty, .. }
             | Self::Deref { ty, .. }
+            | Self::DerefIndex { ty, .. }
             | Self::Allocate { ty, .. }
             | Self::Name { ty, .. }
             | Self::SetValue { ty, .. }
@@ -352,6 +361,12 @@ pub enum AssignTarget {
     DerefField {
         reference: Node,
         path: Vec<String>,
+        ty: Type,
+    },
+    DerefIndex {
+        reference: Node,
+        indices: Vec<Node>,
+        array: Type,
         ty: Type,
     },
 }
@@ -1130,6 +1145,41 @@ impl Lowerer<'_> {
                     ty,
                 })
             }
+            AstExpr::DerefIndex {
+                base,
+                indices,
+                span,
+            } => {
+                let ty = self.check.types.get(span).copied().ok_or_else(|| {
+                    Error::new(*span, "internal: dereferenced index has no checked mode")
+                })?;
+                let AstExpr::Deref {
+                    base: reference, ..
+                } = base.as_ref()
+                else {
+                    return Err(Error::new(
+                        *span,
+                        "internal: dereferenced index has no reference",
+                    ));
+                };
+                let Some(ApplyResolution::ArrayIndex(array)) = self.check.resolutions.get(span)
+                else {
+                    return Err(Error::new(
+                        *span,
+                        "internal: dereferenced index has no array mode",
+                    ));
+                };
+                let indices = indices
+                    .iter()
+                    .map(|index| self.lower_expr(index))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(AssignTarget::DerefIndex {
+                    reference: self.lower_expr(reference)?,
+                    indices,
+                    array: *array,
+                    ty,
+                })
+            }
             AstExpr::ArraySlice {
                 name,
                 first,
@@ -1591,6 +1641,39 @@ impl Lowerer<'_> {
                 ty,
                 span: *span,
             }),
+            AstExpr::DerefIndex {
+                base,
+                indices,
+                span,
+            } => {
+                let AstExpr::Deref {
+                    base: reference, ..
+                } = base.as_ref()
+                else {
+                    return Err(Error::new(
+                        *span,
+                        "internal: dereferenced index has no reference",
+                    ));
+                };
+                let Some(ApplyResolution::ArrayIndex(array)) = self.check.resolutions.get(span)
+                else {
+                    return Err(Error::new(
+                        *span,
+                        "internal: dereferenced index has no array mode",
+                    ));
+                };
+                let indices = indices
+                    .iter()
+                    .map(|index| self.lower_expr(index))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Rc::new(Expr::DerefIndex {
+                    reference: self.lower_expr(reference)?,
+                    indices,
+                    array: *array,
+                    ty,
+                    span: *span,
+                })
+            }
             AstExpr::Allocate {
                 value,
                 constructor_args,
