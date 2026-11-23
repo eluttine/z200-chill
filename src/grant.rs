@@ -1614,6 +1614,33 @@ END M;
     }
 
     #[test]
+    fn reference_array_types_round_trip() {
+        for element in [
+            program::ExternalType::Ref(Box::new(program::ExternalType::Builtin(Type::Int(
+                types::IntKind::Int,
+            )))),
+            program::ExternalType::Row(Box::new(program::ExternalType::Builtin(
+                Type::BoundedString {
+                    length: 5,
+                    varying: false,
+                },
+            ))),
+            program::ExternalType::Ptr,
+        ] {
+            let ty = program::ExternalType::Array {
+                low: 1,
+                high: 2,
+                element: Box::new(element),
+            };
+            let text = external_type_name(&ty);
+            assert_eq!(
+                parse_external_type(&text, &std::collections::HashMap::new()).unwrap(),
+                ty
+            );
+        }
+    }
+
+    #[test]
     fn multidimensional_array_types_round_trip() {
         let ty = program::ExternalType::MultiArray {
             dims: vec![

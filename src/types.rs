@@ -50,6 +50,85 @@ pub enum Scalar {
     BoundedBits { length: usize, varying: bool },
 }
 
+/// A referent that can be used as an array element. Array/multi-array targets are
+/// excluded to keep `ArrayElement` non-recursive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArrayRefTarget {
+    Scalar(Scalar),
+    Struct(ModeId),
+    Set(SetId),
+    Moreta(MoretaId),
+    Association,
+    Access(AccessType),
+    PowerSet(PowerSetType),
+    Text { length: usize, wide: bool },
+}
+
+impl ArrayRefTarget {
+    pub fn from_target(target: RefTarget) -> Option<Self> {
+        Some(match target {
+            RefTarget::Int(kind) => Self::Scalar(Scalar::Int(kind)),
+            RefTarget::Float => Self::Scalar(Scalar::Float),
+            RefTarget::Bool => Self::Scalar(Scalar::Bool),
+            RefTarget::Char => Self::Scalar(Scalar::Char),
+            RefTarget::String => Self::Scalar(Scalar::String),
+            RefTarget::BoundedString { length, varying } => {
+                Self::Scalar(Scalar::BoundedString { length, varying })
+            }
+            RefTarget::WChar => Self::Scalar(Scalar::WChar),
+            RefTarget::WString => Self::Scalar(Scalar::WString),
+            RefTarget::WBoundedString { length, varying } => {
+                Self::Scalar(Scalar::WBoundedString { length, varying })
+            }
+            RefTarget::Bits => Self::Scalar(Scalar::Bits),
+            RefTarget::BoundedBits { length, varying } => {
+                Self::Scalar(Scalar::BoundedBits { length, varying })
+            }
+            RefTarget::Text { length, wide } => Self::Text { length, wide },
+            RefTarget::Struct(id) => Self::Struct(id),
+            RefTarget::Set(id) => Self::Set(id),
+            RefTarget::Moreta(id) => Self::Moreta(id),
+            RefTarget::Association => Self::Association,
+            RefTarget::Access(access) => Self::Access(access),
+            RefTarget::PowerSet(set) => Self::PowerSet(set),
+            RefTarget::Array(_) | RefTarget::MultiArray(_) | RefTarget::DynamicArray { .. } => {
+                return None
+            }
+        })
+    }
+
+    pub fn to_target(self) -> RefTarget {
+        match self {
+            Self::Scalar(scalar) => match scalar {
+                Scalar::Int(kind) => RefTarget::Int(kind),
+                Scalar::Float => RefTarget::Float,
+                Scalar::Bool => RefTarget::Bool,
+                Scalar::Char => RefTarget::Char,
+                Scalar::String => RefTarget::String,
+                Scalar::BoundedString { length, varying } => {
+                    RefTarget::BoundedString { length, varying }
+                }
+                Scalar::WChar => RefTarget::WChar,
+                Scalar::WString => RefTarget::WString,
+                Scalar::WBoundedString { length, varying } => {
+                    RefTarget::WBoundedString { length, varying }
+                }
+                Scalar::Bits => RefTarget::Bits,
+                Scalar::BoundedBits { length, varying } => {
+                    RefTarget::BoundedBits { length, varying }
+                }
+            },
+            Self::Struct(id) => RefTarget::Struct(id),
+            Self::Set(id) => RefTarget::Set(id),
+            Self::Moreta(id) => RefTarget::Moreta(id),
+            Self::Association => RefTarget::Association,
+            Self::Access(access) => RefTarget::Access(access),
+            Self::PowerSet(set) => RefTarget::PowerSet(set),
+            Self::Text { length, wide } => RefTarget::Text { length, wide },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArrayElement {
     Scalar(Scalar),
@@ -59,6 +138,9 @@ pub enum ArrayElement {
     Moreta(MoretaId),
     Association,
     Access(AccessType),
+    Ref(ArrayRefTarget),
+    Row(ArrayRefTarget),
+    Ptr,
 }
 
 impl ArrayElement {
@@ -87,6 +169,9 @@ impl ArrayElement {
             Type::Moreta(id) => Some(Self::Moreta(id)),
             Type::Association => Some(Self::Association),
             Type::Access(access) => Some(Self::Access(access)),
+            Type::Ref(target) => ArrayRefTarget::from_target(target).map(Self::Ref),
+            Type::Row(target) => ArrayRefTarget::from_target(target).map(Self::Row),
+            Type::Ptr => Some(Self::Ptr),
             Type::IntLiteral
             | Type::Array(_)
             | Type::MultiArray(_)
@@ -98,9 +183,6 @@ impl ArrayElement {
             | Type::Duration
             | Type::Instance
             | Type::Time
-            | Type::Ref(_)
-            | Type::Ptr
-            | Type::Row(_)
             | Type::Null => None,
         }
     }
@@ -114,6 +196,9 @@ impl ArrayElement {
             Self::Moreta(id) => Type::Moreta(id),
             Self::Association => Type::Association,
             Self::Access(access) => Type::Access(access),
+            Self::Ref(target) => Type::Ref(target.to_target()),
+            Self::Row(target) => Type::Row(target.to_target()),
+            Self::Ptr => Type::Ptr,
         }
     }
 }
@@ -558,6 +643,8 @@ pub fn resolve_mode_ref(
     if !mode.arrays.is_empty() {
         let mut element_mode = mode.clone();
         element_mode.arrays.clear();
+        element_mode.reference = mode.element_reference;
+        element_mode.row = mode.element_row;
         let base = resolve_mode_ref(&element_mode, mode_names)?;
         let element = ArrayElement::from_type(base)?;
         return array_type_from_bounds(&mode.arrays, element);

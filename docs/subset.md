@@ -49,7 +49,7 @@ Current scope includes:
   per-object task workers;
 - relative, absolute, and cyclic timing actions with `DURATION`/`TIME` values;
 - arrays including slices, multidimensional arrays, literals, arrays of structures, sets,
-  powersets, and module-mode objects;
+  powersets, module-mode objects, references, rows, and pointers;
 - `REF`/`PTR`/`ROW` modes, `NULL`, `ALLOCATE`/`GETSTACK`/`TERMINATE`, and
   dereferencing;
 - narrow and wide text modes (`TEXT(n)`, `WTEXT(n)`), text I/O, text index
@@ -299,8 +299,9 @@ mode.
   shape and element mode.
 - Multidimensional array elements can be read and assigned through field selection
   (`a(i, j).field := value`).
-- Array elements may be structures, sets, powersets, associations, access modes, or
-  module-mode objects. Arrays of references, rows, and buffers remain unsupported.
+- Array elements may be structures, sets, powersets, associations, access modes,
+  module-mode objects, `REF`, `ROW`, or `PTR` modes. Arrays of buffers and references
+  to array targets remain unsupported.
 - Array slices currently apply to one-dimensional arrays only.
 - Array literals currently apply to one-dimensional arrays only.
 
@@ -628,9 +629,9 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
   `NULL`; terminating a non-allocated reference is rejected.
 - Dereferencing `NULL` or a terminated reference raises `EMPTY`.
 - References, pointers, and rows are encodable in grant interfaces, including
-  references to structure, set, and moreta modes. Arrays of references, nested
-  `REF`/`ROW` modes, references to fields/indexes, and mutually recursive structure
-  modes are not implemented yet. Self-referential structure modes (such as linked-list
+  references to structure, set, and moreta modes. Arrays may contain `REF`, `ROW`, and
+  `PTR` elements. Nested `REF`/`ROW` modes, references to fields/indexes, references to
+  array targets, and mutually recursive structure modes are not implemented yet. Self-referential structure modes (such as linked-list
   nodes) are supported.
 
 ### 5.8 Associations and access modes (simplified)

@@ -352,6 +352,10 @@ pub struct ModeRef {
     pub reference: bool,
     /// True for a `ROW mode` row mode.
     pub row: bool,
+    /// True when the element mode of an array is a `REF` mode.
+    pub element_reference: bool,
+    /// True when the element mode of an array is a `ROW` mode.
+    pub element_row: bool,
     /// Element mode of a `BUFFER` mode.
     pub buffer_element: Option<Box<ModeRef>>,
     /// True when ACCESS declares an index mode.

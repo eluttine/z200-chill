@@ -191,8 +191,8 @@ deferred.
 - [x] Base constructors/destructors are excluded from `BASED_ON` inheritance.
 - [x] Assignment through fields of multidimensional array elements.
 - [x] Wide `ACCESS WCHARS` records, including grant encoding and indexed forms.
-- [x] Array elements for sets, powersets, associations, access modes, and module-mode
-      objects, plus arrays of powerset modes.
+- [x] Array elements for sets, powersets, associations, access modes, module-mode
+      objects, `REF`, `ROW`, and `PTR`, plus arrays of powerset modes.
 - [x] Complete `Mode!Component` path preservation in mode symbols and grant files.
 - [x] First concurrency layer: `PROCESS`, `START`, `STOP`, a cooperative
       action-boundary scheduler, shared module locations, and process-local state.
