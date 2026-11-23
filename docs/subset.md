@@ -57,7 +57,6 @@ Current scope includes:
 
 Explicitly **deferred**:
 
-- absolute/cyclic timing actions;
 - process
   instances/`THIS`, process handlers, process `LOC`/`OUT`/`INOUT` parameters,
   region object/task modes, and priority scheduling;

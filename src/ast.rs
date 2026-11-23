@@ -439,9 +439,15 @@ pub enum Action {
     },
     Timing {
         duration: Expr,
+        absolute: bool,
         delay: bool,
         body: Vec<Action>,
         timeout: Vec<Action>,
+        span: Span,
+    },
+    Cycle {
+        duration: Expr,
+        body: Vec<Action>,
         span: Span,
     },
     Return {
@@ -717,6 +723,7 @@ impl Action {
             | Self::Send { span, .. }
             | Self::ReceiveCase { span, .. }
             | Self::Timing { span, .. }
+            | Self::Cycle { span, .. }
             | Self::DelayCase { span, .. }
             | Self::Return { span, .. }
             | Self::Result { span, .. }

@@ -1989,6 +1989,39 @@ impl<'a> Parser<'a> {
                     span: Span::new(self.source, start.start, end.end),
                 })
             }
+            Some(TokenKind::Keyword(Keyword::At)) => {
+                let start = self.current_span();
+                self.advance();
+                let duration = self.parse_unary()?;
+                self.expect_keyword(Keyword::In)?;
+                let body = self.parse_actions_until(&[Keyword::Timeout])?;
+                self.expect_keyword(Keyword::Timeout)?;
+                let timeout = self.parse_actions_until(&[Keyword::End])?;
+                self.expect_keyword(Keyword::End)?;
+                let end = self.expect_semicolon()?;
+                Ok(Action::Timing {
+                    duration,
+                    absolute: true,
+                    delay: false,
+                    body,
+                    timeout,
+                    span: Span::new(self.source, start.start, end.end),
+                })
+            }
+            Some(TokenKind::Keyword(Keyword::Cycle)) => {
+                let start = self.current_span();
+                self.advance();
+                let duration = self.parse_unary()?;
+                self.expect_keyword(Keyword::In)?;
+                let body = self.parse_actions_until(&[Keyword::End])?;
+                self.expect_keyword(Keyword::End)?;
+                let end = self.expect_semicolon()?;
+                Ok(Action::Cycle {
+                    duration,
+                    body,
+                    span: Span::new(self.source, start.start, end.end),
+                })
+            }
             Some(TokenKind::Keyword(Keyword::Receive)) => self.parse_receive_case(),
             Some(TokenKind::Keyword(Keyword::After)) => {
                 let start = self.current_span();
@@ -2009,6 +2042,7 @@ impl<'a> Parser<'a> {
                 let span = Span::new(self.source, start.start, end.end);
                 Ok(Action::Timing {
                     duration,
+                    absolute: false,
                     delay,
                     body,
                     timeout,

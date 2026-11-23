@@ -199,7 +199,9 @@ deferred.
       receiver matching.
 - [x] Process `LOC` parameters, with process actual locations lowered through the
       shared call-argument path; `OUT`/`INOUT` process parameters are rejected.
-- [ ] Absolute/cyclic timing actions and region/task object modes.
+- [x] Absolute timing actions (`AT`), cyclic timing actions (`CYCLE`), `TIME`, and
+      `ABSTIME` construction.
+- [ ] Region/task object modes.
 
 ## 8. Cleanup
 

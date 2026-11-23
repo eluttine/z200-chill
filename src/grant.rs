@@ -894,6 +894,7 @@ fn type_name(ty: Type) -> String {
         } => format!("EVENT({length})"),
         Type::Event { length: None } => "EVENT".to_owned(),
         Type::Instance => "INSTANCE".to_owned(),
+        Type::Time => "TIME".to_owned(),
         Type::Buffer { length, element } => match length {
             Some(length) => format!("BUFFER({length}) {}", type_name(element.ty())),
             None => format!("BUFFER {}", type_name(element.ty())),

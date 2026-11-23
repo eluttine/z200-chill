@@ -92,6 +92,7 @@ impl ArrayElement {
             | Type::Buffer { .. }
             | Type::Duration
             | Type::Instance
+            | Type::Time
             | Type::Ref(_)
             | Type::Ptr
             | Type::Row(_)
@@ -238,6 +239,7 @@ impl RefTarget {
             | Type::Buffer { .. }
             | Type::Duration
             | Type::Instance
+            | Type::Time
             | Type::Null
             | Type::Ref(_)
             | Type::Ptr
@@ -325,6 +327,8 @@ pub enum Type {
     Duration,
     /// A process instance value.
     Instance,
+    /// An absolute time value, represented as Unix milliseconds.
+    Time,
     /// A bound reference mode `REF M`.
     Ref(RefTarget),
     /// The free reference mode `PTR`.
@@ -402,6 +406,7 @@ impl Type {
             | Self::Buffer { .. }
             | Self::Duration
             | Self::Instance
+            | Self::Time
             | Self::Ref(_)
             | Self::Ptr
             | Self::Row(_)
@@ -448,6 +453,7 @@ impl Type {
             Self::Buffer { .. } => "buffer",
             Self::Duration => "duration",
             Self::Instance => "INSTANCE",
+            Self::Time => "TIME",
             Self::Ref(target) => match target {
                 RefTarget::Struct(_) => "bound reference",
                 _ => "bound reference",
@@ -487,6 +493,7 @@ pub fn resolve_mode(name: &str) -> Option<Type> {
         "EVENT" => Some(Type::Event { length: None }),
         "DURATION" => Some(Type::Duration),
         "INSTANCE" => Some(Type::Instance),
+        "TIME" => Some(Type::Time),
         "PTR" => Some(Type::Ptr),
         "ASSOCIATION" => Some(Type::Association),
         _ => None,

@@ -387,8 +387,14 @@ pub enum Stmt {
     },
     Timing {
         duration: Node,
+        absolute: bool,
         body: Vec<Stmt>,
         timeout: Vec<Stmt>,
+        span: Span,
+    },
+    Cycle {
+        duration: Node,
+        body: Vec<Stmt>,
         span: Span,
     },
     Return {
@@ -783,14 +789,25 @@ impl Lowerer<'_> {
             }),
             Action::Timing {
                 duration,
+                absolute,
                 body,
                 timeout,
                 span,
                 ..
             } => Ok(Stmt::Timing {
                 duration: self.lower_expr(duration)?,
+                absolute: *absolute,
                 body: self.lower_actions(body)?,
                 timeout: self.lower_actions(timeout)?,
+                span: *span,
+            }),
+            Action::Cycle {
+                duration,
+                body,
+                span,
+            } => Ok(Stmt::Cycle {
+                duration: self.lower_expr(duration)?,
+                body: self.lower_actions(body)?,
                 span: *span,
             }),
             Action::ReceiveCase {

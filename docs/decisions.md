@@ -174,8 +174,8 @@ processes, yielding at action boundaries:
 - relative timing actions, duration values, process instances, `THIS`, targeted
   signal sends, send priorities, buffers, process handlers, and process `LOC`
   parameters are executed;
-- absolute/cyclic timing actions, buffers, and region object/task modes are not yet
-  executed faithfully;
+- absolute timing, `CYCLE`, and `ABSTIME` are executed;
+- buffers and region object/task modes are not yet executed faithfully;
 - no resumable continuation or scheduler is required for the first release.
 
 Faithful CHILL concurrency needs an explicit execution-state machine or async runtime

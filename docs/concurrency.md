@@ -34,6 +34,11 @@
   cancellation when nested in a relative timing action.
 - Relative timing actions:
   `AFTER duration [DELAY] IN actions TIMEOUT actions END`.
+- Absolute timing actions: `AT time IN actions TIMEOUT actions END`.
+- Cyclic timing actions: `CYCLE duration IN actions END`, with `EXIT` leaving the
+  cycle and non-normal flows propagating.
+- `TIME` values and `ABSTIME(...)`; `ABSTIME()` returns the current time and the
+  six-argument form constructs a UTC timestamp.
 - Timers are checked when a process blocks in `DELAY` or `RECEIVE CASE`; expiry
   aborts that wait and runs the `TIMEOUT` handler.
 - Events wake the highest-priority delayed process; equal priorities use FIFO order.
@@ -55,7 +60,6 @@
 
 ## Not implemented yet
 
-- `AT` absolute timing actions and `CYCLE` periodic timing actions.
 - timeout supervision for region calls.
 - process-name restrictions are enforced for targeted sends and untargeted delivery.
 - signal priorities.

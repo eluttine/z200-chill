@@ -2198,11 +2198,9 @@ impl Checker {
                 let _ = span;
                 Ok(())
             }
-            Action::Timing {
+            Action::Cycle {
                 duration,
-                delay,
                 body,
-                timeout,
                 span,
             } => {
                 let ty = self.check_expr(duration)?;
@@ -2210,7 +2208,37 @@ impl Checker {
                     return Err(Error::coded(
                         "E0404",
                         duration.span(),
-                        format!("AFTER requires a DURATION, found {}", ty.describe()),
+                        format!("CYCLE requires a DURATION, found {}", ty.describe()),
+                    ));
+                }
+                self.check_actions(body)?;
+                let _ = span;
+                Ok(())
+            }
+            Action::Timing {
+                duration,
+                absolute,
+                delay,
+                body,
+                timeout,
+                span,
+            } => {
+                let ty = self.check_expr(duration)?;
+                let expected = if *absolute {
+                    Type::Time
+                } else {
+                    Type::Duration
+                };
+                if ty != expected {
+                    return Err(Error::coded(
+                        "E0404",
+                        duration.span(),
+                        format!(
+                            "{} requires a {}, found {}",
+                            if *absolute { "AT" } else { "AFTER" },
+                            if *absolute { "TIME" } else { "DURATION" },
+                            ty.describe()
+                        ),
                     ));
                 }
                 if *delay && body.len() != 1 {
@@ -3775,6 +3803,22 @@ impl Checker {
                     }
                     Some(Type::String)
                 }
+                crate::builtins::Builtin::AbsoluteTime => {
+                    for arg in args {
+                        let ty = self.check_expr(arg)?;
+                        if !ty.is_int() {
+                            return Err(Error::coded(
+                                "E0404",
+                                arg.span(),
+                                format!(
+                                    "ABSTIME arguments must be integers, found {}",
+                                    ty.describe()
+                                ),
+                            ));
+                        }
+                    }
+                    Some(Type::Time)
+                }
                 crate::builtins::Builtin::Duration(_) => {
                     if args.len() != 1 {
                         return Err(Error::coded(
@@ -4233,6 +4277,7 @@ impl Checker {
             Type::Event { .. } | Type::Buffer { .. } => false,
             Type::Duration => value == Type::Duration,
             Type::Instance => value == Type::Instance,
+            Type::Time => value == Type::Time,
             Type::Bits => is_bits_type(value),
             Type::BoundedBits { .. } => is_bits_type(value),
             Type::Ref(target) => {

@@ -20,6 +20,8 @@ pub enum Builtin {
     Terminate,
     /// Implementation-defined duration built-ins.
     Duration(DurationUnit),
+    /// Absolute time construction.
+    AbsoluteTime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +44,7 @@ pub fn lookup(name: &str) -> Option<Builtin> {
         "MINUTES" => Some(Builtin::Duration(DurationUnit::Minutes)),
         "HOURS" => Some(Builtin::Duration(DurationUnit::Hours)),
         "DAYS" => Some(Builtin::Duration(DurationUnit::Days)),
+        "ABSTIME" => Some(Builtin::AbsoluteTime),
         _ => None,
     }
 }

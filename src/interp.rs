@@ -355,6 +355,12 @@ pub fn run_checked(
                                 slot: Rc::new(RefCell::new(Some(entry))),
                             });
                     }
+                    ProcessYield::Sleep { deadline } => {
+                        scheduler
+                            .borrow_mut()
+                            .sleepers
+                            .push((deadline, runnable.entry));
+                    }
                     ProcessYield::AcquireRegion { region } => {
                         scheduler
                             .borrow_mut()
@@ -431,6 +437,7 @@ enum Value {
     Bits(String),
     Duration(i128),
     Instance(usize),
+    Time(i128),
     Ref(Option<usize>),
     Struct(Vec<(String, Value)>),
     Moreta(Vec<(String, Value)>),
@@ -525,6 +532,9 @@ enum ProcessYield {
         priority: i128,
         values: Vec<Value>,
         deadline: Option<Instant>,
+    },
+    Sleep {
+        deadline: Instant,
     },
     DelayCase {
         events: Vec<usize>,
@@ -626,6 +636,7 @@ struct ScheduleState {
     signals: HashMap<String, VecDeque<SignalMessage>>,
     receivers: HashMap<String, Vec<(usize, ReceiverSlot, Option<Instant>)>>,
     buffers: HashMap<usize, BufferState>,
+    sleepers: Vec<(Instant, ProcessEntry)>,
     region_owner: HashMap<usize, usize>,
     region_waiters: HashMap<usize, Vec<ProcessEntry>>,
 }
@@ -738,6 +749,23 @@ fn cooperative_send_buffer(
     })
 }
 
+fn cooperative_sleep(deadline: Instant) -> Result<(), Error> {
+    CURRENT_YIELDER.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            return Err(Error::coded(
+                "E0500",
+                Span::new(SourceId(0), 0, 0),
+                "CYCLE is only valid inside a process",
+            ));
+        }
+        unsafe {
+            let _: ProcessInput = (*ptr).suspend(ProcessYield::Sleep { deadline });
+        }
+        Ok(())
+    })
+}
+
 fn cooperative_receive(
     signals: Vec<String>,
     buffers: Vec<usize>,
@@ -777,6 +805,7 @@ fn next_timed_deadline(scheduler: &Rc<RefCell<ScheduleState>>) -> Option<Instant
         .values()
         .flat_map(|receivers| receivers.iter().filter_map(|(_, _, deadline)| *deadline))
         .min();
+    let sleeper_deadline = state.sleepers.iter().map(|(deadline, _)| *deadline).min();
     let buffer_deadline = state
         .buffers
         .values()
@@ -793,10 +822,15 @@ fn next_timed_deadline(scheduler: &Rc<RefCell<ScheduleState>>) -> Option<Instant
                 )
         })
         .min();
-    [waiting_deadline, receiver_deadline, buffer_deadline]
-        .into_iter()
-        .flatten()
-        .min()
+    [
+        waiting_deadline,
+        receiver_deadline,
+        sleeper_deadline,
+        buffer_deadline,
+    ]
+    .into_iter()
+    .flatten()
+    .min()
 }
 
 fn expire_timed_waiters(scheduler: &Rc<RefCell<ScheduleState>>) {
@@ -859,6 +893,18 @@ fn expire_timed_waiters(scheduler: &Rc<RefCell<ScheduleState>>) {
     }
     for receivers in state.receivers.values_mut() {
         receivers.retain(|(id, _, _)| !expired_ids.contains(id));
+    }
+    let mut index = 0;
+    while index < state.sleepers.len() {
+        if state.sleepers[index].0 <= now {
+            let (_, entry) = state.sleepers.remove(index);
+            expired.push(Runnable {
+                input: ProcessInput::None,
+                entry,
+            });
+        } else {
+            index += 1;
+        }
     }
     for buffer in state.buffers.values_mut() {
         let mut index = 0;
@@ -1672,20 +1718,33 @@ impl<'a> Interpreter<'a> {
                 }
                 ir::Stmt::Timing {
                     duration,
+                    absolute,
                     body,
                     timeout,
                     span,
                 } => {
                     let value = self.eval_ir(duration)?;
-                    let Value::Duration(milliseconds) = value else {
-                        return Err(Error::coded(
-                            "E0507",
-                            duration.span(),
-                            "AFTER requires a DURATION value",
-                        ));
+                    let milliseconds = if *absolute {
+                        let Value::Time(target) = value else {
+                            return Err(Error::coded(
+                                "E0507",
+                                duration.span(),
+                                "AT requires a TIME value",
+                            ));
+                        };
+                        (target - unix_time_ms()).max(0)
+                    } else {
+                        let Value::Duration(milliseconds) = value else {
+                            return Err(Error::coded(
+                                "E0507",
+                                duration.span(),
+                                "AFTER requires a DURATION value",
+                            ));
+                        };
+                        milliseconds.max(0)
                     };
                     let deadline = Instant::now()
-                        .checked_add(std::time::Duration::from_millis(milliseconds.max(0) as u64))
+                        .checked_add(std::time::Duration::from_millis(milliseconds as u64))
                         .ok_or_else(|| Error::coded("E0502", *span, "duration is too large"))?;
                     let previous = self.deadline;
                     self.deadline = Some(deadline);
@@ -1700,6 +1759,35 @@ impl<'a> Interpreter<'a> {
                         }
                         Flow::Normal => {}
                         flow => return Ok(flow),
+                    }
+                }
+                ir::Stmt::Cycle {
+                    duration,
+                    body,
+                    span,
+                } => {
+                    let value = self.eval_ir(duration)?;
+                    let Value::Duration(milliseconds) = value else {
+                        return Err(Error::coded(
+                            "E0507",
+                            duration.span(),
+                            "CYCLE requires a DURATION value",
+                        ));
+                    };
+                    loop {
+                        match self.exec_stmts(body, frame)? {
+                            Flow::Normal => {}
+                            Flow::Exit(None) => break,
+                            flow => return Ok(flow),
+                        }
+                        let deadline = Instant::now()
+                            .checked_add(std::time::Duration::from_millis(
+                                milliseconds.max(0) as u64
+                            ))
+                            .ok_or_else(|| {
+                                Error::coded("E0502", *span, "cycle duration is too large")
+                            })?;
+                        cooperative_sleep(deadline)?;
                     }
                 }
                 ir::Stmt::Stop { .. } => return Ok(Flow::Stop),
@@ -3328,6 +3416,27 @@ impl<'a> Interpreter<'a> {
                         }
                         Ok(Value::Undefined)
                     }
+                    crate::builtins::Builtin::AbsoluteTime => {
+                        if values.is_empty() {
+                            return Ok(Value::Time(unix_time_ms()));
+                        }
+                        if values.len() != 6 {
+                            return Err(Error::coded(
+                                "E0507",
+                                *span,
+                                "ABSTIME currently supports zero or six arguments",
+                            ));
+                        }
+                        let mut parts = [0i128; 6];
+                        for (index, value) in values.into_iter().enumerate() {
+                            let (part, _) = self.expect_int(value, *span)?;
+                            parts[index] = part;
+                        }
+                        let days =
+                            days_from_civil(parts[0] as i32, parts[1] as u32, parts[2] as u32);
+                        let seconds = days * 86_400 + parts[3] * 3_600 + parts[4] * 60 + parts[5];
+                        Ok(Value::Time(seconds * 1_000))
+                    }
                     crate::builtins::Builtin::Duration(unit) => {
                         let Some(value) = values.first() else {
                             return Err(Error::coded(
@@ -4599,6 +4708,10 @@ impl<'a> Interpreter<'a> {
                 span,
                 "synchronization locations do not have values",
             )),
+            Type::Time => match value {
+                Value::Time(value) => Ok(Value::Time(value)),
+                _ => Err(Error::coded("E0507", span, "expected a TIME value")),
+            },
             Type::Instance => match value {
                 Value::Instance(value) => Ok(Value::Instance(value)),
                 _ => Err(Error::coded("E0507", span, "expected an INSTANCE value")),
@@ -6810,6 +6923,24 @@ fn bits_binary(op: &str, left: &str, right: &str, span: Span) -> Result<String, 
             }
         })
         .collect())
+}
+
+fn unix_time_ms() -> i128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i128)
+        .unwrap_or(0)
+}
+
+fn days_from_civil(year: i32, month: u32, day: u32) -> i128 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month = month as i32;
+    let day = day as i32;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    (era * 146_097 + day_of_era - 719_468) as i128
 }
 
 fn default_value(modes: &crate::modes::ModeTable, ty: Type) -> Value {
