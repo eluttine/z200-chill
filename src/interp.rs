@@ -578,6 +578,18 @@ impl Var {
 
 type VarCell = Rc<RefCell<Var>>;
 
+#[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
+enum RefSlot {
+    Cell(VarCell),
+    Path {
+        root: VarCell,
+        offset: Option<i128>,
+        path: Vec<String>,
+        ty: Type,
+    },
+}
+
 fn write_var_value(var: &mut Var, value: Value) {
     if let Some(text) = &var.text {
         let record = text.borrow().record.clone();
@@ -1193,7 +1205,7 @@ struct Interpreter<'a> {
     scheduler: Rc<RefCell<ScheduleState>>,
     exprs: ir::ExprTable,
     bodies: ir::BodyTable,
-    refs: Vec<Option<VarCell>>,
+    refs: Vec<Option<RefSlot>>,
     ref_allocated: Vec<bool>,
     self_cells: Vec<VarCell>,
     self_modes: Vec<types::MoretaId>,
@@ -3144,7 +3156,14 @@ impl<'a> Interpreter<'a> {
         span: Span,
     ) -> Result<VarCell, Error> {
         if let Some(reference) = first_ref {
-            return self.eval_reference(reference, span);
+            return match self.eval_reference(reference, span)? {
+                RefSlot::Cell(cell) => Ok(cell),
+                RefSlot::Path { .. } => Err(Error::coded(
+                    "E0507",
+                    span,
+                    "transfer location must be a simple location",
+                )),
+            };
         }
         self.find_var_cell(first)
             .ok_or_else(|| Error::coded("E0505", span, format!("unknown variable `{first}`")))
@@ -3997,18 +4016,14 @@ impl<'a> Interpreter<'a> {
                 let value = self.read_var(component, *span)?;
                 read_path(value, path, *span)
             }
-            ir::Expr::AddressOf { name, span, .. } => {
-                let cell = self.find_var_cell(name).ok_or_else(|| {
-                    Error::coded("E0505", *span, format!("unknown variable `{name}`"))
-                })?;
-                Ok(Value::Ref(Some(self.intern_ref(cell, false))))
+            ir::Expr::AddressOf { target, span, .. } => {
+                let slot = self.slot_for_target(target, *span)?;
+                Ok(Value::Ref(Some(self.intern_slot(slot))))
             }
             ir::Expr::Deref { base, ty, span, .. } => {
-                let cell = self.eval_reference(base, *span)?;
-                let (value, cell_ty) = {
-                    let var = cell.borrow();
-                    (var.value.clone(), var.ty)
-                };
+                let slot = self.eval_reference(base, *span)?;
+                let cell_ty = self.slot_ty(&slot);
+                let value = self.read_slot(&slot, *span)?;
                 if cell_ty != *ty {
                     return Err(Error::coded(
                         "E0507",
@@ -4162,7 +4177,9 @@ impl<'a> Interpreter<'a> {
                                 "TERMINATE requires an allocated reference value",
                             ));
                         }
-                        if let Some(cell) = self.refs.get(*handle).and_then(Clone::clone) {
+                        if let Some(RefSlot::Cell(cell)) =
+                            self.refs.get(*handle).and_then(Clone::clone)
+                        {
                             let (value, ty) = {
                                 let var = cell.borrow();
                                 (var.value.clone(), var.ty)
@@ -4575,11 +4592,9 @@ impl<'a> Interpreter<'a> {
                             "internal: dereferenced method call has no reference",
                         ));
                     };
-                    let cell = self.eval_reference(reference, *span)?;
-                    let (ty, value) = {
-                        let var = cell.borrow();
-                        (var.ty, var.value.clone())
-                    };
+                    let slot = self.eval_reference(reference, *span)?;
+                    let ty = self.slot_ty(&slot);
+                    let value = self.read_slot(&slot, *span)?;
                     let temp = "\u{0}deref".to_owned();
                     self.locals.push(Scope::default());
                     self.locals
@@ -4597,7 +4612,7 @@ impl<'a> Interpreter<'a> {
                         .map(|cell| cell.borrow().value.clone());
                     self.locals.pop();
                     if let Some(updated) = updated {
-                        cell.borrow_mut().value = updated;
+                        self.write_slot(&slot, updated, *span)?;
                     }
                     result
                 } else if object == "<self>" {
@@ -6208,23 +6223,104 @@ impl<'a> Interpreter<'a> {
     }
 
     fn intern_ref(&mut self, cell: VarCell, allocated: bool) -> usize {
-        if let Some(index) = self
-            .refs
-            .iter()
-            .position(|slot| slot.as_ref().is_some_and(|slot| Rc::ptr_eq(slot, &cell)))
-        {
+        if let Some(index) = self.refs.iter().position(|slot| {
+            slot.as_ref().is_some_and(
+                |slot| matches!(slot, RefSlot::Cell(existing) if Rc::ptr_eq(existing, &cell)),
+            )
+        }) {
             if allocated {
                 self.ref_allocated[index] = true;
             }
             return index;
         }
         let index = self.refs.len();
-        self.refs.push(Some(cell));
+        self.refs.push(Some(RefSlot::Cell(cell)));
         self.ref_allocated.push(allocated);
         index
     }
 
-    fn eval_reference(&mut self, reference: &ir::Node, span: Span) -> Result<VarCell, Error> {
+    fn intern_slot(&mut self, slot: RefSlot) -> usize {
+        let index = self.refs.len();
+        self.refs.push(Some(slot));
+        self.ref_allocated.push(false);
+        index
+    }
+
+    fn slot_for_target(&mut self, target: &ir::AssignTarget, span: Span) -> Result<RefSlot, Error> {
+        match target {
+            ir::AssignTarget::Var(name) => {
+                let cell = self.find_var_cell(name).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{name}`"))
+                })?;
+                Ok(RefSlot::Cell(cell))
+            }
+            ir::AssignTarget::Field {
+                root,
+                indices,
+                array,
+                path,
+                ty,
+            } => {
+                let offset = if indices.is_empty() {
+                    None
+                } else {
+                    let array = array.ok_or_else(|| {
+                        Error::coded(
+                            "E0500",
+                            span,
+                            "internal: indexed reference has no array mode",
+                        )
+                    })?;
+                    let mut values = Vec::with_capacity(indices.len());
+                    for index in indices {
+                        let value = self.eval_ir(index)?;
+                        let (value, _) = self.expect_int(value, index.span())?;
+                        values.push(value);
+                    }
+                    Some(array_offset(array, &values, span)?)
+                };
+                let root = self.find_var_cell(root).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{root}`"))
+                })?;
+                Ok(RefSlot::Path {
+                    root,
+                    offset,
+                    path: path.clone(),
+                    ty: *ty,
+                })
+            }
+            ir::AssignTarget::Index {
+                name,
+                indices,
+                array,
+                ty,
+            } => {
+                let mut values = Vec::with_capacity(indices.len());
+                for index in indices {
+                    let value = self.eval_ir(index)?;
+                    let (value, _) = self.expect_int(value, index.span())?;
+                    values.push(value);
+                }
+                let offset = array_offset(*array, &values, span)?;
+                let root = self.find_var_cell(name).ok_or_else(|| {
+                    Error::coded("E0505", span, format!("unknown variable `{name}`"))
+                })?;
+                Ok(RefSlot::Path {
+                    root,
+                    offset: Some(offset),
+                    path: Vec::new(),
+                    ty: *ty,
+                })
+            }
+            _ => Err(Error::coded(
+                "E0507",
+                span,
+                "this location cannot be referenced",
+            )),
+        }
+    }
+
+    fn eval_reference(&mut self, reference: &ir::Node, span: Span) -> Result<RefSlot, Error> {
         match self.eval_ir(reference)? {
             Value::Ref(Some(handle)) => {
                 self.refs.get(handle).and_then(Clone::clone).ok_or_else(|| {
@@ -6233,6 +6329,60 @@ impl<'a> Interpreter<'a> {
             }
             Value::Ref(None) => Err(Error::exception("EMPTY", span, "EMPTY: NULL reference")),
             _ => Err(Error::coded("E0507", span, "expected a reference value")),
+        }
+    }
+
+    fn slot_ty(&self, slot: &RefSlot) -> Type {
+        match slot {
+            RefSlot::Cell(cell) => cell.borrow().ty,
+            RefSlot::Path { ty, .. } => *ty,
+        }
+    }
+
+    fn read_slot(&mut self, slot: &RefSlot, span: Span) -> Result<Value, Error> {
+        match slot {
+            RefSlot::Cell(cell) => {
+                let var = cell.borrow();
+                if let Some(text) = &var.text {
+                    let record = text.borrow().record.clone();
+                    return Ok(record.borrow().value.clone());
+                }
+                Ok(var.value.clone())
+            }
+            RefSlot::Path {
+                root, offset, path, ..
+            } => {
+                let value = root.borrow().value.clone();
+                let value = match offset {
+                    Some(offset) => read_array_at(value, *offset, span)?,
+                    None => value,
+                };
+                read_path(value, path, span)
+            }
+        }
+    }
+
+    fn write_slot(&mut self, slot: &RefSlot, value: Value, span: Span) -> Result<(), Error> {
+        match slot {
+            RefSlot::Cell(cell) => {
+                write_var_value(&mut cell.borrow_mut(), value);
+                Ok(())
+            }
+            RefSlot::Path {
+                root, offset, path, ..
+            } => {
+                let mut var = root.borrow_mut();
+                let target = match offset {
+                    Some(offset) => array_at_mut(&mut var.value, *offset, span)?,
+                    None => &mut var.value,
+                };
+                if path.is_empty() {
+                    *target = value;
+                    Ok(())
+                } else {
+                    assign_path(target, path, value, span)
+                }
+            }
         }
     }
 
@@ -6537,11 +6687,9 @@ impl<'a> Interpreter<'a> {
                 read_array_slice(value, offset, count, *low, span)
             }
             ir::AssignTarget::Deref { reference, ty } => {
-                let cell = self.eval_reference(reference, span)?;
-                let (value, cell_ty) = {
-                    let var = cell.borrow();
-                    (var.value.clone(), var.ty)
-                };
+                let slot = self.eval_reference(reference, span)?;
+                let cell_ty = self.slot_ty(&slot);
+                let value = self.read_slot(&slot, span)?;
                 if cell_ty != *ty {
                     return Err(Error::coded(
                         "E0507",
@@ -6557,8 +6705,8 @@ impl<'a> Interpreter<'a> {
             ir::AssignTarget::DerefField {
                 reference, path, ..
             } => {
-                let cell = self.eval_reference(reference, span)?;
-                let value = cell.borrow().value.clone();
+                let slot = self.eval_reference(reference, span)?;
+                let value = self.read_slot(&slot, span)?;
                 read_path(value, path, span)
             }
         }
@@ -6671,16 +6819,15 @@ impl<'a> Interpreter<'a> {
             }
             ir::AssignTarget::Deref { reference, ty } => {
                 let value = self.convert(value, *ty, span)?;
-                let cell = self.eval_reference(reference, span)?;
-                if cell.borrow().ty != *ty {
+                let slot = self.eval_reference(reference, span)?;
+                if self.slot_ty(&slot) != *ty {
                     return Err(Error::coded(
                         "E0507",
                         span,
                         "reference mode does not match the referenced location",
                     ));
                 }
-                write_var_value(&mut cell.borrow_mut(), value);
-                Ok(())
+                self.write_slot(&slot, value, span)
             }
             ir::AssignTarget::DerefField {
                 reference,
@@ -6688,9 +6835,10 @@ impl<'a> Interpreter<'a> {
                 ty,
             } => {
                 let value = self.convert(value, *ty, span)?;
-                let cell = self.eval_reference(reference, span)?;
-                let mut var = cell.borrow_mut();
-                assign_path(&mut var.value, path, value, span)
+                let slot = self.eval_reference(reference, span)?;
+                let mut object = self.read_slot(&slot, span)?;
+                assign_path(&mut object, path, value, span)?;
+                self.write_slot(&slot, object, span)
             }
         }
     }

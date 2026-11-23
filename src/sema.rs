@@ -3047,18 +3047,16 @@ impl Checker {
                 Ok(Type::Moreta(id))
             }
             Expr::AddressOf { target, span } => {
-                let Expr::Name { name, .. } = target.as_ref() else {
+                if !self.is_field_location(target) {
                     return Err(Error::coded(
                         "E0409",
                         *span,
-                        "referencing currently requires a simple variable",
+                        "referencing requires a variable, array element, or field",
                     ));
-                };
-                let ty = self.lookup_var(name).ok_or_else(|| {
-                    Error::coded("E0403", *span, format!("unknown variable `{name}`"))
-                })?;
+                }
+                let ty = self.check_expr(target)?;
                 let target = crate::types::RefTarget::from_type(ty).ok_or_else(|| {
-                    Error::coded("E0400", *span, "this variable cannot be referenced")
+                    Error::coded("E0400", *span, "this location cannot be referenced")
                 })?;
                 Ok(Type::Ref(target))
             }

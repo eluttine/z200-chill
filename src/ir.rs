@@ -80,7 +80,7 @@ pub enum Expr {
         span: Span,
     },
     AddressOf {
-        name: String,
+        target: Box<AssignTarget>,
         ty: Type,
         span: Span,
     },
@@ -1579,14 +1579,9 @@ impl Lowerer<'_> {
             }
             AstExpr::SelfRef { .. } => Rc::new(Expr::SelfValue { ty, span }),
             AstExpr::AddressOf { target, span } => {
-                let AstExpr::Name { name, .. } = target.as_ref() else {
-                    return Err(Error::new(
-                        *span,
-                        "referencing currently requires a simple variable",
-                    ));
-                };
+                let target = self.lower_target(target)?;
                 Rc::new(Expr::AddressOf {
-                    name: name.clone(),
+                    target: Box::new(target),
                     ty,
                     span: *span,
                 })

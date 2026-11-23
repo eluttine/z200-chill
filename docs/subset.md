@@ -616,8 +616,9 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
 - `ROW M` is a row mode. Rows may currently target string, bit-string, and array
   modes; dereferencing a row takes no mode.
 - `NULL` is the empty reference value.
-- `-> name` creates a reference to a variable; `ref->` dereferences it. A dereference
-  is usable as a value or as an assignment target, including `ref->.field`.
+- `-> location` creates a reference to a variable, array element, or field path;
+  `ref->` dereferences it. A dereference is usable as a value or as an assignment
+  target, including `ref->.field`.
 - `ALLOCATE(mode [, value])` and `GETSTACK(mode [, value])` create a location and
   return a reference to it. `GETSTACK` is currently treated like `ALLOCATE`; both
   create interpreter-managed locations.
@@ -630,8 +631,9 @@ characters. Bare `CHARS` remains an unbounded varying string mode.
 - Dereferencing `NULL` or a terminated reference raises `EMPTY`.
 - References, pointers, and rows are encodable in grant interfaces, including
   references to structure, set, and moreta modes. Arrays may contain `REF`, `ROW`, and
-  `PTR` elements. Nested `REF`/`ROW` modes, references to fields/indexes, references to
-  array targets, and mutually recursive structure modes are not implemented yet. Self-referential structure modes (such as linked-list
+  `PTR` elements. References to fields and array elements are supported. Nested
+  `REF`/`ROW` modes, references to whole array targets, and mutually recursive
+  structure modes are not implemented yet. Self-referential structure modes (such as linked-list
   nodes) are supported.
 
 ### 5.8 Associations and access modes (simplified)
