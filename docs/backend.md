@@ -31,6 +31,7 @@ reference implementation for the complete supported language.
 - character-string equality, inequality, ordering comparisons, concatenation, and
   `//:=` concatenation assignment,
 - named set modes and set-element constants,
+- `READLINE` input,
 - scalar `REF` modes, `NULL`, reference comparison, taking addresses of scalar
   variables and scalar array elements, dereference reads, and dereference assignment,
 - `ASSERT`,
