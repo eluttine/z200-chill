@@ -20,9 +20,22 @@ enum Kind {
     String,
     Array {
         element: ScalarKind,
-        low: i128,
-        count: usize,
+        dims: [Dim; 4],
+        rank: usize,
+        total: usize,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Dim {
+    low: i128,
+    high: i128,
+}
+
+impl Dim {
+    fn length(self) -> i128 {
+        (self.high - self.low + 1).max(0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,8 +95,8 @@ impl Kind {
 
     fn c_declaration(self, name: &str) -> String {
         match self {
-            Kind::Array { element, count, .. } => {
-                format!("{} {}[{}]", element.c_type(), name, count)
+            Kind::Array { element, total, .. } => {
+                format!("{} {}[{}]", element.c_type(), name, total)
             }
             other => format!("{} {}", other.c_type(), name),
         }
@@ -333,30 +346,99 @@ impl Generator<'_> {
         value: &Expr,
         span: crate::lexer::Span,
     ) -> Result<(), String> {
-        let Kind::Array { count, .. } = info.kind else {
+        let Kind::Array {
+            dims, rank, total, ..
+        } = info.kind
+        else {
             return Err("native backend: internal: not an array initializer".to_owned());
         };
         let Expr::ArrayTuple { elements, .. } = value else {
             return Err("native backend: array initializers must be array literals".to_owned());
         };
-        if elements.len() != count {
+        let mut values = Vec::new();
+        self.collect_array_literal(elements, &dims, rank, 0, &mut values)?;
+        if values.len() != total {
             return Err(format!(
-                "native backend: array literal has {} element(s), expected {count}",
+                "native backend: array literal has {} element(s), expected {total}",
+                values.len()
+            ));
+        }
+        for (index, code) in values.into_iter().enumerate() {
+            self.line(out, &format!("{}[{}] = {code};", info.c_name, index));
+        }
+        let _ = span;
+        Ok(())
+    }
+
+    fn collect_array_literal(
+        &mut self,
+        elements: &[crate::ast::ArrayTupleElement],
+        dims: &[Dim; 4],
+        rank: usize,
+        level: usize,
+        out: &mut Vec<String>,
+    ) -> Result<(), String> {
+        let expected = dims[level].length().max(0) as usize;
+        if elements.len() != expected {
+            return Err(format!(
+                "native backend: array literal expects {expected} element(s) at dimension {}, found {}",
+                level + 1,
                 elements.len()
             ));
         }
-        for (index, item) in elements.iter().enumerate() {
+        for item in elements {
             if item.labels.is_some() || item.range_end.is_some() {
                 return Err(
                     "native backend: labelled or ranged array literals are not supported yet"
                         .to_owned(),
                 );
             }
-            let (code, _) = self.emit_expr(&item.value)?;
-            self.line(out, &format!("{}[{}] = {code};", info.c_name, index));
+            if level + 1 < rank {
+                let Expr::ArrayTuple { elements, .. } = &item.value else {
+                    return Err("native backend: nested array literal expected".to_owned());
+                };
+                self.collect_array_literal(elements, dims, rank, level + 1, out)?;
+            } else {
+                out.push(self.emit_expr(&item.value)?.0);
+            }
+        }
+        Ok(())
+    }
+
+    fn array_index_expr(
+        &mut self,
+        info: &VarInfo,
+        args: &[Expr],
+        span: crate::lexer::Span,
+    ) -> Result<(String, Kind), String> {
+        let Kind::Array {
+            element,
+            dims,
+            rank,
+            ..
+        } = info.kind
+        else {
+            return Err(format!("native backend: `{}` is not an array", info.c_name));
+        };
+        if args.len() != rank {
+            return Err(format!(
+                "native backend: array index requires {rank} index expression(s)"
+            ));
+        }
+        let mut terms = Vec::with_capacity(rank);
+        for (index, argument) in args.iter().enumerate() {
+            let (code, _) = self.emit_expr(argument)?;
+            let mut stride = 1i128;
+            for dim in dims.iter().take(rank).skip(index + 1) {
+                stride *= dim.length();
+            }
+            terms.push(format!("((({code}) - ({})) * {stride})", dims[index].low));
         }
         let _ = span;
-        Ok(())
+        Ok((
+            format!("{}[{}]", info.c_name, terms.join(" + ")),
+            element.kind(),
+        ))
     }
 
     fn emit_local_declarations(
@@ -736,25 +818,17 @@ impl Generator<'_> {
             Expr::Apply {
                 name, args, span, ..
             } => {
-                if args.len() != 1 {
-                    return Err(
-                        "native backend: multidimensional array targets are not supported yet"
-                            .to_owned(),
-                    );
-                }
                 let Some(info) = self.vars.get(name).cloned() else {
                     return Err(format!("native backend: unknown array `{name}`"));
                 };
-                let Kind::Array { low, .. } = info.kind else {
-                    return Err(format!("native backend: `{name}` is not an array"));
-                };
-                let Some(ApplyResolution::ArrayIndex(Type::Array(_))) =
-                    self.check.resolutions.get(span)
-                else {
+                if !matches!(
+                    self.check.resolutions.get(span),
+                    Some(ApplyResolution::ArrayIndex(Type::Array(_)))
+                        | Some(ApplyResolution::ArrayIndex(Type::MultiArray(_)))
+                ) {
                     return Err(format!("native backend: `{name}` is not an indexed array"));
-                };
-                let (index, _) = self.emit_expr(&args[0])?;
-                format!("{}[({index}) - ({low})]", info.c_name)
+                }
+                self.array_index_expr(&info, args, *span)?.0
             }
             _ => {
                 return Err(
@@ -903,24 +977,12 @@ impl Generator<'_> {
                 Ok((format!("(({left}) {operator} ({right}))"), kind))
             }
             Expr::Apply { name, args, span } => match self.check.resolutions.get(span) {
-                Some(ApplyResolution::ArrayIndex(Type::Array(_))) => {
-                    if args.len() != 1 {
-                        return Err(
-                            "native backend: multidimensional array indexing is not supported yet"
-                                .to_owned(),
-                        );
-                    }
+                Some(ApplyResolution::ArrayIndex(Type::Array(_)))
+                | Some(ApplyResolution::ArrayIndex(Type::MultiArray(_))) => {
                     let Some(info) = self.vars.get(name).cloned() else {
                         return Err(format!("native backend: unknown array `{name}`"));
                     };
-                    let Kind::Array { element, low, .. } = info.kind else {
-                        return Err(format!("native backend: `{name}` is not an array"));
-                    };
-                    let (index, _) = self.emit_expr(&args[0])?;
-                    Ok((
-                        format!("{}[({index}) - ({low})]", info.c_name),
-                        element.kind(),
-                    ))
+                    self.array_index_expr(&info, args, *span)
                 }
                 Some(ApplyResolution::Procedure(_)) => {
                     let (code, kind) = self.emit_procedure_call(name, args, *span)?;
@@ -1005,10 +1067,46 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
                     ))
                 }
             };
+            let mut dims = [Dim { low: 0, high: 0 }; 4];
+            dims[0] = Dim {
+                low: array.low,
+                high: array.high,
+            };
             Ok(Kind::Array {
                 element,
-                low: array.low,
-                count: (array.high - array.low + 1).max(0) as usize,
+                dims,
+                rank: 1,
+                total: (array.high - array.low + 1).max(0) as usize,
+            })
+        }
+        Type::MultiArray(array) => {
+            let element = match array.element.ty() {
+                Type::Int(_) | Type::IntLiteral => ScalarKind::Int,
+                Type::Bool => ScalarKind::Bool,
+                Type::Char => ScalarKind::Char,
+                Type::String
+                | Type::BoundedString { .. }
+                | Type::WString
+                | Type::WBoundedString { .. } => ScalarKind::String,
+                other => {
+                    return Err(format!(
+                        "native backend: array element mode `{}` is not supported yet",
+                        other.describe()
+                    ))
+                }
+            };
+            let mut dims = [Dim { low: 0, high: 0 }; 4];
+            for (index, dimension) in array.dimensions().iter().enumerate() {
+                dims[index] = Dim {
+                    low: dimension.low,
+                    high: dimension.high,
+                };
+            }
+            Ok(Kind::Array {
+                element,
+                dims,
+                rank: array.rank(),
+                total: array.total_len().max(0) as usize,
             })
         }
         _ => Err(format!(

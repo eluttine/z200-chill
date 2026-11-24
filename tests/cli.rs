@@ -671,6 +671,49 @@ END M;
 }
 
 #[test]
+fn compiles_native_multidimensional_arrays() {
+    let dir = TempDir::new("z200c-native-md");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativemd"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL a ARRAY(1:2, 1:2) INT INIT := [[1, 2], [3, 4]];
+  DCL b ARRAY(1:2, 1:2) INT;
+  b := a;
+  ASSERT a(2, 1) = 3;
+  ASSERT b(1, 2) = 2;
+  b(2, 2) := 9;
+  ASSERT b(2, 2) = 9;
+  WRITELINE("md ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativemd");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "md ok\n");
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
@@ -688,7 +731,8 @@ entry = "src/main.ch"
         dir.join("src/main.ch"),
         r#"
 M: MODULE
-  DCL values ARRAY(1:2, 1:2) INT;
+  NEWMODE P = STRUCT (x INT);
+  DCL values ARRAY(1:2) P;
 END M;
 "#,
     )
@@ -696,7 +740,10 @@ END M;
     let output = z200c().arg("compile").arg(&dir).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not supported"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("not supported") || stderr.contains("unsupported mode"),
+        "stderr: {stderr}"
+    );
 }
 
 #[test]
