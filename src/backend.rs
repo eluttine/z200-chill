@@ -8,8 +8,9 @@ use crate::ast::{
     Action, AssignOp, BinaryOp, CaseLabel, Declaration, Expr, ModeRef, Module, Passing, ProcDef,
     Program, UnaryOp,
 };
+use crate::modes::ModeTable;
 use crate::sema::{ApplyResolution, CheckResult};
-use crate::types::{self, Type};
+use crate::types::{self, ModeId, Type};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,7 @@ enum Kind {
         total: usize,
     },
     Ref(ScalarKind),
+    Struct(ModeId),
     Null,
 }
 
@@ -75,21 +77,22 @@ struct VarInfo {
 }
 
 impl Kind {
-    fn c_type(self) -> &'static str {
+    fn c_type(self) -> String {
         match self {
-            Kind::Int => "int64_t",
-            Kind::Bool => "int",
-            Kind::Char => "int",
-            Kind::String => "const char *",
+            Kind::Int => "int64_t".to_owned(),
+            Kind::Bool => "int".to_owned(),
+            Kind::Char => "int".to_owned(),
+            Kind::String => "const char *".to_owned(),
             Kind::Array { .. } => {
                 unreachable!("array kinds are emitted through c_declaration")
             }
             Kind::Ref(element) => match element {
-                ScalarKind::Int => "int64_t *",
-                ScalarKind::Bool => "int *",
-                ScalarKind::Char => "int *",
-                ScalarKind::String => "const char **",
+                ScalarKind::Int => "int64_t *".to_owned(),
+                ScalarKind::Bool => "int *".to_owned(),
+                ScalarKind::Char => "int *".to_owned(),
+                ScalarKind::String => "const char **".to_owned(),
             },
+            Kind::Struct(id) => format!("z_struct_{}", id.0),
             Kind::Null => {
                 unreachable!("NULL is never used as a declared variable type")
             }
@@ -102,6 +105,7 @@ impl Kind {
             Kind::String => "\"\"",
             Kind::Array { .. } => "{0}",
             Kind::Ref(_) | Kind::Null => "NULL",
+            Kind::Struct(_) => "{0}",
         }
     }
 
@@ -111,6 +115,7 @@ impl Kind {
                 format!("{} {}[{}]", element.c_type(), name, total)
             }
             Kind::Ref(element) => format!("{} *{}", element.c_type(), name),
+            Kind::Struct(id) => format!("z_struct_{} {name}", id.0),
             Kind::Null => unreachable!("NULL is never used as a declared variable type"),
             other => format!("{} {}", other.c_type(), name),
         }
@@ -119,6 +124,7 @@ impl Kind {
 
 struct Generator<'a> {
     check: &'a CheckResult,
+    modes: &'a ModeTable,
     module_modes: &'a [HashMap<String, Type>],
     module_index: usize,
     vars: HashMap<String, VarInfo>,
@@ -133,6 +139,7 @@ pub fn generate(
     program: &Program,
     check: &CheckResult,
     package: &str,
+    modes: &ModeTable,
     module_modes: &[HashMap<String, Type>],
 ) -> Result<String, String> {
     let modules: Vec<&Module> = program
@@ -146,6 +153,8 @@ pub fn generate(
     out.push_str(
         "#include <assert.h>\n#include <stdbool.h>\n#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nstatic const char *z_concat(const char *a, const char *b) {\n    size_t la = strlen(a);\n    size_t lb = strlen(b);\n    char *out = (char *)malloc(la + lb + 1);\n    if (out == NULL) { abort(); }\n    memcpy(out, a, la);\n    memcpy(out + la, b, lb);\n    out[la + lb] = '\\0';\n    return out;\n}\n\nstatic const char *z_readline(void) {\n    size_t cap = 256;\n    size_t len = 0;\n    char *buffer = (char *)malloc(cap);\n    if (buffer == NULL) { abort(); }\n    int ch;\n    while ((ch = getchar()) != EOF && ch != '\\n') {\n        if (len + 1 >= cap) {\n            cap *= 2;\n            buffer = (char *)realloc(buffer, cap);\n            if (buffer == NULL) { abort(); }\n        }\n        buffer[len++] = (char)ch;\n    }\n    buffer[len] = '\\0';\n    return buffer;\n}\n\n",
     );
+
+    emit_struct_typedefs(&mut out, modes)?;
 
     // Module globals.
     for (index, module) in modules.iter().enumerate() {
@@ -179,7 +188,15 @@ pub fn generate(
     for (index, module) in modules.iter().enumerate() {
         for declaration in &module.declarations {
             if let Declaration::Proc(proc_def) = declaration {
-                emit_proc(&mut out, check, module_modes, index, module, proc_def)?;
+                emit_proc(
+                    &mut out,
+                    check,
+                    modes,
+                    module_modes,
+                    index,
+                    module,
+                    proc_def,
+                )?;
             }
         }
     }
@@ -190,6 +207,7 @@ pub fn generate(
         let mut generator = Generator {
             check,
             module_index: index,
+            modes,
             module_modes,
             vars: module_vars(module, index, module_modes),
             indent: 1,
@@ -210,6 +228,51 @@ pub fn generate(
     out.push_str(&format!("    (void)\"{}\";\n", c_escape(package)));
     out.push_str("    return 0;\n}\n");
     Ok(out)
+}
+
+fn emit_struct_typedefs(out: &mut String, modes: &ModeTable) -> Result<(), String> {
+    fn emit_one(
+        id: ModeId,
+        modes: &ModeTable,
+        done: &mut std::collections::HashSet<usize>,
+        visiting: &mut std::collections::HashSet<usize>,
+        out: &mut String,
+    ) -> Result<(), String> {
+        if done.contains(&id.0) {
+            return Ok(());
+        }
+        if !visiting.insert(id.0) {
+            return Err(format!(
+                "native backend: recursive structure mode `{}` is not supported",
+                modes.get(id).name
+            ));
+        }
+        let mode = modes.get(id);
+        for field in &mode.fields {
+            if let Type::Struct(dependency) = field.ty {
+                emit_one(dependency, modes, done, visiting, out)?;
+            }
+        }
+        out.push_str(&format!("typedef struct z_struct_{} {{\n", id.0));
+        for field in &mode.fields {
+            let kind = kind_from_type(field.ty)?;
+            out.push_str(&format!(
+                "    {};\n",
+                kind.c_declaration(&c_ident(&field.name))
+            ));
+        }
+        out.push_str(&format!("}} z_struct_{};\n\n", id.0));
+        visiting.remove(&id.0);
+        done.insert(id.0);
+        Ok(())
+    }
+
+    let mut done = std::collections::HashSet::new();
+    let mut visiting = std::collections::HashSet::new();
+    for id in 0..modes.modes.len() {
+        emit_one(ModeId(id), modes, &mut done, &mut visiting, out)?;
+    }
+    Ok(())
 }
 
 fn module_vars(
@@ -259,7 +322,9 @@ fn emit_proc_signature(
     if matches!(result_kind, Some(Kind::Array { .. })) {
         return Err("native backend: array procedure results are not supported yet".to_owned());
     }
-    let result = result_kind.map(Kind::c_type).unwrap_or("void");
+    let result = result_kind
+        .map(Kind::c_type)
+        .unwrap_or_else(|| "void".to_owned());
     out.push_str(&format!(
         "static {result} {}",
         proc_name(module, &proc_def.name)
@@ -291,6 +356,7 @@ fn emit_proc_signature(
 fn emit_proc(
     out: &mut String,
     check: &CheckResult,
+    modes: &ModeTable,
     module_modes: &[HashMap<String, Type>],
     module: usize,
     owner: &Module,
@@ -301,6 +367,7 @@ fn emit_proc(
     let mut generator = Generator {
         check,
         module_index: module,
+        modes,
         module_modes,
         vars: module_vars(owner, module, module_modes),
         indent: 1,
@@ -892,6 +959,7 @@ impl Generator<'_> {
                 }
                 self.array_index_expr(&info, args, *span)?.0
             }
+            Expr::Field { .. } => self.emit_field_location(target)?.0,
             Expr::Deref { base, .. } => {
                 let (code, kind) = self.emit_expr(base)?;
                 if !matches!(kind, Kind::Ref(_)) {
@@ -990,8 +1058,11 @@ impl Generator<'_> {
                                     format!("printf(\"%lld\", (long long)({code}));")
                                 }
                             }
-                            Kind::Array { .. } | Kind::Ref(_) | Kind::Null => return Err(
-                                "native backend: arrays, references, and NULL cannot be passed to WRITE/WRITELINE yet"
+                            Kind::Array { .. }
+                            | Kind::Ref(_)
+                            | Kind::Struct(_)
+                            | Kind::Null => return Err(
+                                "native backend: arrays, references, structures, and NULL cannot be passed to WRITE/WRITELINE yet"
                                     .to_owned(),
                             ),
                         };
@@ -1028,6 +1099,37 @@ impl Generator<'_> {
         }
     }
 
+    fn emit_field_location(&mut self, expr: &Expr) -> Result<(String, Kind), String> {
+        match expr {
+            Expr::Name { name, .. } => {
+                let info = self
+                    .vars
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| format!("native backend: unknown variable `{name}`"))?;
+                Ok((info.c_name, info.kind))
+            }
+            Expr::Field { base, field, .. } => {
+                let (base_code, base_kind) = self.emit_field_location(base)?;
+                let Kind::Struct(id) = base_kind else {
+                    return Err(
+                        "native backend: field selection requires a structure value".to_owned()
+                    );
+                };
+                let mode = self.modes.get(id);
+                let Some(info) = mode.fields.iter().find(|info| &info.name == field) else {
+                    return Err(format!(
+                        "native backend: unknown field `{field}` in structure `{}`",
+                        mode.name
+                    ));
+                };
+                let kind = kind_from_type(info.ty)?;
+                Ok((format!("{base_code}.{}", c_ident(field)), kind))
+            }
+            _ => Err("native backend: field access requires a simple structure value".to_owned()),
+        }
+    }
+
     fn emit_expr(&mut self, expr: &Expr) -> Result<(String, Kind), String> {
         match expr {
             Expr::Integer { value, .. } => Ok((format!("INT64_C({value})"), Kind::Int)),
@@ -1037,6 +1139,7 @@ impl Generator<'_> {
             Expr::Char { value, .. } => Ok(((*value as u32).to_string(), Kind::Char)),
             Expr::String { value, .. } => Ok((format!("\"{}\"", c_escape(value)), Kind::String)),
             Expr::Null { .. } => Ok(("NULL".to_owned(), Kind::Null)),
+            Expr::Field { .. } => self.emit_field_location(expr),
             Expr::AddressOf { target, .. } => match target.as_ref() {
                 Expr::Name { name, .. } => {
                     let Some(info) = self.vars.get(name).cloned() else {
@@ -1315,6 +1418,7 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
         Type::Int(_) | Type::IntLiteral => Ok(Kind::Int),
         Type::Bool => Ok(Kind::Bool),
         Type::Set(_) => Ok(Kind::Int),
+        Type::Struct(id) => Ok(Kind::Struct(id)),
         Type::Char | Type::WChar => Ok(Kind::Char),
         Type::String | Type::BoundedString { .. } | Type::WString | Type::WBoundedString { .. } => {
             Ok(Kind::String)

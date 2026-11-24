@@ -31,6 +31,8 @@ reference implementation for the complete supported language.
 - character-string equality, inequality, ordering comparisons, concatenation, and
   `//:=` concatenation assignment,
 - named set modes and set-element constants,
+- named structure modes with scalar/string or nested structure fields, field access,
+  field assignment, and whole-structure assignment,
 - `READLINE` input,
 - scalar `REF` modes, `NULL`, reference comparison, taking addresses of scalar
   variables and scalar array elements, dereference reads, and dereference assignment,
@@ -58,6 +60,7 @@ Generated code is C11 with `int64_t` integers, `int` booleans/characters, and
 - generics,
 - moreta modes and objects,
 - arrays of structures or other composite element modes,
+- structure initializers and structure literals,
 - powersets, references to fields or composite locations, text, and buffers,
 - exceptions and handlers,
 - processes, regions, tasks, signals, and timing,

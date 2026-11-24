@@ -114,6 +114,7 @@ fn compile_impl(target: &Path) -> Result<PathBuf, String> {
         &package.program,
         &check,
         &package.manifest.package.name,
+        &info.modes,
         &module_modes,
     )?;
     let out_dir = package.package_dir.join("target").join("z200c");

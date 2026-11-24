@@ -1159,6 +1159,58 @@ END M;
 }
 
 #[test]
+fn compiles_native_structures() {
+    let dir = TempDir::new("z200c-native-struct");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativestruct"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  NEWMODE Point = STRUCT (x INT, y INT);
+  NEWMODE Line = STRUCT (a Point, b Point);
+  DCL p Point;
+  DCL q Point;
+  DCL l Line;
+  p.x := 2;
+  p.y := 3;
+  q := p;
+  ASSERT q.x = 2;
+  q.y := 9;
+  ASSERT q.y = 9;
+  ASSERT p.y = 3;
+  l.a := p;
+  l.b := q;
+  ASSERT l.a.x = 2;
+  ASSERT l.b.y = 9;
+  WRITELINE("struct ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativestruct");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "struct ok\n");
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
