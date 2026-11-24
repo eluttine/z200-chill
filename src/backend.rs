@@ -230,21 +230,20 @@ fn emit_proc_signature(out: &mut String, module: usize, proc_def: &ProcDef) -> R
     ));
     out.push('(');
     for (index, param) in proc_def.params.iter().enumerate() {
-        if param.passing != Passing::In {
-            return Err(format!(
-                "native backend: only IN parameters are supported (`{}`)",
-                param.name
-            ));
-        }
         if index > 0 {
             out.push_str(", ");
         }
         let kind = mode_kind(&param.mode)?;
-        out.push_str(&format!(
-            "{} {}",
-            kind.c_type(),
-            c_ident(&format!("p_{}", param.name))
-        ));
+        if matches!(kind, Kind::Array { .. }) {
+            return Err("native backend: array parameters are not supported yet".to_owned());
+        }
+        let name = c_ident(&format!("p_{}", param.name));
+        match param.passing {
+            Passing::In => out.push_str(&format!("{} {name}", kind.c_type())),
+            Passing::Out | Passing::InOut | Passing::Loc => {
+                out.push_str(&format!("{} *{name}", kind.c_type()))
+            }
+        }
     }
     if proc_def.params.is_empty() {
         out.push_str("void");
@@ -285,13 +284,15 @@ fn emit_proc(
     }
     for param in &proc_def.params {
         let kind = mode_kind(&param.mode)?;
-        generator.vars.insert(
-            param.name.clone(),
-            VarInfo {
-                c_name: c_ident(&format!("p_{}", param.name)),
-                kind,
-            },
-        );
+        let c_name = match param.passing {
+            Passing::In => c_ident(&format!("p_{}", param.name)),
+            Passing::Out | Passing::InOut | Passing::Loc => {
+                format!("(*{})", c_ident(&format!("p_{}", param.name)))
+            }
+        };
+        generator
+            .vars
+            .insert(param.name.clone(), VarInfo { c_name, kind });
     }
     generator.emit_local_declarations(out, &proc_def.declarations)?;
     generator.emit_actions(out, &proc_def.actions)?;
@@ -933,6 +934,25 @@ impl Generator<'_> {
                 Ok(())
             }
             _ => {
+                if let Expr::Apply { name, args, span } = callee {
+                    if let Some(ApplyResolution::Procedure(signature)) =
+                        self.check.resolutions.get(span)
+                    {
+                        let mut lowered = Vec::with_capacity(args.len());
+                        for (arg, passing) in args.iter().zip(&signature.passing) {
+                            let code = match passing {
+                                Passing::In => self.emit_expr(arg)?.0,
+                                Passing::Out | Passing::InOut | Passing::Loc => {
+                                    self.emit_location_address(arg)?
+                                }
+                            };
+                            lowered.push(code);
+                        }
+                        let name = proc_name(self.module_index, name);
+                        self.line(out, &format!("{name}({});", lowered.join(", ")));
+                        return Ok(());
+                    }
+                }
                 let (code, _) = self.emit_expr(callee)?;
                 self.line(out, &format!("{code};"));
                 Ok(())
@@ -1103,34 +1123,52 @@ impl Generator<'_> {
         args: &[Expr],
         span: crate::lexer::Span,
     ) -> Result<(String, Kind), String> {
+        let Some(ApplyResolution::Procedure(signature)) = self.check.resolutions.get(&span) else {
+            return Err("native backend: procedure call has no resolved signature".to_owned());
+        };
+        if signature.passing.len() != args.len() {
+            return Err("native backend: procedure argument count mismatch".to_owned());
+        }
         let mut lowered = Vec::with_capacity(args.len());
-        for arg in args {
-            let (code, _) = self.emit_expr(arg)?;
+        for (arg, passing) in args.iter().zip(&signature.passing) {
+            let code = match passing {
+                Passing::In => self.emit_expr(arg)?.0,
+                Passing::Out | Passing::InOut | Passing::Loc => self.emit_location_address(arg)?,
+            };
             lowered.push(code);
         }
         let name = proc_name(self.module_index, name);
-        let result_kind = self.proc_result_kind(&name, span)?;
         let call = format!("{name}({})", lowered.join(", "));
-        match result_kind {
-            Some(kind) => Ok((call, kind)),
+        match signature.result {
+            Some(ty) => Ok((call, kind_from_type(ty)?)),
             None => Err(format!(
                 "native backend: procedure `{name}` does not return a value but is used in an expression"
             )),
         }
     }
 
-    fn proc_result_kind(
-        &self,
-        c_name: &str,
-        span: crate::lexer::Span,
-    ) -> Result<Option<Kind>, String> {
-        let Some(ApplyResolution::Procedure(signature)) = self.check.resolutions.get(&span) else {
-            return Err("native backend: procedure call has no resolved signature".to_owned());
-        };
-        let _ = c_name;
-        match signature.result {
-            Some(ty) => kind_from_type(ty).map(Some),
-            None => Ok(None),
+    fn emit_location_address(&mut self, location: &Expr) -> Result<String, String> {
+        match location {
+            Expr::Name { name, .. } => {
+                let Some(info) = self.vars.get(name).cloned() else {
+                    return Err(format!("native backend: unknown variable `{name}`"));
+                };
+                if matches!(info.kind, Kind::Array { .. }) {
+                    return Err(
+                        "native backend: whole-array OUT/INOUT arguments are not supported yet"
+                            .to_owned(),
+                    );
+                }
+                Ok(format!("&{}", info.c_name))
+            }
+            Expr::Apply { name, args, span } => {
+                let Some(info) = self.vars.get(name).cloned() else {
+                    return Err(format!("native backend: unknown array `{name}`"));
+                };
+                let (code, _) = self.array_index_expr(&info, args, *span)?;
+                Ok(format!("&{code}"))
+            }
+            _ => Err("native backend: OUT/INOUT arguments must be simple locations".to_owned()),
         }
     }
 }

@@ -68,7 +68,8 @@ all existing tests pass with no new special cases.
       Decision: interpreter-first educational compiler.
 - [x] Minimal C backend and `z200c compile`: basic variables, expressions,
       assignments, `ASSERT`, `IF`, `WRITE`/`WRITELINE`, procedures with `IN`
-      parameters, calls, `RETURN`, `RESULT`, integer conversions, one-dimensional
+      parameters (including `OUT`/`INOUT`/`LOC`), calls, `RETURN`, `RESULT`, integer
+      conversions, one-dimensional
       scalar arrays (including multidimensional), array initializers/literals,
       same-mode array copying and comparison, string comparisons and concatenation, loop actions,
       multi-selector `CASE`, and scoped `BEGIN` blocks.

@@ -36,7 +36,8 @@ reference implementation for the complete supported language.
 - `CASE` with one or more selectors, typed labels, ranges, `(ELSE)`, `(*)`, and
   unparenthesized `ELSE` alternatives,
 - `DO WHILE`, `DO FOR`, `DO FOR EVER`, and unlabelled `EXIT` inside loops,
-- procedures with `IN` parameters and optional integer/boolean/character/string results,
+- procedures with `IN`, `OUT`, `INOUT`, and `LOC` scalar parameters and optional
+  integer/boolean/character/string results,
 - procedure calls, `RETURN`, and `RESULT`,
 - integer conversions in the generated C representation,
 - scalar arrays of up to four dimensions with indexing, element assignment,
@@ -49,7 +50,6 @@ Generated code is C11 with `int64_t` integers, `int` booleans/characters, and
 
 ## Not supported yet
 
-- non-`IN` procedure parameters,
 - generics,
 - moreta modes and objects,
 - arrays of structures or other composite element modes,
