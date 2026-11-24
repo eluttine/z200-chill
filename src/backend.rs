@@ -48,15 +48,17 @@ enum ScalarKind {
     Bool,
     Char,
     String,
+    Struct(ModeId),
 }
 
 impl ScalarKind {
-    fn c_type(self) -> &'static str {
+    fn c_type(self) -> String {
         match self {
-            ScalarKind::Int => "int64_t",
-            ScalarKind::Bool => "int",
-            ScalarKind::Char => "int",
-            ScalarKind::String => "const char *",
+            ScalarKind::Int => "int64_t".to_owned(),
+            ScalarKind::Bool => "int".to_owned(),
+            ScalarKind::Char => "int".to_owned(),
+            ScalarKind::String => "const char *".to_owned(),
+            ScalarKind::Struct(id) => format!("z_struct_{}", id.0),
         }
     }
 
@@ -66,6 +68,7 @@ impl ScalarKind {
             ScalarKind::Bool => Kind::Bool,
             ScalarKind::Char => Kind::Char,
             ScalarKind::String => Kind::String,
+            ScalarKind::Struct(id) => Kind::Struct(id),
         }
     }
 }
@@ -91,6 +94,7 @@ impl Kind {
                 ScalarKind::Bool => "int *".to_owned(),
                 ScalarKind::Char => "int *".to_owned(),
                 ScalarKind::String => "const char **".to_owned(),
+                ScalarKind::Struct(id) => format!("z_struct_{} *", id.0),
             },
             Kind::Struct(id) => format!("z_struct_{}", id.0),
             Kind::Null => {
@@ -1238,6 +1242,12 @@ impl Generator<'_> {
                     .ok_or_else(|| format!("native backend: unknown variable `{name}`"))?;
                 Ok((info.c_name, info.kind))
             }
+            Expr::Apply { name, args, span } => {
+                let Some(info) = self.vars.get(name).cloned() else {
+                    return Err(format!("native backend: unknown array `{name}`"));
+                };
+                self.array_index_expr(&info, args, *span)
+            }
             Expr::Field { base, field, .. } => {
                 let (base_code, base_kind) = self.emit_field_location(base)?;
                 let Kind::Struct(id) = base_kind else {
@@ -1564,6 +1574,7 @@ fn scalar_kind(kind: Kind) -> Option<ScalarKind> {
         Kind::Bool => Some(ScalarKind::Bool),
         Kind::Char => Some(ScalarKind::Char),
         Kind::String => Some(ScalarKind::String),
+        Kind::Struct(id) => Some(ScalarKind::Struct(id)),
         _ => None,
     }
 }
@@ -1573,6 +1584,7 @@ fn scalar_ref_target(target: types::RefTarget) -> Result<ScalarKind, String> {
     match target {
         RefTarget::Int(_) => Ok(ScalarKind::Int),
         RefTarget::Bool => Ok(ScalarKind::Bool),
+        RefTarget::Struct(id) => Ok(ScalarKind::Struct(id)),
         RefTarget::Char | RefTarget::WChar => Ok(ScalarKind::Char),
         RefTarget::String
         | RefTarget::BoundedString { .. }
@@ -1600,6 +1612,7 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
                 Type::Int(_) | Type::IntLiteral => ScalarKind::Int,
                 Type::Bool => ScalarKind::Bool,
                 Type::Set(_) => ScalarKind::Int,
+                Type::Struct(id) => ScalarKind::Struct(id),
                 Type::Char => ScalarKind::Char,
                 Type::String
                 | Type::BoundedString { .. }
@@ -1633,6 +1646,7 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
                 Type::Int(_) | Type::IntLiteral => ScalarKind::Int,
                 Type::Bool => ScalarKind::Bool,
                 Type::Set(_) => ScalarKind::Int,
+                Type::Struct(id) => ScalarKind::Struct(id),
                 Type::Char => ScalarKind::Char,
                 Type::String
                 | Type::BoundedString { .. }

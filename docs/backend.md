@@ -48,9 +48,9 @@ reference implementation for the complete supported language.
   integer/boolean/character/string results,
 - procedure calls, `RETURN`, and `RESULT`,
 - integer conversions in the generated C representation,
-- scalar arrays of up to four dimensions with indexing, element assignment,
-  nested initializers, array-literal assignment, same-mode array copying, and
-  same-mode array equality/inequality,
+- scalar and structure arrays of up to four dimensions with indexing, element
+  assignment, nested initializers, array-literal assignment, same-mode array copying,
+  and same-mode array equality/inequality,
 - `WRITE` and `WRITELINE` with one value argument,
 - runtime checks for array bounds, division/modulo by zero, signed overflow in
   `+`/`-`/`*`/unary `-`, and `NULL` dereference.
@@ -67,7 +67,7 @@ Windows).
 
 - generics,
 - moreta modes and objects,
-- arrays of structures or other composite element modes,
+- arrays of more complex composite element modes,
 - structure initializers and structure literals,
 - powersets, references to fields or composite locations, text, and buffers,
 - exceptions and handlers,

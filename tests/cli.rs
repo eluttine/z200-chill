@@ -1340,6 +1340,52 @@ entry = "src/main.ch"
 }
 
 #[test]
+fn compiles_native_arrays_of_structures() {
+    let dir = TempDir::new("z200c-native-arrstruct");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativearrstruct"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  NEWMODE Point = STRUCT (x INT, y INT);
+  DCL points ARRAY(1:2) Point;
+  DCL other ARRAY(1:2) Point;
+  points(1).x := 1;
+  points(1).y := 2;
+  points(2).x := 3;
+  points(2).y := 4;
+  ASSERT points(2).x = 3;
+  other := points;
+  ASSERT other(1).y = 2;
+  WRITELINE("arrstruct ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativearrstruct");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "arrstruct ok\n");
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
@@ -1357,8 +1403,7 @@ entry = "src/main.ch"
         dir.join("src/main.ch"),
         r#"
 M: MODULE
-  NEWMODE P = STRUCT (x INT);
-  DCL values ARRAY(1:2) P;
+  DCL values ARRAY(1:2) POWERSET INT;
 END M;
 "#,
     )
