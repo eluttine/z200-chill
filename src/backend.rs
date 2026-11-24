@@ -2136,7 +2136,13 @@ impl Generator<'_> {
         for ((arg, passing), ty) in args.iter().zip(&signature.passing).zip(&signature.params) {
             let kind = kind_from_type(*ty)?;
             let code = if matches!(kind, Kind::Array { .. }) {
-                self.emit_array_argument(arg)?
+                if !matches!(passing, Passing::In) && matches!(arg, Expr::ArrayTuple { .. }) {
+                    return Err(
+                        "native backend: array literals cannot be passed to OUT, INOUT, or LOC parameters"
+                            .to_owned(),
+                    );
+                }
+                self.emit_array_argument(arg, kind)?
             } else {
                 match passing {
                     Passing::In => self.emit_expr(arg)?.0,
@@ -2150,29 +2156,51 @@ impl Generator<'_> {
         Ok(lowered)
     }
 
-    fn emit_array_argument(&mut self, argument: &Expr) -> Result<String, String> {
+    fn emit_array_argument(&mut self, argument: &Expr, expected: Kind) -> Result<String, String> {
         match argument {
             Expr::Name { name, .. } => {
                 let Some(info) = self.vars.get(name).cloned() else {
                     return Err(format!("native backend: unknown array `{name}`"));
                 };
-                if !matches!(info.kind, Kind::Array { .. }) {
-                    return Err(format!("native backend: `{name}` is not an array"));
+                if info.kind != expected {
+                    return Err("native backend: array argument mode mismatch".to_owned());
                 }
                 Ok(info.c_name)
             }
             Expr::Apply { .. } => {
                 let (code, kind) = self.emit_expr(argument)?;
-                if !matches!(kind, Kind::Array { .. }) {
-                    return Err(
-                        "native backend: array argument expression does not produce an array"
-                            .to_owned(),
-                    );
+                if kind != expected {
+                    return Err("native backend: array argument mode mismatch".to_owned());
                 }
                 Ok(code)
             }
+            Expr::ArrayTuple { elements, .. } => {
+                let Kind::Array {
+                    element,
+                    dims,
+                    rank,
+                    total,
+                    ..
+                } = expected
+                else {
+                    return Err("native backend: expected an array parameter mode".to_owned());
+                };
+                let mut values = Vec::new();
+                self.collect_array_literal(elements, &dims, rank, 0, &mut values)?;
+                if values.len() != total {
+                    return Err(format!(
+                        "native backend: array literal has {} element(s), expected {total}",
+                        values.len()
+                    ));
+                }
+                let element = element.c_type();
+                if values.is_empty() {
+                    return Ok(format!("({element}[]){{0}}"));
+                }
+                Ok(format!("({element}[]){{{}}}", values.join(", ")))
+            }
             _ => Err(
-                "native backend: array arguments currently require an array variable or array result"
+                "native backend: array arguments require an array variable, array result, or array literal"
                     .to_owned(),
             ),
         }

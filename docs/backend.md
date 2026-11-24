@@ -48,8 +48,9 @@ reference implementation for the complete supported language.
 - `DO WHILE`, `DO FOR`, `DO FOR EVER`, labelled actions/blocks, and labelled or
   unlabelled `EXIT`,
 - procedures with `IN`, `OUT`, `INOUT`, and `LOC` scalar and array parameters,
-  including multidimensional arrays and arrays of structures, plus scalar and array
-  results (including arrays of structures),
+  including multidimensional arrays, arrays of structures, and array literals passed
+  directly to `IN` parameters, plus scalar and array results (including arrays of
+  structures),
 - procedure calls, `RETURN`, and `RESULT`,
 - integer conversions in the generated C representation,
 - scalar and structure arrays of up to four dimensions with indexing, element

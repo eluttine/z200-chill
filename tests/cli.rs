@@ -1865,6 +1865,65 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_array_literal_arguments() {
+    let dir = TempDir::new("z200c-native-array-literal-args");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativearrlit"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  Sum: PROC (v ARRAY(1:2) INT) RETURNS (INT);
+    RETURN v(1) + v(2);
+  END Sum;
+
+  Sum2: PROC (v ARRAY(1:2, 1:2) INT) RETURNS (INT);
+    RETURN v(1,1) + v(1,2) + v(2,1) + v(2,2);
+  END Sum2;
+
+  StrSum: PROC (v ARRAY(1:2) CHARS) RETURNS (INT);
+    IF v(1) = "a" AND v(2) = "b" THEN
+      RETURN 1;
+    FI;
+    RETURN 0;
+  END StrSum;
+
+  ASSERT Sum([9, 10]) = 19;
+  ASSERT Sum2([[1,2],[3,4]]) = 10;
+  ASSERT StrSum(["a", "b"]) = 1;
+  WRITELINE("array literal args ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativearrlit");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "array literal args ok
+"
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
