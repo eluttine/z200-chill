@@ -1012,8 +1012,19 @@ impl Checker {
             ExportKind::Var(ty) => self.declare_var(local_name, *ty, span),
             ExportKind::Proc(signature) => self.declare_proc(local_name, signature.clone(), span),
             ExportKind::Mode(ty) => {
+                let elements = match ty {
+                    Type::Set(id) => self.modes.sets[id.0]
+                        .elements
+                        .iter()
+                        .map(|(name, value)| (name.clone(), *value))
+                        .collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                };
                 let scope = self.scopes.last_mut().expect("scope stack is never empty");
                 scope.modes.insert(local_name.to_owned(), *ty);
+                for (name, value) in elements {
+                    scope.set_values.entry(name).or_insert((*ty, value));
+                }
                 Ok(())
             }
         }

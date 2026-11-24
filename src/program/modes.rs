@@ -35,13 +35,26 @@ pub(super) fn build_modes(program: &Program) -> Result<ModeBuildResult, Error> {
                 .collect(),
         });
     }
-    let mut top_maps = Vec::with_capacity(program.modules.len());
+    let mut top_maps: Vec<HashMap<String, Type>> = vec![HashMap::new(); program.modules.len()];
     let mut span_maps = HashMap::new();
     let mut moreta_sources = HashMap::new();
+    // Modes already built by earlier modules. A seized mode can be used in local
+    // mode definitions such as NEWMODE Line = STRUCT (a Point, b Point).
+    let mut seen_modes: HashMap<String, Vec<Type>> = HashMap::new();
+    let order = mode_build_order(program)?;
 
-    for (index, module) in program.modules.iter().enumerate() {
+    for &index in &order {
+        let module = &program.modules[index];
         let mut local = HashMap::new();
         let mut resolution = HashMap::new();
+        let seized = seized_mode_names(&module.declarations);
+        for name in &seized {
+            if let Some(types) = seen_modes.get(*name) {
+                if let [ty] = types.as_slice() {
+                    resolution.insert((*name).to_owned(), *ty);
+                }
+            }
+        }
         let mut predeclared = HashMap::new();
         predeclare_struct_modes(
             &module.declarations,
@@ -65,11 +78,89 @@ pub(super) fn build_modes(program: &Program) -> Result<ModeBuildResult, Error> {
             &mut span_maps,
             &mut moreta_sources,
         )?;
-        top_maps.push(local);
+        for (name, ty) in &local {
+            seen_modes.entry(name.clone()).or_default().push(*ty);
+        }
+        top_maps[index] = local;
     }
     detect_structure_cycles(&table)?;
 
     Ok((table, top_maps, span_maps, moreta_sources))
+}
+
+fn seized_mode_names(declarations: &[Declaration]) -> HashSet<&str> {
+    declarations
+        .iter()
+        .filter_map(|declaration| match declaration {
+            Declaration::Visibility(visibility) if visibility.kind == VisibilityKind::Seize => {
+                Some(visibility)
+            }
+            _ => None,
+        })
+        .flat_map(|visibility| visibility.names.iter())
+        .map(|name| name.name.as_str())
+        .collect()
+}
+
+fn mode_build_order(program: &Program) -> Result<Vec<usize>, Error> {
+    let mut declarations: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (index, module) in program.modules.iter().enumerate() {
+        for declaration in &module.declarations {
+            if let Declaration::Mode(mode_def) = declaration {
+                declarations
+                    .entry(mode_def.name.as_str())
+                    .or_default()
+                    .push(index);
+            }
+        }
+    }
+    let mut dependencies: Vec<Vec<usize>> = vec![Vec::new(); program.modules.len()];
+    for (index, module) in program.modules.iter().enumerate() {
+        let mut seen = HashSet::new();
+        for name in seized_mode_names(&module.declarations) {
+            let Some(sources) = declarations.get(name) else {
+                continue;
+            };
+            if let [source] = sources.as_slice() {
+                if *source != index && seen.insert(*source) {
+                    dependencies[index].push(*source);
+                }
+            }
+        }
+    }
+
+    fn visit(
+        index: usize,
+        dependencies: &[Vec<usize>],
+        visiting: &mut HashSet<usize>,
+        done: &mut HashSet<usize>,
+        order: &mut Vec<usize>,
+    ) -> Result<(), Error> {
+        if done.contains(&index) {
+            return Ok(());
+        }
+        if !visiting.insert(index) {
+            return Err(Error::new(
+                Span::new(crate::lexer::SourceId(0), 0, 0),
+                "cyclic seized-mode dependency between modules",
+            ));
+        }
+        for dependency in &dependencies[index] {
+            visit(*dependency, dependencies, visiting, done, order)?;
+        }
+        visiting.remove(&index);
+        done.insert(index);
+        order.push(index);
+        Ok(())
+    }
+
+    let mut order = Vec::with_capacity(program.modules.len());
+    let mut visiting = HashSet::new();
+    let mut done = HashSet::new();
+    for index in 0..program.modules.len() {
+        visit(index, &dependencies, &mut visiting, &mut done, &mut order)?;
+    }
+    Ok(order)
 }
 
 #[allow(clippy::too_many_arguments)]

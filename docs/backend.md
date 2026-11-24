@@ -24,7 +24,9 @@ reference implementation for the complete supported language.
 ## Current native subset
 
 - one or more non-spec modules, including `SEIZE`/`GRANT` access to variables,
-  procedures, and named modes from other modules and source package dependencies,
+  procedures, named modes, and their set-element constants from other modules and
+  source package dependencies; seized modes work in arrays and nested structure
+  definitions, and module order does not matter,
 - `DCL` variables of integer, boolean, character, and character-string modes,
 - initializers,
 - assignments to simple variables,

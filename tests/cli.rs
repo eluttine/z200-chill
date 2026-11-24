@@ -2137,6 +2137,131 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_imported_modes_in_declarations() {
+    let dir = TempDir::new("z200c-native-imported-modes");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativeimportedmodes"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+Types: MODULE
+  NEWMODE Point = STRUCT (x INT, y INT);
+  NEWMODE Color = SET(red, green, blue);
+  GRANT Point, Color;
+END Types;
+
+Use: MODULE
+  SEIZE Point, Color;
+  DCL p Point;
+  DCL c Color;
+  DCL grid ARRAY(1:2) Point;
+  NEWMODE Line = STRUCT (a Point, b Point);
+  DCL l Line;
+
+  F: PROC (v Point) RETURNS (INT);
+    RETURN v.x + v.y;
+  END F;
+
+  p.x := 1;
+  p.y := 2;
+  c := red;
+  ASSERT c = red;
+  ASSERT c /= blue;
+  c := blue;
+
+  grid(1).x := 3;
+  grid(2).y := 4;
+  l.a := p;
+  l.b := grid(1);
+  ASSERT F(l.a) = 3;
+  ASSERT l.b.x = 3;
+  ASSERT grid(2).y = 4;
+  WRITELINE("imported modes ok");
+END Use;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativeimportedmodes");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "imported modes ok
+"
+    );
+}
+
+#[test]
+fn compiles_native_forward_seized_modes() {
+    let dir = TempDir::new("z200c-native-forward-modes");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativeforwardmodes"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+Use: MODULE
+  SEIZE Point;
+  DCL p Point;
+  NEWMODE Line = STRUCT (a Point, b Point);
+  DCL l Line;
+  p.x := 1;
+  l.a := p;
+  ASSERT l.a.x = 1;
+  WRITELINE("forward mode ok");
+END Use;
+
+Types: MODULE
+  NEWMODE Point = STRUCT (x INT, y INT);
+  GRANT Point;
+END Types;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativeforwardmodes");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "forward mode ok
+"
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
