@@ -1924,6 +1924,102 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_composite_references() {
+    let dir = TempDir::new("z200c-native-composite-refs");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativerefcomp"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  NEWMODE P = STRUCT (x INT, y INT);
+  DCL p P;
+  DCL a ARRAY(1:2) INT;
+  DCL grid ARRAY(1:2, 1:2) P;
+  DCL r REF INT;
+  DCL rp REF P;
+  DCL ra REF ARRAY(1:2) INT;
+  DCL rg REF ARRAY(1:2, 1:2) P;
+  DCL temp P;
+
+  Sum: PROC (v ARRAY(1:2) INT) RETURNS (INT);
+    RETURN v(1) + v(2);
+  END Sum;
+
+  Fill: PROC (v ARRAY(1:2) INT OUT);
+    v(1) := 10;
+    v(2) := 20;
+  END Fill;
+
+  rp := ->p;
+  rp->.x := 8;
+  rp->.y := 9;
+  ASSERT p.x = 8;
+  ASSERT p.y = 9;
+
+  r := ->p.x;
+  r-> := 7;
+  ASSERT p.x = 7;
+
+  a := [1, 2];
+  r := ->a(2);
+  r-> := 9;
+  ASSERT a(2) = 9;
+
+  rp := ->grid(2, 1);
+  rp->.x := 4;
+  rp->.y := 5;
+  ASSERT grid(2, 1).x = 4;
+  ASSERT grid(2, 1).y = 5;
+
+  ra := ->a;
+  ASSERT ra->(2) = 9;
+  ra->(1) := 7;
+  ASSERT a(1) = 7;
+  ASSERT Sum(ra->) = 16;
+  Fill(ra->);
+  ASSERT a(1) = 10;
+  ASSERT a(2) = 20;
+
+  rg := ->grid;
+  temp := rg->(2, 1);
+  ASSERT temp.x = 4;
+  temp.x := 6;
+  rg->(2, 1) := temp;
+  ASSERT grid(2, 1).x = 6;
+  WRITELINE("composite refs ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativerefcomp");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "composite refs ok
+"
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

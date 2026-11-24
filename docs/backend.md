@@ -38,8 +38,10 @@ reference implementation for the complete supported language.
   field assignment, whole-structure assignment, structure equality, and references to
   scalar fields,
 - `READLINE` input,
-- scalar `REF` modes, `NULL`, reference comparison, taking addresses of scalar
-  variables and scalar array elements, dereference reads, and dereference assignment,
+- `REF` modes including scalar variables, structure fields, whole structures, whole
+  arrays, multidimensional arrays, and array elements; `NULL`, reference comparison,
+  dereference reads and assignment, field access through structure references, indexed
+  dereferences, and passing dereferenced arrays to array parameters,
 - `ASSERT`,
 - `IF` / `ELSE IF` / `ELSE`,
 - `BEGIN` blocks with scoped local declarations and shadowing,
@@ -76,7 +78,7 @@ Windows).
 - moreta modes and objects,
 - arrays of more complex composite element modes,
 - structure initializers and structure literals,
-- references to fields or composite locations, text, and buffers,
+- references to array slices, text, and buffers,
 - exception propagation across separate packages,
 - processes, regions, tasks, signals, and timing,
 - string and powerset memory reclamation (generated concatenations and powerset

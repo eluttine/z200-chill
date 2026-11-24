@@ -26,6 +26,12 @@ enum Kind {
         total: usize,
     },
     Ref(ScalarKind),
+    RefArray {
+        element: ScalarKind,
+        dims: [Dim; 4],
+        rank: usize,
+        total: usize,
+    },
     Struct(ModeId),
     PowerSet(types::PowerSetMember),
     Null,
@@ -101,6 +107,7 @@ impl Kind {
                 ScalarKind::Struct(id) => format!("z_struct_{} *", id.0),
                 ScalarKind::PowerSet(_) => "ZPowerSet *".to_owned(),
             },
+            Kind::RefArray { element, .. } => format!("{} *", element.c_type()),
             Kind::Struct(id) => format!("z_struct_{}", id.0),
             Kind::PowerSet(_) => "ZPowerSet".to_owned(),
             Kind::Null => {
@@ -114,7 +121,7 @@ impl Kind {
             Kind::Int | Kind::Bool | Kind::Char => "0",
             Kind::String => "\"\"",
             Kind::Array { .. } => "{0}",
-            Kind::Ref(_) | Kind::Null => "NULL",
+            Kind::Ref(_) | Kind::RefArray { .. } | Kind::Null => "NULL",
             Kind::Struct(_) | Kind::PowerSet(_) => "{0}",
         }
     }
@@ -124,7 +131,9 @@ impl Kind {
             Kind::Array { element, total, .. } => {
                 format!("{} {}[{}]", element.c_type(), name, total)
             }
-            Kind::Ref(element) => format!("{} *{}", element.c_type(), name),
+            Kind::Ref(element) | Kind::RefArray { element, .. } => {
+                format!("{} *{}", element.c_type(), name)
+            }
             Kind::Struct(id) => format!("z_struct_{} {name}", id.0),
             Kind::Null => unreachable!("NULL is never used as a declared variable type"),
             other => format!("{} {}", other.c_type(), name),
@@ -954,6 +963,52 @@ impl Generator<'_> {
         ))
     }
 
+    fn deref_index_expr(
+        &mut self,
+        base: &Expr,
+        indices: &[Expr],
+        span: crate::lexer::Span,
+    ) -> Result<(String, Kind), String> {
+        let (array_code, kind) = self.emit_expr(base)?;
+        let Kind::Array {
+            element,
+            dims,
+            rank,
+            ..
+        } = kind
+        else {
+            return Err(
+                "native backend: indexed dereference requires an array reference".to_owned(),
+            );
+        };
+        if indices.len() != rank {
+            return Err(format!(
+                "native backend: array index requires {rank} index expression(s)"
+            ));
+        }
+        let mut terms = Vec::with_capacity(rank);
+        for (index, argument) in indices.iter().enumerate() {
+            let (code, _) = self.emit_expr(argument)?;
+            let checked = format!(
+                "z_check_index({code}, {}, {})",
+                dims[index].low, dims[index].high
+            );
+            let mut stride = 1i128;
+            for dim in dims.iter().take(rank).skip(index + 1) {
+                stride *= dim.length();
+            }
+            terms.push(format!(
+                "((({checked}) - ({})) * {stride})",
+                dims[index].low
+            ));
+        }
+        let _ = span;
+        Ok((
+            format!("({array_code})[{}]", terms.join(" + ")),
+            element.kind(),
+        ))
+    }
+
     fn emit_local_declarations(
         &mut self,
         out: &mut String,
@@ -1537,6 +1592,12 @@ impl Generator<'_> {
                 }
                 self.array_index_expr(&info, args, *span)?
             }
+            Expr::DerefIndex {
+                base,
+                indices,
+                span,
+                ..
+            } => self.deref_index_expr(base, indices, *span)?,
             Expr::Field { .. } => self.emit_field_location(target)?,
             Expr::Deref { base, .. } => {
                 let (code, kind) = self.emit_expr(base)?;
@@ -1656,6 +1717,7 @@ impl Generator<'_> {
                             }
                             Kind::Array { .. }
                             | Kind::Ref(_)
+                            | Kind::RefArray { .. }
                             | Kind::Struct(_)
                             | Kind::PowerSet(_)
                             | Kind::Null => return Err(
@@ -1707,7 +1769,7 @@ impl Generator<'_> {
                 Kind::PowerSet(_) => {
                     comparisons.push(format!("(z_ps_equal({left_field}, {right_field}))"))
                 }
-                Kind::Ref(_) | Kind::Null => {
+                Kind::Ref(_) | Kind::RefArray { .. } | Kind::Null => {
                     comparisons.push(format!("({left_field} == {right_field})"))
                 }
                 Kind::Int | Kind::Bool | Kind::Char => {
@@ -1737,6 +1799,15 @@ impl Generator<'_> {
                     return Err(format!("native backend: unknown array `{name}`"));
                 };
                 self.array_index_expr(&info, args, *span)
+            }
+            Expr::Deref { .. } => {
+                let (code, kind) = self.emit_expr(expr)?;
+                if !matches!(kind, Kind::Struct(_)) {
+                    return Err(
+                        "native backend: field access requires a structure value".to_owned()
+                    );
+                }
+                Ok((code, kind))
             }
             Expr::Field { base, field, .. } => {
                 let (base_code, base_kind) = self.emit_field_location(base)?;
@@ -1800,6 +1871,12 @@ impl Generator<'_> {
             Expr::Char { value, .. } => Ok(((*value as u32).to_string(), Kind::Char)),
             Expr::String { value, .. } => Ok((format!("\"{}\"", c_escape(value)), Kind::String)),
             Expr::Null { .. } => Ok(("NULL".to_owned(), Kind::Null)),
+            Expr::DerefIndex {
+                base,
+                indices,
+                span,
+                ..
+            } => self.deref_index_expr(base, indices, *span),
             Expr::ArrayTuple { elements, span } => {
                 let Some(Type::PowerSet(set)) = self.check.types.get(span) else {
                     return Err(
@@ -1815,6 +1892,23 @@ impl Generator<'_> {
                     let Some(info) = self.vars.get(name).cloned() else {
                         return Err(format!("native backend: unknown variable `{name}`"));
                     };
+                    if let Kind::Array {
+                        element,
+                        dims,
+                        rank,
+                        total,
+                    } = info.kind
+                    {
+                        return Ok((
+                            info.c_name,
+                            Kind::RefArray {
+                                element,
+                                dims,
+                                rank,
+                                total,
+                            },
+                        ));
+                    }
                     let element = scalar_kind(info.kind).ok_or_else(|| {
                         "native backend: only scalar references are supported yet".to_owned()
                     })?;
@@ -1846,13 +1940,27 @@ impl Generator<'_> {
             },
             Expr::Deref { base, .. } => {
                 let (code, kind) = self.emit_expr(base)?;
-                let Kind::Ref(element) = kind else {
-                    return Err("native backend: dereference requires a reference".to_owned());
-                };
-                Ok((
-                    format!("Z_DEREF({}, {code})", element.c_type()),
-                    element.kind(),
-                ))
+                match kind {
+                    Kind::Ref(element) => Ok((
+                        format!("Z_DEREF({}, {code})", element.c_type()),
+                        element.kind(),
+                    )),
+                    Kind::RefArray {
+                        element,
+                        dims,
+                        rank,
+                        total,
+                    } => Ok((
+                        format!("({code})"),
+                        Kind::Array {
+                            element,
+                            dims,
+                            rank,
+                            total,
+                        },
+                    )),
+                    _ => Err("native backend: dereference requires a reference".to_owned()),
+                }
             }
             Expr::Name { name, span } => {
                 if let Some(ApplyResolution::SetElement { value, .. }) =
@@ -2167,7 +2275,7 @@ impl Generator<'_> {
                 }
                 Ok(info.c_name)
             }
-            Expr::Apply { .. } => {
+            Expr::Apply { .. } | Expr::Deref { .. } => {
                 let (code, kind) = self.emit_expr(argument)?;
                 if kind != expected {
                     return Err("native backend: array argument mode mismatch".to_owned());
@@ -2266,6 +2374,23 @@ fn array_size_expression(kind: Kind) -> Result<String, String> {
     Ok(format!("((size_t){total} * sizeof({}))", element.c_type()))
 }
 
+fn array_scalar_kind(ty: Type) -> Result<ScalarKind, String> {
+    match ty {
+        Type::Int(_) | Type::IntLiteral | Type::Set(_) => Ok(ScalarKind::Int),
+        Type::Bool => Ok(ScalarKind::Bool),
+        Type::Char | Type::WChar => Ok(ScalarKind::Char),
+        Type::String | Type::BoundedString { .. } | Type::WString | Type::WBoundedString { .. } => {
+            Ok(ScalarKind::String)
+        }
+        Type::Struct(id) => Ok(ScalarKind::Struct(id)),
+        Type::PowerSet(set) => Ok(ScalarKind::PowerSet(set.member)),
+        other => Err(format!(
+            "native backend: array element mode `{}` is not supported yet",
+            other.describe()
+        )),
+    }
+}
+
 fn scalar_kind(kind: Kind) -> Option<ScalarKind> {
     match kind {
         Kind::Int => Some(ScalarKind::Int),
@@ -2339,10 +2464,42 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
                 total: (array.high - array.low + 1).max(0) as usize,
             })
         }
-        Type::Ref(target) => {
-            let element = scalar_ref_target(target)?;
-            Ok(Kind::Ref(element))
-        }
+        Type::Ref(target) => match target {
+            types::RefTarget::Array(array) => {
+                let element = array_scalar_kind(array.element.ty())?;
+                let mut dims = [Dim { low: 0, high: 0 }; 4];
+                dims[0] = Dim {
+                    low: array.low,
+                    high: array.high,
+                };
+                Ok(Kind::RefArray {
+                    element,
+                    dims,
+                    rank: 1,
+                    total: (array.high - array.low + 1).max(0) as usize,
+                })
+            }
+            types::RefTarget::MultiArray(array) => {
+                let element = array_scalar_kind(array.element.ty())?;
+                let mut dims = [Dim { low: 0, high: 0 }; 4];
+                for (index, dimension) in array.dimensions().iter().enumerate() {
+                    dims[index] = Dim {
+                        low: dimension.low,
+                        high: dimension.high,
+                    };
+                }
+                Ok(Kind::RefArray {
+                    element,
+                    dims,
+                    rank: array.rank(),
+                    total: array.total_len().max(0) as usize,
+                })
+            }
+            _ => {
+                let element = scalar_ref_target(target)?;
+                Ok(Kind::Ref(element))
+            }
+        },
         Type::MultiArray(array) => {
             let element = match array.element.ty() {
                 Type::Int(_) | Type::IntLiteral => ScalarKind::Int,
