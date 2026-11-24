@@ -87,6 +87,7 @@ pub enum ApplyResolution {
 pub enum ImportedKind {
     Var(Box<Type>),
     Proc,
+    Mode(Box<Type>),
 }
 
 #[derive(Debug, Clone)]
@@ -995,7 +996,7 @@ impl Checker {
         let imported = match &export.kind {
             ExportKind::Var(ty) => Some(ImportedKind::Var(Box::new(*ty))),
             ExportKind::Proc(_) => Some(ImportedKind::Proc),
-            ExportKind::Mode(_) => None,
+            ExportKind::Mode(ty) => Some(ImportedKind::Mode(Box::new(*ty))),
         };
         if let Some(kind) = imported {
             self.imports.insert(

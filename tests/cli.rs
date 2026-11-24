@@ -2081,6 +2081,62 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_seized_modes() {
+    let dir = TempDir::new("z200c-native-seized-modes");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativemodes"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+Types: MODULE
+  NEWMODE Point = STRUCT (x INT, y INT);
+  GRANT Point;
+END Types;
+
+Use: MODULE
+  SEIZE Point;
+  DCL p Point;
+
+  F: PROC (v Point) RETURNS (INT);
+    RETURN v.x + v.y;
+  END F;
+
+  p.x := 1;
+  p.y := 2;
+  ASSERT F(p) = 3;
+  WRITELINE("seized modes ok");
+END Use;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativemodes");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "seized modes ok
+"
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

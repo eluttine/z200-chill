@@ -23,8 +23,8 @@ reference implementation for the complete supported language.
 
 ## Current native subset
 
-- one or more non-spec modules, including `SEIZE`/`GRANT` access to variables and
-  procedures from other modules and source package dependencies,
+- one or more non-spec modules, including `SEIZE`/`GRANT` access to variables,
+  procedures, and named modes from other modules and source package dependencies,
 - `DCL` variables of integer, boolean, character, and character-string modes,
 - initializers,
 - assignments to simple variables,
