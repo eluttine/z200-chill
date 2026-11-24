@@ -66,8 +66,11 @@ all existing tests pass with no new special cases.
 
 - [x] Choose interpreter-first educational compiler vs native/C backend.
       Decision: interpreter-first educational compiler.
-- [-] Native/C backend: deferred; no declaration lowering, symbol mangling, or ABI work
-      for now.
+- [x] Minimal C backend and `z200c compile`: basic variables, expressions,
+      assignments, `ASSERT`, `IF`, and `WRITE`/`WRITELINE`.
+- [ ] Extend native codegen to procedures, calls, arrays, text, references, exceptions,
+      and a dedicated CHILL runtime ABI.
+- [-] Full native concurrency and moreta object lowering remain deferred.
 - [x] Direction: prioritize language coverage/conformance; start with strings, then
       arrays, exceptions/handlers, and I/O.
 

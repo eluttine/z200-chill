@@ -37,6 +37,10 @@ where
             let target = args.next().unwrap_or_else(|| ".".to_owned());
             run_package(Path::new(&target))
         }
+        Some("compile") => {
+            let target = args.next().unwrap_or_else(|| ".".to_owned());
+            compile_package(Path::new(&target))
+        }
         Some("grant") | Some("build") => {
             let target = args.next().unwrap_or_else(|| ".".to_owned());
             grant_package(Path::new(&target))
@@ -71,6 +75,61 @@ fn run_package(target: &Path) -> i32 {
             1
         }
     }
+}
+
+fn compile_package(target: &Path) -> i32 {
+    match compile_impl(target) {
+        Ok(path) => {
+            println!("wrote {}", path.display());
+            0
+        }
+        Err(message) => {
+            eprintln!("{message}");
+            1
+        }
+    }
+}
+
+fn compile_impl(target: &Path) -> Result<PathBuf, String> {
+    let package = load_package(target, false)?;
+    let check = sema::analyze_with_externals(
+        &package.program,
+        crate::manifest::WidthProfile::default(),
+        &package.external,
+    );
+    if !check.diagnostics.is_empty() {
+        return Err(diagnostics::render(&package.source_map, &check.diagnostics));
+    }
+    let c_source =
+        crate::backend::generate(&package.program, &check, &package.manifest.package.name)?;
+    let out_dir = package.package_dir.join("target").join("z200c");
+    std::fs::create_dir_all(&out_dir).map_err(|error| {
+        format!(
+            "error[E0600]: cannot create output directory {}: {error}",
+            out_dir.display()
+        )
+    })?;
+    let c_path = out_dir.join(format!("{}.c", package.manifest.package.name));
+    std::fs::write(&c_path, c_source)
+        .map_err(|error| format!("error[E0600]: cannot write {}: {error}", c_path.display()))?;
+    let binary = out_dir.join(&package.manifest.package.name);
+    let output = std::process::Command::new("cc")
+        .arg("-std=c11")
+        .arg("-O2")
+        .arg("-Wall")
+        .arg("-Wextra")
+        .arg("-o")
+        .arg(&binary)
+        .arg(&c_path)
+        .output()
+        .map_err(|error| format!("error[E0600]: cannot run C compiler: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "error[E0601]: C compilation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(binary)
 }
 
 fn grant_package(target: &Path) -> i32 {
@@ -886,6 +945,7 @@ fn print_help() {
 Usage:
   z200c check [path]    Parse and mode-check a package
   z200c run [path]      Execute a package
+  z200c compile [path]  Compile a supported subset to a native executable
   z200c grant [path]    Parse, check, and write the package grant file
   z200c build [path]    Alias for `grant`
   z200c --version
