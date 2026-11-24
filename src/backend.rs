@@ -24,6 +24,7 @@ enum Kind {
         rank: usize,
         total: usize,
     },
+    Ref(ScalarKind),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +83,12 @@ impl Kind {
             Kind::Array { .. } => {
                 unreachable!("array kinds are emitted through c_declaration")
             }
+            Kind::Ref(element) => match element {
+                ScalarKind::Int => "int64_t *",
+                ScalarKind::Bool => "int *",
+                ScalarKind::Char => "int *",
+                ScalarKind::String => "const char **",
+            },
         }
     }
 
@@ -90,6 +97,7 @@ impl Kind {
             Kind::Int | Kind::Bool | Kind::Char => "0",
             Kind::String => "\"\"",
             Kind::Array { .. } => "{0}",
+            Kind::Ref(_) => "NULL",
         }
     }
 
@@ -98,6 +106,7 @@ impl Kind {
             Kind::Array { element, total, .. } => {
                 format!("{} {}[{}]", element.c_type(), name, total)
             }
+            Kind::Ref(element) => format!("{} *{}", element.c_type(), name),
             other => format!("{} {}", other.c_type(), name),
         }
     }
@@ -831,6 +840,13 @@ impl Generator<'_> {
                 }
                 self.array_index_expr(&info, args, *span)?.0
             }
+            Expr::Deref { base, .. } => {
+                let (code, kind) = self.emit_expr(base)?;
+                if !matches!(kind, Kind::Ref(_)) {
+                    return Err("native backend: dereference target is not a reference".to_owned());
+                }
+                format!("(*{code})")
+            }
             _ => {
                 return Err(
                     "native backend: this assignment target is not supported in native code yet"
@@ -922,8 +938,8 @@ impl Generator<'_> {
                                     format!("printf(\"%lld\", (long long)({code}));")
                                 }
                             }
-                            Kind::Array { .. } => return Err(
-                                "native backend: arrays cannot be passed to WRITE/WRITELINE yet"
+                            Kind::Array { .. } | Kind::Ref(_) => return Err(
+                                "native backend: arrays and references cannot be passed to WRITE/WRITELINE yet"
                                     .to_owned(),
                             ),
                         };
@@ -968,6 +984,28 @@ impl Generator<'_> {
             }
             Expr::Char { value, .. } => Ok(((*value as u32).to_string(), Kind::Char)),
             Expr::String { value, .. } => Ok((format!("\"{}\"", c_escape(value)), Kind::String)),
+            Expr::AddressOf { target, .. } => {
+                let Expr::Name { name, .. } = target.as_ref() else {
+                    return Err(
+                        "native backend: references to fields or array elements are not supported yet"
+                            .to_owned(),
+                    );
+                };
+                let Some(info) = self.vars.get(name).cloned() else {
+                    return Err(format!("native backend: unknown variable `{name}`"));
+                };
+                let element = scalar_kind(info.kind).ok_or_else(|| {
+                    "native backend: only scalar references are supported yet".to_owned()
+                })?;
+                Ok((format!("&{}", info.c_name), Kind::Ref(element)))
+            }
+            Expr::Deref { base, .. } => {
+                let (code, kind) = self.emit_expr(base)?;
+                let Kind::Ref(element) = kind else {
+                    return Err("native backend: dereference requires a reference".to_owned());
+                };
+                Ok((format!("(*{code})"), element.kind()))
+            }
             Expr::Name { name, .. } => {
                 let info = self
                     .vars
@@ -1173,6 +1211,33 @@ impl Generator<'_> {
     }
 }
 
+fn scalar_kind(kind: Kind) -> Option<ScalarKind> {
+    match kind {
+        Kind::Int => Some(ScalarKind::Int),
+        Kind::Bool => Some(ScalarKind::Bool),
+        Kind::Char => Some(ScalarKind::Char),
+        Kind::String => Some(ScalarKind::String),
+        _ => None,
+    }
+}
+
+fn scalar_ref_target(target: types::RefTarget) -> Result<ScalarKind, String> {
+    use types::RefTarget;
+    match target {
+        RefTarget::Int(_) => Ok(ScalarKind::Int),
+        RefTarget::Bool => Ok(ScalarKind::Bool),
+        RefTarget::Char | RefTarget::WChar => Ok(ScalarKind::Char),
+        RefTarget::String
+        | RefTarget::BoundedString { .. }
+        | RefTarget::WString
+        | RefTarget::WBoundedString { .. } => Ok(ScalarKind::String),
+        other => Err(format!(
+            "native backend: reference target `{}` is not supported yet",
+            other.describe()
+        )),
+    }
+}
+
 fn kind_from_type(ty: Type) -> Result<Kind, String> {
     match ty {
         Type::Int(_) | Type::IntLiteral => Ok(Kind::Int),
@@ -1208,6 +1273,10 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
                 rank: 1,
                 total: (array.high - array.low + 1).max(0) as usize,
             })
+        }
+        Type::Ref(target) => {
+            let element = scalar_ref_target(target)?;
+            Ok(Kind::Ref(element))
         }
         Type::MultiArray(array) => {
             let element = match array.element.ty() {

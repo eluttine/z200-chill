@@ -30,6 +30,8 @@ reference implementation for the complete supported language.
 - integer/boolean arithmetic, comparisons, and logical operators,
 - character-string equality, inequality, ordering comparisons, concatenation, and
   `//:=` concatenation assignment,
+- scalar `REF` modes, taking addresses of scalar variables, dereference reads, and
+  dereference assignment,
 - `ASSERT`,
 - `IF` / `ELSE IF` / `ELSE`,
 - `BEGIN` blocks with scoped local declarations and shadowing,
@@ -53,7 +55,7 @@ Generated code is C11 with `int64_t` integers, `int` booleans/characters, and
 - generics,
 - moreta modes and objects,
 - arrays of structures or other composite element modes,
-- sets, powersets, references, text, and buffers,
+- sets, powersets, references to fields/array elements, text, and buffers,
 - exceptions and handlers,
 - processes, regions, tasks, signals, and timing,
 - runtime range/overflow checks,

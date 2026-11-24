@@ -71,7 +71,8 @@ all existing tests pass with no new special cases.
       parameters (including `OUT`/`INOUT`/`LOC`), calls, `RETURN`, `RESULT`, integer
       conversions, one-dimensional
       scalar arrays (including multidimensional), array initializers/literals,
-      same-mode array copying and comparison, string comparisons and concatenation, loop actions,
+      same-mode array copying and comparison, string comparisons and concatenation,
+      scalar references, loop actions,
       multi-selector `CASE`, and scoped `BEGIN` blocks.
 - [ ] Extend native codegen to procedures, calls, arrays, text, references, exceptions,
       and a dedicated CHILL runtime ABI.
