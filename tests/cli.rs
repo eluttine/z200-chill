@@ -400,6 +400,53 @@ END M;
 }
 
 #[test]
+fn compiles_native_loop_program() {
+    let dir = TempDir::new("z200c-native-loop");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativeloop"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL a ARRAY(1:3) INT;
+  DCL sum INT INIT := 0;
+  DO FOR i := 1 TO 3;
+    a(i) := i * 2;
+    sum := sum + a(i);
+  OD;
+  ASSERT sum = 12;
+  DO WHILE sum > 10;
+    sum := sum - 1;
+  OD;
+  ASSERT sum = 10;
+  WRITELINE("loop ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativeloop");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "loop ok\n");
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

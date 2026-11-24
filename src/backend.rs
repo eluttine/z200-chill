@@ -96,6 +96,8 @@ struct Generator<'a> {
     vars: HashMap<String, VarInfo>,
     indent: usize,
     result: Option<(String, Kind)>,
+    temp_counter: usize,
+    loop_depth: usize,
 }
 
 pub fn generate(program: &Program, check: &CheckResult, package: &str) -> Result<String, String> {
@@ -157,6 +159,8 @@ pub fn generate(program: &Program, check: &CheckResult, package: &str) -> Result
             vars: module_vars(module, index),
             indent: 1,
             result: None,
+            temp_counter: 0,
+            loop_depth: 0,
         };
         generator.emit_initializers(&mut out, &module.declarations)?;
         generator.emit_actions(&mut out, &module.actions)?;
@@ -257,6 +261,8 @@ fn emit_proc(
                 mode_kind(mode).map(|kind| (format!("__result_{}", c_ident(&proc_def.name)), kind))
             })
             .transpose()?,
+        temp_counter: 0,
+        loop_depth: 0,
     };
     if let Some((name, kind)) = &generator.result {
         generator.line(
@@ -430,6 +436,23 @@ impl Generator<'_> {
                         self.line(out, "}");
                     }
                 }
+                Action::Do { control, body, .. } => {
+                    self.emit_do(out, control, body)?;
+                }
+                Action::Exit { label: None, .. } => {
+                    if self.loop_depth == 0 {
+                        return Err(
+                            "native backend: EXIT outside a loop is not supported yet".to_owned()
+                        );
+                    }
+                    self.line(out, "break;");
+                }
+                Action::Exit { label: Some(_), .. } => {
+                    return Err(
+                        "native backend: labelled EXIT is not supported in native code yet"
+                            .to_owned(),
+                    )
+                }
                 Action::Empty { .. } => {}
                 _ => {
                     return Err(
@@ -437,6 +460,90 @@ impl Generator<'_> {
                             .to_owned(),
                     )
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_do(
+        &mut self,
+        out: &mut String,
+        control: &crate::ast::DoControl,
+        body: &[Action],
+    ) -> Result<(), String> {
+        use crate::ast::DoControl;
+        match control {
+            DoControl::While(condition) => {
+                let (condition, _) = self.emit_expr(condition)?;
+                self.line(out, &format!("while ({condition}) {{"));
+                self.indent += 1;
+                self.loop_depth += 1;
+                self.emit_actions(out, body)?;
+                self.loop_depth -= 1;
+                self.indent -= 1;
+                self.line(out, "}");
+            }
+            DoControl::ForEver | DoControl::None => {
+                self.line(out, "for (;;) {");
+                self.indent += 1;
+                self.loop_depth += 1;
+                self.emit_actions(out, body)?;
+                self.loop_depth -= 1;
+                self.indent -= 1;
+                self.line(out, "}");
+            }
+            DoControl::For {
+                counter,
+                start,
+                end,
+                step,
+                down,
+            } => {
+                let (start_code, _) = self.emit_expr(start)?;
+                let (end_code, _) = self.emit_expr(end)?;
+                let step_code = match step {
+                    Some(step) => self.emit_expr(step)?.0,
+                    None => "1".to_owned(),
+                };
+                let unique = self.temp_counter;
+                self.temp_counter += 1;
+                let counter_c = c_ident(&format!("loop_{counter}_{unique}"));
+                let end_c = format!("__loop_end_{unique}");
+                let step_c = format!("__loop_step_{unique}");
+                let comparison = if *down { ">=" } else { "<=" };
+                let increment = if *down { "-=" } else { "+=" };
+
+                self.line(out, "{");
+                self.indent += 1;
+                self.line(out, &format!("int64_t {counter_c} = {start_code};"));
+                self.line(out, &format!("const int64_t {end_c} = {end_code};"));
+                self.line(out, &format!("const int64_t {step_c} = {step_code};"));
+                let previous = self.vars.insert(
+                    counter.clone(),
+                    VarInfo {
+                        c_name: counter_c.clone(),
+                        kind: Kind::Int,
+                    },
+                );
+                self.line(
+                    out,
+                    &format!(
+                        "for (; {counter_c} {comparison} {end_c}; {counter_c} {increment} {step_c}) {{"
+                    ),
+                );
+                self.indent += 1;
+                self.loop_depth += 1;
+                self.emit_actions(out, body)?;
+                self.loop_depth -= 1;
+                self.indent -= 1;
+                self.line(out, "}");
+                if let Some(previous) = previous {
+                    self.vars.insert(counter.clone(), previous);
+                } else {
+                    self.vars.remove(counter);
+                }
+                self.indent -= 1;
+                self.line(out, "}");
             }
         }
         Ok(())
