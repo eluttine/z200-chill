@@ -1260,6 +1260,86 @@ END M;
 }
 
 #[test]
+fn native_runtime_checks_fail_cleanly() {
+    let cases = [
+        (
+            "bounds",
+            r#"
+M: MODULE
+  DCL a ARRAY(1:2) INT;
+  a(3) := 1;
+END M;
+"#,
+            "RANGEFAIL: array index out of bounds",
+        ),
+        (
+            "divzero",
+            r#"
+M: MODULE
+  DCL x INT INIT := 1;
+  DCL y INT INIT := 0;
+  x := x / y;
+END M;
+"#,
+            "OVERFLOW: division by zero",
+        ),
+        (
+            "overflow",
+            r#"
+M: MODULE
+  DCL x LONG_INT INIT := 9223372036854775807;
+  x := x + 1;
+END M;
+"#,
+            "OVERFLOW: integer overflow",
+        ),
+        (
+            "nullderef",
+            r#"
+M: MODULE
+  DCL p REF INT;
+  ASSERT p-> = 1;
+END M;
+"#,
+            "EMPTY: NULL dereference",
+        ),
+    ];
+    for (name, source, expected) in cases {
+        let dir = TempDir::new(&format!("z200c-native-{name}"));
+        let package = format!("native{name}");
+        std::fs::write(
+            dir.join("Chill.toml"),
+            format!(
+                r#"
+[package]
+name = "{package}"
+
+[build]
+entry = "src/main.ch"
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/main.ch"), source).unwrap();
+        let output = z200c().arg("compile").arg(&dir).output().unwrap();
+        assert!(
+            output.status.success(),
+            "compile {name}: stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let binary = dir.join(format!("target/z200c/{package}"));
+        let run = std::process::Command::new(binary).output().unwrap();
+        assert!(
+            !run.status.success(),
+            "native run `{name}` unexpectedly succeeded"
+        );
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(stderr.contains(expected), "stderr: {stderr}");
+    }
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

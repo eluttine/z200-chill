@@ -51,7 +51,9 @@ reference implementation for the complete supported language.
 - scalar arrays of up to four dimensions with indexing, element assignment,
   nested initializers, array-literal assignment, same-mode array copying, and
   same-mode array equality/inequality,
-- `WRITE` and `WRITELINE` with one value argument.
+- `WRITE` and `WRITELINE` with one value argument,
+- runtime checks for array bounds, division/modulo by zero, signed overflow in
+  `+`/`-`/`*`/unary `-`, and `NULL` dereference.
 
 Generated code is C11 with `int64_t` integers, `int` booleans/characters, and
 `const char *` strings. Structure equality is generated field by field rather than with
@@ -70,11 +72,13 @@ Windows).
 - powersets, references to fields or composite locations, text, and buffers,
 - exceptions and handlers,
 - processes, regions, tasks, signals, and timing,
-- runtime range/overflow checks,
 - string memory reclamation (generated concatenations allocate and are not freed),
 - MSVC-specific compiler flags and discovery,
 - package dependencies and grant linking,
 - integer width enforcement beyond the C integer representation.
+
+Runtime failures print a CHILL-style code and message to stderr and abort. They are not
+yet catchable CHILL exceptions.
 
 Unsupported constructs return an `E0601` diagnostic and do not produce a binary.
 
