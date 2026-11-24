@@ -39,7 +39,8 @@ reference implementation for the complete supported language.
 - `BEGIN` blocks with scoped local declarations and shadowing,
 - `CASE` with one or more selectors, typed labels, ranges, `(ELSE)`, `(*)`, and
   unparenthesized `ELSE` alternatives,
-- `DO WHILE`, `DO FOR`, `DO FOR EVER`, and unlabelled `EXIT` inside loops,
+- `DO WHILE`, `DO FOR`, `DO FOR EVER`, labelled actions/blocks, and labelled or
+  unlabelled `EXIT`,
 - procedures with `IN`, `OUT`, `INOUT`, and `LOC` scalar parameters and optional
   integer/boolean/character/string results,
 - procedure calls, `RETURN`, and `RESULT`,

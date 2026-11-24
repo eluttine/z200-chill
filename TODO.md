@@ -73,7 +73,7 @@ all existing tests pass with no new special cases.
       scalar arrays (including multidimensional), array initializers/literals,
       same-mode array copying and comparison, string comparisons and concatenation,
       named set modes, scalar references (including array elements) and `NULL`,
-      `READLINE`, loop actions,
+      `READLINE`, loop and labelled-control actions,
       multi-selector `CASE`, and scoped `BEGIN` blocks.
 - [ ] Extend native codegen to procedures, calls, arrays, text, references, exceptions,
       and a dedicated CHILL runtime ABI.

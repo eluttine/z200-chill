@@ -126,6 +126,7 @@ struct Generator<'a> {
     result: Option<(String, Kind)>,
     temp_counter: usize,
     loop_depth: usize,
+    labels: Vec<(String, String)>,
 }
 
 pub fn generate(
@@ -195,6 +196,7 @@ pub fn generate(
             result: None,
             temp_counter: 0,
             loop_depth: 0,
+            labels: Vec::new(),
         };
         generator.emit_initializers(&mut out, &module.declarations)?;
         generator.emit_actions(&mut out, &module.actions)?;
@@ -312,6 +314,7 @@ fn emit_proc(
             .transpose()?,
         temp_counter: 0,
         loop_depth: 0,
+        labels: Vec::new(),
     };
     if let Some((name, kind)) = &generator.result {
         generator.line(
@@ -607,11 +610,30 @@ impl Generator<'_> {
                     }
                     self.line(out, "break;");
                 }
-                Action::Exit { label: Some(_), .. } => {
-                    return Err(
-                        "native backend: labelled EXIT is not supported in native code yet"
-                            .to_owned(),
-                    )
+                Action::Exit {
+                    label: Some(label), ..
+                } => {
+                    let Some((_, target)) =
+                        self.labels.iter().rev().find(|(name, _)| name == label)
+                    else {
+                        return Err(format!(
+                            "native backend: unknown labelled EXIT target `{label}`"
+                        ));
+                    };
+                    self.line(out, &format!("goto {target};"));
+                }
+                Action::Labelled { label, action, .. } => {
+                    let unique = self.temp_counter;
+                    self.temp_counter += 1;
+                    let c_label = format!("__label_{unique}_{}", c_ident(label));
+                    self.labels.push((label.clone(), c_label.clone()));
+                    self.line(out, "{");
+                    self.indent += 1;
+                    self.emit_actions(out, std::slice::from_ref(action.as_ref()))?;
+                    self.indent -= 1;
+                    self.line(out, "}");
+                    self.line(out, &format!("{c_label}: ;"));
+                    self.labels.pop();
                 }
                 Action::Begin {
                     declarations,
