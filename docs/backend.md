@@ -104,10 +104,17 @@ Windows).
   clauses,
 - exception propagation across separate packages,
 - processes, regions, tasks, signals, and timing,
-- string and powerset memory reclamation (generated concatenations and powerset
-  operations allocate and are not freed),
 - MSVC-specific compiler flags and discovery,
 - grant-file-only dependencies without available source,
+
+Strings, powersets, and text records use reference-counted heap payloads. Copying a
+value retains its payload, assignment releases the previous payload, and arrays,
+structures, procedure parameters, procedure results, and scopes recursively copy or
+drop owned elements. Module globals are released after all module bodies run. Setting
+`Z200C_RC_STATS=1` prints the number of live payloads at process exit.
+
+Early `EXIT`/`goto` paths and non-local exception unwinding intentionally leak values
+rather than risk double frees.
 
 Exceptions use a generated `setjmp`/`longjmp` handler chain. Unhandled exceptions and
 runtime failures print a CHILL-style code and message to stderr and exit with status 1;
@@ -132,6 +139,7 @@ shared with the interpreter.
 ## Runtime ABI
 
 The first slice uses only the C standard library. There is no separate CHILL runtime
-archive yet. Exception handling is currently generated inline with `setjmp`/`longjmp`.
-Runtime support will be added when native text, references, and concurrency are
-implemented.
+archive yet. Exception handling is generated inline with `setjmp`/`longjmp`, and
+reference-counted payload ownership is generated inline with a small allocation
+registry. A future runtime archive will expose these facilities as a stable ABI for
+the LLVM backend.

@@ -166,6 +166,9 @@ struct Generator<'a> {
     temp_counter: usize,
     loop_depth: usize,
     labels: Vec<(String, String)>,
+    prelude: Vec<String>,
+    temporaries: Vec<(String, Kind)>,
+    scopes: Vec<Vec<(String, Kind)>>,
 }
 
 pub fn generate(
@@ -205,11 +208,90 @@ pub fn generate(
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct ZRcEntry {
+    void *pointer;
+    size_t references;
+    struct ZRcEntry *next;
+} ZRcEntry;
+
+static ZRcEntry *z_rc_entries = NULL;
+static size_t z_rc_live = 0;
+
+static void z_rc_register(void *pointer) {
+    if (pointer == NULL) { return; }
+    ZRcEntry *entry = (ZRcEntry *)malloc(sizeof(ZRcEntry));
+    if (entry == NULL) { abort(); }
+    entry->pointer = pointer;
+    entry->references = 1;
+    entry->next = z_rc_entries;
+    z_rc_entries = entry;
+    z_rc_live++;
+}
+
+static void *z_rc_alloc(size_t size) {
+    void *pointer = malloc(size);
+    if (pointer == NULL) { abort(); }
+    z_rc_register(pointer);
+    return pointer;
+}
+
+static void *z_rc_realloc(void *pointer, size_t size) {
+    void *resized = realloc(pointer, size);
+    if (resized == NULL) { abort(); }
+    if (resized != pointer) {
+        for (ZRcEntry *entry = z_rc_entries; entry != NULL; entry = entry->next) {
+            if (entry->pointer == pointer) {
+                entry->pointer = resized;
+                break;
+            }
+        }
+    }
+    return resized;
+}
+
+static void z_rc_retain(void *pointer) {
+    if (pointer == NULL) { return; }
+    for (ZRcEntry *entry = z_rc_entries; entry != NULL; entry = entry->next) {
+        if (entry->pointer == pointer) {
+            entry->references++;
+            return;
+        }
+    }
+}
+
+static void z_rc_release(void *pointer) {
+    if (pointer == NULL) { return; }
+    ZRcEntry **link = &z_rc_entries;
+    while (*link != NULL) {
+        ZRcEntry *entry = *link;
+        if (entry->pointer == pointer) {
+            if (--entry->references == 0) {
+                *link = entry->next;
+                free(entry);
+                free(pointer);
+                z_rc_live--;
+            }
+            return;
+        }
+        link = &entry->next;
+    }
+}
+
+static void z_string_assign(const char **target, const char *value) {
+    if (*target == value) { return; }
+    z_rc_retain((void *)value);
+    z_rc_release((void *)*target);
+    *target = value;
+}
+
+static void z_string_drop(const char *value) {
+    z_rc_release((void *)value);
+}
+
 static const char *z_concat(const char *a, const char *b) {
     size_t la = strlen(a);
     size_t lb = strlen(b);
-    char *out = (char *)malloc(la + lb + 1);
-    if (out == NULL) { abort(); }
+    char *out = (char *)z_rc_alloc(la + lb + 1);
     memcpy(out, a, la);
     memcpy(out + la, b, lb);
     out[la + lb] = '\0';
@@ -219,14 +301,12 @@ static const char *z_concat(const char *a, const char *b) {
 static const char *z_readline(void) {
     size_t cap = 256;
     size_t len = 0;
-    char *buffer = (char *)malloc(cap);
-    if (buffer == NULL) { abort(); }
+    char *buffer = (char *)z_rc_alloc(cap);
     int ch;
     while ((ch = getchar()) != EOF && ch != '\n') {
         if (len + 1 >= cap) {
             cap *= 2;
-            buffer = (char *)realloc(buffer, cap);
-            if (buffer == NULL) { abort(); }
+            buffer = (char *)z_rc_realloc(buffer, cap);
         }
         buffer[len++] = (char)ch;
     }
@@ -329,6 +409,19 @@ static ZPowerSet z_ps_empty(void) {
     return set;
 }
 
+static void z_ps_assign(ZPowerSet *target, ZPowerSet value) {
+    if (target->items == value.items) { return; }
+    z_rc_retain(value.items);
+    z_rc_release(target->items);
+    *target = value;
+}
+
+static void z_ps_drop(ZPowerSet *value) {
+    z_rc_release(value->items);
+    value->items = NULL;
+    value->len = 0;
+}
+
 static int z_ps_int_compare(const void *left, const void *right) {
     int64_t a = *(const int64_t *)left;
     int64_t b = *(const int64_t *)right;
@@ -339,8 +432,7 @@ static ZPowerSet z_ps_literal(size_t count, const ZPSRange *ranges) {
     if (count == 0) { return z_ps_empty(); }
     size_t cap = 16;
     size_t len = 0;
-    int64_t *items = (int64_t *)malloc(cap * sizeof(int64_t));
-    if (items == NULL) { z_fail("STORAGE", "out of memory"); }
+    int64_t *items = (int64_t *)z_rc_alloc(cap * sizeof(int64_t));
     for (size_t index = 0; index < count; index++) {
         int64_t low = ranges[index].low;
         int64_t high = ranges[index].high;
@@ -348,9 +440,7 @@ static ZPowerSet z_ps_literal(size_t count, const ZPSRange *ranges) {
         for (int64_t value = low;; value++) {
             if (len == cap) {
                 cap *= 2;
-                int64_t *grown = (int64_t *)realloc(items, cap * sizeof(int64_t));
-                if (grown == NULL) { z_fail("STORAGE", "out of memory"); }
-                items = grown;
+                items = (int64_t *)z_rc_realloc(items, cap * sizeof(int64_t));
             }
             items[len++] = value;
             if (value == high) { break; }
@@ -432,8 +522,7 @@ static int z_ps_gt(ZPowerSet left, ZPowerSet right) {
 static ZPowerSet z_ps_union(ZPowerSet left, ZPowerSet right) {
     size_t cap = left.len + right.len;
     if (cap == 0) { return z_ps_empty(); }
-    int64_t *items = (int64_t *)malloc(cap * sizeof(int64_t));
-    if (items == NULL) { z_fail("STORAGE", "out of memory"); }
+    int64_t *items = (int64_t *)z_rc_alloc(cap * sizeof(int64_t));
     size_t i = 0;
     size_t j = 0;
     size_t len = 0;
@@ -454,8 +543,7 @@ static ZPowerSet z_ps_union(ZPowerSet left, ZPowerSet right) {
 static ZPowerSet z_ps_intersection(ZPowerSet left, ZPowerSet right) {
     size_t cap = left.len < right.len ? left.len : right.len;
     if (cap == 0) { return z_ps_empty(); }
-    int64_t *items = (int64_t *)malloc(cap * sizeof(int64_t));
-    if (items == NULL) { z_fail("STORAGE", "out of memory"); }
+    int64_t *items = (int64_t *)z_rc_alloc(cap * sizeof(int64_t));
     size_t i = 0;
     size_t j = 0;
     size_t len = 0;
@@ -475,8 +563,7 @@ static ZPowerSet z_ps_intersection(ZPowerSet left, ZPowerSet right) {
 
 static ZPowerSet z_ps_difference(ZPowerSet left, ZPowerSet right) {
     if (left.len == 0) { return z_ps_empty(); }
-    int64_t *items = (int64_t *)malloc(left.len * sizeof(int64_t));
-    if (items == NULL) { z_fail("STORAGE", "out of memory"); }
+    int64_t *items = (int64_t *)z_rc_alloc(left.len * sizeof(int64_t));
     size_t i = 0;
     size_t j = 0;
     size_t len = 0;
@@ -603,11 +690,28 @@ static void z_text_assign(ZText *text, const char *value, size_t limit) {
     if (len > limit) {
         z_fail("TEXTFAIL", "text record exceeds the text length");
     }
-    char *copy = (char *)malloc(len + 1);
-    if (copy == NULL) { z_fail("STORAGE", "out of memory"); }
+    char *copy = (char *)z_rc_alloc(len + 1);
     memcpy(copy, value, len + 1);
+    z_rc_release(text->record);
     text->record = copy;
     text->len = len;
+}
+
+static void z_text_assign_value(ZText *target, ZText value) {
+    if (target->record == value.record) {
+        target->index = value.index;
+        return;
+    }
+    z_rc_retain(value.record);
+    z_rc_release(target->record);
+    *target = value;
+}
+
+static void z_text_drop(ZText *value) {
+    z_rc_release(value->record);
+    value->record = NULL;
+    value->len = 0;
+    value->index = 0;
 }
 
 static void z_text_write(ZText *text, const char *value, size_t limit) {
@@ -624,14 +728,14 @@ static void z_text_write(ZText *text, const char *value, size_t limit) {
     if (len > limit) {
         z_fail("TEXTFAIL", "text record exceeds the text length");
     }
-    char *copy = (char *)malloc(len + 1);
-    if (copy == NULL) { z_fail("STORAGE", "out of memory"); }
+    char *copy = (char *)z_rc_alloc(len + 1);
     memset(copy, ' ', len);
     if (text->record != NULL && text->len > 0) {
         memcpy(copy, text->record, text->len);
     }
     memcpy(copy + at, value, add);
     copy[len] = '\0';
+    z_rc_release(text->record);
     text->record = copy;
     text->len = len;
     text->index = (int64_t)end;
@@ -680,12 +784,14 @@ static void z_text_write_padded(
             memset(stars, '*', target);
             stars[target] = '\0';
             z_text_write(text, stars, limit);
+            free(stars);
         } else if (left) {
             char *copy = (char *)malloc(target + 1);
             if (copy == NULL) { z_fail("STORAGE", "out of memory"); }
             memcpy(copy, value, target);
             copy[target] = '\0';
             z_text_write(text, copy, limit);
+            free(copy);
         } else {
             z_text_write(text, value + (len - target), limit);
         }
@@ -701,6 +807,7 @@ static void z_text_write_padded(
     }
     out[target] = '\0';
     z_text_write(text, out, limit);
+    free(out);
 }
 
 static void z_text_write_int_format(
@@ -934,6 +1041,9 @@ static int z_text_equal_string(const ZText *left, const char *right) {
             temp_counter: 0,
             loop_depth: 0,
             labels: Vec::new(),
+            prelude: Vec::new(),
+            temporaries: Vec::new(),
+            scopes: vec![Vec::new()],
         };
         generator.line(&mut out, "ZHandler *__z_entry_handlers = z_handlers;");
         generator.emit_initializers(&mut out, &module.declarations)?;
@@ -949,7 +1059,42 @@ static int z_text_equal_string(const ZText *left, const char *right) {
     for &(index, _) in &modules {
         out.push_str(&format!("    run_module_{index}();\n"));
     }
+    {
+        let mut cleanup = Generator {
+            check,
+            profile,
+            module_index: 0,
+            modes,
+            module_modes,
+            vars: HashMap::new(),
+            indent: 1,
+            result: None,
+            result_wrapper: None,
+            temp_counter: 0,
+            loop_depth: 0,
+            labels: Vec::new(),
+            prelude: Vec::new(),
+            temporaries: Vec::new(),
+            scopes: vec![Vec::new()],
+        };
+        for &(index, module) in &modules {
+            for declaration in &module.declarations {
+                let Declaration::Var(vars) = declaration else {
+                    continue;
+                };
+                for var in vars {
+                    let kind = mode_kind(&var.mode, module_modes, index)?;
+                    if cleanup.kind_owns(kind) {
+                        cleanup.drop_kind(&mut out, &global_name(index, &var.name), kind)?;
+                    }
+                }
+            }
+        }
+    }
     out.push_str(&format!("    (void)\"{}\";\n", c_escape(package)));
+    out.push_str("    if (getenv(\"Z200C_RC_STATS\") != NULL) {\n");
+    out.push_str("        printf(\"live-payloads: %zu\\n\", z_rc_live);\n");
+    out.push_str("    }\n");
     out.push_str("    return 0;\n}\n");
     Ok(out)
 }
@@ -1166,6 +1311,9 @@ fn emit_proc(
         temp_counter: 0,
         loop_depth: 0,
         labels: Vec::new(),
+        prelude: Vec::new(),
+        temporaries: Vec::new(),
+        scopes: vec![Vec::new()],
     };
     generator.line(out, "ZHandler *__z_entry_handlers = z_handlers;");
     if let Some((name, kind)) = &generator.result {
@@ -1184,12 +1332,13 @@ fn emit_proc(
     for param in &proc_def.params {
         let kind = mode_kind(&param.mode, module_modes, module)?;
         let p_name = c_ident(&format!("p_{}", param.name));
-        if let Kind::Array { element, total, .. } = kind {
+        if let Kind::Array { .. } = kind {
             let c_name = match param.passing {
                 Passing::In => {
                     let local = c_ident(&format!("l_{}", param.name));
-                    generator.line(out, &format!("{} {local}[{total}];", element.c_type()));
-                    generator.line(out, &format!("memcpy({local}, {p_name}, sizeof({local}));"));
+                    generator.line(out, &format!("{} = {{0}};", kind.c_declaration(&local)));
+                    generator.copy_kind(out, &local, &p_name, kind)?;
+                    generator.record_owned_local(&local, kind);
                     local
                 }
                 Passing::Out | Passing::InOut | Passing::Loc => p_name,
@@ -1197,6 +1346,23 @@ fn emit_proc(
             generator
                 .vars
                 .insert(param.name.clone(), VarInfo { c_name, kind });
+            continue;
+        }
+        if param.passing == Passing::In && generator.kind_owns(kind) {
+            let local = c_ident(&format!("l_{}", param.name));
+            generator.line(
+                out,
+                &format!("{} = {};", kind.c_declaration(&local), kind.default_value()),
+            );
+            generator.copy_kind(out, &local, &p_name, kind)?;
+            generator.record_owned_local(&local, kind);
+            generator.vars.insert(
+                param.name.clone(),
+                VarInfo {
+                    c_name: local,
+                    kind,
+                },
+            );
             continue;
         }
         let c_name = match param.passing {
@@ -1213,6 +1379,8 @@ fn emit_proc(
     } else {
         generator.emit_actions(out, &proc_def.actions)?;
     }
+    generator.drop_temporaries(out)?;
+    generator.drop_live_scopes(out)?;
     if let Some(wrapper) = generator.result_wrapper.clone() {
         let Some((name, _)) = generator.result.clone() else {
             return Err("native backend: internal array result without storage".to_owned());
@@ -1230,11 +1398,192 @@ fn emit_proc(
 
 impl Generator<'_> {
     fn line(&mut self, out: &mut String, text: &str) {
+        self.flush_prelude(out);
         for _ in 0..self.indent {
             out.push_str("    ");
         }
         out.push_str(text);
         out.push('\n');
+    }
+
+    fn flush_prelude(&mut self, out: &mut String) {
+        if self.prelude.is_empty() {
+            return;
+        }
+        let lines = std::mem::take(&mut self.prelude);
+        for text in lines {
+            for _ in 0..self.indent {
+                out.push_str("    ");
+            }
+            out.push_str(&text);
+            out.push('\n');
+        }
+    }
+
+    fn kind_owns(&self, kind: Kind) -> bool {
+        match kind {
+            Kind::String | Kind::PowerSet(_) | Kind::Text { .. } => true,
+            Kind::Array { element, .. } => self.kind_owns(element.kind()),
+            Kind::Struct(id) => self
+                .modes
+                .get(id)
+                .fields
+                .iter()
+                .any(|field| kind_from_type(field.ty).is_ok_and(|kind| self.kind_owns(kind))),
+            _ => false,
+        }
+    }
+
+    fn drop_kind(&mut self, out: &mut String, value: &str, kind: Kind) -> Result<(), String> {
+        match kind {
+            Kind::String => self.line(out, &format!("z_string_drop({value});")),
+            Kind::PowerSet(_) => self.line(out, &format!("z_ps_drop(&{value});")),
+            Kind::Text { .. } => self.line(out, &format!("z_text_drop(&{value});")),
+            Kind::Struct(id) => {
+                let fields = self
+                    .modes
+                    .get(id)
+                    .fields
+                    .iter()
+                    .map(|field| (field.name.clone(), field.ty))
+                    .collect::<Vec<_>>();
+                for (name, ty) in fields {
+                    let field_kind = kind_from_type(ty)?;
+                    if self.kind_owns(field_kind) {
+                        self.drop_kind(out, &format!("{value}.{}", c_ident(&name)), field_kind)?;
+                    }
+                }
+            }
+            Kind::Array { element, total, .. } => {
+                if !self.kind_owns(element.kind()) {
+                    return Ok(());
+                }
+                let unique = self.temp_counter;
+                self.temp_counter += 1;
+                let index = format!("__drop_i_{unique}");
+                self.line(out, "{");
+                self.indent += 1;
+                self.line(
+                    out,
+                    &format!("for (size_t {index} = 0; {index} < {total}; {index}++) {{"),
+                );
+                self.indent += 1;
+                self.drop_kind(out, &format!("{value}[{index}]"), element.kind())?;
+                self.indent -= 1;
+                self.line(out, "}");
+                self.indent -= 1;
+                self.line(out, "}");
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn copy_kind(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        source: &str,
+        kind: Kind,
+    ) -> Result<(), String> {
+        if target == source {
+            return Ok(());
+        }
+        match kind {
+            Kind::String => self.line(out, &format!("z_string_assign(&{target}, {source});")),
+            Kind::PowerSet(_) => self.line(out, &format!("z_ps_assign(&{target}, {source});")),
+            Kind::Text { .. } => {
+                self.line(out, &format!("z_text_assign_value(&{target}, {source});"))
+            }
+            Kind::Struct(id) => {
+                let fields = self
+                    .modes
+                    .get(id)
+                    .fields
+                    .iter()
+                    .map(|field| (field.name.clone(), field.ty))
+                    .collect::<Vec<_>>();
+                for (name, ty) in fields {
+                    let field_kind = kind_from_type(ty)?;
+                    self.copy_kind(
+                        out,
+                        &format!("{target}.{}", c_ident(&name)),
+                        &format!("{source}.{}", c_ident(&name)),
+                        field_kind,
+                    )?;
+                }
+            }
+            Kind::Array { element, total, .. } => {
+                let unique = self.temp_counter;
+                self.temp_counter += 1;
+                let index = format!("__copy_i_{unique}");
+                self.line(out, "{");
+                self.indent += 1;
+                self.line(
+                    out,
+                    &format!("for (size_t {index} = 0; {index} < {total}; {index}++) {{"),
+                );
+                self.indent += 1;
+                self.copy_kind(
+                    out,
+                    &format!("{target}[{index}]"),
+                    &format!("{source}[{index}]"),
+                    element.kind(),
+                )?;
+                self.indent -= 1;
+                self.line(out, "}");
+                self.indent -= 1;
+                self.line(out, "}");
+            }
+            _ => self.line(out, &format!("{target} = {source};")),
+        }
+        Ok(())
+    }
+
+    fn temporary(&mut self, expression: &str, kind: Kind) -> Result<String, String> {
+        let unique = self.temp_counter;
+        self.temp_counter += 1;
+        let name = format!("__own_{unique}");
+        self.prelude
+            .push(format!("{} = {expression};", kind.c_declaration(&name)));
+        self.temporaries.push((name.clone(), kind));
+        Ok(name)
+    }
+
+    fn register_temporary(&mut self, name: String, kind: Kind) {
+        self.temporaries.push((name, kind));
+    }
+
+    fn drop_temporaries(&mut self, out: &mut String) -> Result<(), String> {
+        self.flush_prelude(out);
+        let temporaries = std::mem::take(&mut self.temporaries);
+        for (name, kind) in temporaries.into_iter().rev() {
+            self.drop_kind(out, &name, kind)?;
+        }
+        Ok(())
+    }
+
+    fn record_owned_local(&mut self, name: &str, kind: Kind) {
+        if self.kind_owns(kind) {
+            if let Some(scope) = self.scopes.last_mut() {
+                scope.push((name.to_owned(), kind));
+            }
+        }
+    }
+
+    fn drop_scope(&mut self, out: &mut String) -> Result<(), String> {
+        let scope = self.scopes.pop().unwrap_or_default();
+        for (name, kind) in scope.into_iter().rev() {
+            self.drop_kind(out, &name, kind)?;
+        }
+        Ok(())
+    }
+
+    fn drop_live_scopes(&mut self, out: &mut String) -> Result<(), String> {
+        while !self.scopes.is_empty() {
+            self.drop_scope(out)?;
+        }
+        Ok(())
     }
 
     fn emit_initializers(
@@ -1256,19 +1605,21 @@ impl Generator<'_> {
                     })?;
                 if matches!(info.kind, Kind::Array { .. }) {
                     self.emit_array_literal(out, &info, &init.value, var.span)?;
+                    self.drop_temporaries(out)?;
                     continue;
                 }
                 let (code, value_kind) = self.emit_expr(&init.value)?;
                 if let Kind::Int(kind) = info.kind {
                     let code = self.checked_int(&code, kind)?;
                     self.line(out, &format!("{} = {code};", info.c_name));
-                    continue;
-                }
-                if let Kind::Text { length } = info.kind {
+                } else if let Kind::Text { length } = info.kind {
                     self.emit_text_store(out, &info.c_name, length, &code, value_kind)?;
-                    continue;
+                } else if self.kind_owns(info.kind) {
+                    self.copy_kind(out, &info.c_name, &code, info.kind)?;
+                } else {
+                    self.line(out, &format!("{} = {};", info.c_name, code));
                 }
-                self.line(out, &format!("{} = {};", info.c_name, code));
+                self.drop_temporaries(out)?;
             }
         }
         Ok(())
@@ -1310,7 +1661,12 @@ impl Generator<'_> {
             values
         };
         for (index, code) in values.into_iter().enumerate() {
-            self.line(out, &format!("{}[{}] = {code};", info.c_name, index));
+            self.copy_kind(
+                out,
+                &format!("{}[{}]", info.c_name, index),
+                &code,
+                element.kind(),
+            )?;
         }
         let _ = span;
         Ok(())
@@ -1459,7 +1815,9 @@ impl Generator<'_> {
                             };
                             if let Some(init) = &var.init {
                                 self.emit_array_literal(out, &info, &init.value, var.span)?;
+                                self.drop_temporaries(out)?;
                             }
+                            self.record_owned_local(&c_name, info.kind);
                             self.vars.insert(var.name.clone(), info);
                             continue;
                         }
@@ -1468,7 +1826,33 @@ impl Generator<'_> {
                             if let Some(init) = &var.init {
                                 let (code, value_kind) = self.emit_expr(&init.value)?;
                                 self.emit_text_store(out, &c_name, length, &code, value_kind)?;
+                                self.drop_temporaries(out)?;
                             }
+                            self.record_owned_local(&c_name, kind);
+                            self.vars.insert(var.name.clone(), VarInfo { c_name, kind });
+                            continue;
+                        }
+                        if self.kind_owns(kind) {
+                            self.line(
+                                out,
+                                &format!(
+                                    "{} = {};",
+                                    kind.c_declaration(&c_name),
+                                    kind.default_value()
+                                ),
+                            );
+                            if let Some(init) = &var.init {
+                                let (code, value_kind) = self.emit_expr(&init.value)?;
+                                if value_kind != kind {
+                                    return Err(format!(
+                                        "native backend: initializer for `{}` has incompatible kind",
+                                        var.name
+                                    ));
+                                }
+                                self.copy_kind(out, &c_name, &code, kind)?;
+                                self.drop_temporaries(out)?;
+                            }
+                            self.record_owned_local(&c_name, kind);
                             self.vars.insert(var.name.clone(), VarInfo { c_name, kind });
                             continue;
                         }
@@ -1519,6 +1903,7 @@ impl Generator<'_> {
 
     fn emit_actions(&mut self, out: &mut String, actions: &[Action]) -> Result<(), String> {
         for action in actions {
+            let is_return = matches!(action, Action::Return { .. });
             match action {
                 Action::Assign {
                     target,
@@ -1548,28 +1933,32 @@ impl Generator<'_> {
                             };
                             self.emit_array_value_into(out, &target, value)?;
                         }
+                        self.drop_temporaries(out)?;
+                        self.drop_live_scopes(out)?;
                         self.emit_array_result_return(out, &name, &wrapper)?;
-                    } else {
-                        match value {
-                            Some(value) => {
-                                let (code, _) = self.emit_expr(value)?;
-                                let code = if let Some((_, Kind::Int(kind))) = &self.result {
-                                    self.checked_int(&code, *kind)?
-                                } else {
-                                    code
-                                };
-                                self.line(out, "z_handlers = __z_entry_handlers;");
-                                self.line(out, &format!("return {code};"));
-                            }
-                            None => {
-                                self.line(out, "z_handlers = __z_entry_handlers;");
-                                if let Some((name, _)) = &self.result {
-                                    self.line(out, &format!("return {name};"));
-                                } else {
-                                    self.line(out, "return;");
-                                }
+                    } else if let Some((name, kind)) = self.result.clone() {
+                        if let Some(value) = value {
+                            let (code, value_kind) = self.emit_expr(value)?;
+                            if let Kind::Int(int_kind) = kind {
+                                let code = self.checked_int(&code, int_kind)?;
+                                self.line(out, &format!("{name} = {code};"));
+                            } else if let Kind::Text { length } = kind {
+                                self.emit_text_store(out, &name, length, &code, value_kind)?;
+                            } else if self.kind_owns(kind) {
+                                self.copy_kind(out, &name, &code, kind)?;
+                            } else {
+                                self.line(out, &format!("{name} = {code};"));
                             }
                         }
+                        self.drop_temporaries(out)?;
+                        self.drop_live_scopes(out)?;
+                        self.line(out, "z_handlers = __z_entry_handlers;");
+                        self.line(out, &format!("return {name};"));
+                    } else {
+                        self.drop_temporaries(out)?;
+                        self.drop_live_scopes(out)?;
+                        self.line(out, "z_handlers = __z_entry_handlers;");
+                        self.line(out, "return;");
                     }
                 }
                 Action::Result { value, .. } => {
@@ -1580,13 +1969,17 @@ impl Generator<'_> {
                         let target = VarInfo { c_name: name, kind };
                         self.emit_array_value_into(out, &target, value)?;
                     } else {
-                        let (code, _) = self.emit_expr(value)?;
-                        let code = if let Kind::Int(int_kind) = kind {
-                            self.checked_int(&code, int_kind)?
+                        let (code, value_kind) = self.emit_expr(value)?;
+                        if let Kind::Int(int_kind) = kind {
+                            let code = self.checked_int(&code, int_kind)?;
+                            self.line(out, &format!("{name} = {code};"));
+                        } else if let Kind::Text { length } = kind {
+                            self.emit_text_store(out, &name, length, &code, value_kind)?;
+                        } else if self.kind_owns(kind) {
+                            self.copy_kind(out, &name, &code, kind)?;
                         } else {
-                            code
-                        };
-                        self.line(out, &format!("{name} = {code};"));
+                            self.line(out, &format!("{name} = {code};"));
+                        }
                     }
                 }
                 Action::If {
@@ -1663,8 +2056,11 @@ impl Generator<'_> {
                     let previous = self.vars.clone();
                     self.line(out, "{");
                     self.indent += 1;
+                    self.scopes.push(Vec::new());
                     self.emit_local_declarations(out, declarations)?;
                     self.emit_actions(out, actions)?;
+                    self.drop_temporaries(out)?;
+                    self.drop_scope(out)?;
                     self.indent -= 1;
                     self.line(out, "}");
                     self.vars = previous;
@@ -1682,6 +2078,9 @@ impl Generator<'_> {
                             .to_owned(),
                     )
                 }
+            }
+            if !is_return {
+                self.drop_temporaries(out)?;
             }
         }
         Ok(())
@@ -1950,7 +2349,7 @@ impl Generator<'_> {
                 self.line(out, &format!("z_text_assign(&{target}, {code}, {length});"));
             }
             Kind::Text { .. } => {
-                self.line(out, &format!("{target} = {code};"));
+                self.line(out, &format!("z_text_assign_value(&{target}, {code});"));
             }
             _ => {
                 return Err(
@@ -2001,11 +2400,7 @@ impl Generator<'_> {
                 if element != value_element || total != value_total {
                     return Err("native backend: array assignment mode mismatch".to_owned());
                 }
-                let size = array_size_expression(target.kind)?;
-                self.line(
-                    out,
-                    &format!("memcpy({}, {}, {size});", target.c_name, code),
-                );
+                self.copy_kind(out, &target.c_name, &code, target.kind)?;
             }
             Kind::DynamicArray {
                 element: value_element,
@@ -2024,14 +2419,30 @@ impl Generator<'_> {
                         "if ({slice}.len != {total}) {{ z_fail(\"RANGEFAIL\", \"array slice length mismatch\"); }}"
                     ),
                 );
+                let unique = self.temp_counter;
+                self.temp_counter += 1;
+                let index = format!("__slice_copy_i_{unique}");
+                let element_kind = element.kind();
+                self.line(out, "{");
+                self.indent += 1;
                 self.line(
                     out,
-                    &format!(
-                        "memcpy({}, {slice}.data, (size_t){total} * sizeof({}));",
-                        target.c_name,
-                        element.c_type()
-                    ),
+                    &format!("for (size_t {index} = 0; {index} < {total}; {index}++) {{"),
                 );
+                self.indent += 1;
+                self.copy_kind(
+                    out,
+                    &format!("{}[{index}]", target.c_name),
+                    &format!(
+                        "(({element} *){slice}.data)[{index}]",
+                        element = element.c_type()
+                    ),
+                    element_kind,
+                )?;
+                self.indent -= 1;
+                self.line(out, "}");
+                self.indent -= 1;
+                self.line(out, "}");
             }
             _ => return Err("native backend: array assignment requires an array value".to_owned()),
         }
@@ -2215,12 +2626,16 @@ impl Generator<'_> {
         let copy = format!("__multi_value_{unique}");
         self.line(
             out,
-            &format!("{} {copy}[{}];", element.c_type(), total.max(0)),
+            &format!("{} {copy}[{}] = {{0}};", element.c_type(), total.max(0)),
         );
-        self.line(
-            out,
-            &format!("memcpy({copy}, {value_code}, sizeof({copy}));"),
-        );
+        for index in 0..total {
+            self.copy_kind(
+                out,
+                &format!("{copy}[{index}]"),
+                &format!("({value_code})[{index}]"),
+                element.kind(),
+            )?;
+        }
         for flat in 0..total {
             let mut offset = 0i128;
             for index in 0..rank {
@@ -2232,8 +2647,14 @@ impl Generator<'_> {
                 let source_index = result_dims[index].low + local;
                 offset += (source_index - dims[index].low) * source_strides[index];
             }
-            self.line(out, &format!("{}[{offset}] = {copy}[{flat}];", info.c_name));
+            self.copy_kind(
+                out,
+                &format!("{}[{offset}]", info.c_name),
+                &format!("{copy}[{flat}]"),
+                element.kind(),
+            )?;
         }
+        self.drop_kind(out, &copy, expected)?;
         Ok(())
     }
 
@@ -2360,7 +2781,11 @@ impl Generator<'_> {
                         element.c_type()
                     ),
                 );
-                (format!("{slice}.data"), format!("{slice}.len"), false)
+                (
+                    format!("(({element} *){slice}.data)", element = element.c_type()),
+                    format!("{slice}.len"),
+                    false,
+                )
             }
             _ => return Err("native backend: slice target has no array mode".to_owned()),
         };
@@ -2387,13 +2812,27 @@ impl Generator<'_> {
                 ),
             );
         }
+        let unique = self.temp_counter;
+        self.temp_counter += 1;
+        let index = format!("__slice_assign_i_{unique}");
+        let element_kind = element.kind();
+        self.line(out, "{");
+        self.indent += 1;
         self.line(
             out,
-            &format!(
-                "memcpy({dest}, {value_ptr}, (size_t)({target_len}) * sizeof({}));",
-                element.c_type()
-            ),
+            &format!("for (size_t {index} = 0; {index} < (size_t)({target_len}); {index}++) {{"),
         );
+        self.indent += 1;
+        self.copy_kind(
+            out,
+            &format!("({dest})[{index}]"),
+            &format!("(({} *){value_ptr})[{index}]", element.c_type()),
+            element_kind,
+        )?;
+        self.indent -= 1;
+        self.line(out, "}");
+        self.indent -= 1;
+        self.line(out, "}");
         Ok(())
     }
 
@@ -2437,11 +2876,7 @@ impl Generator<'_> {
                             return Err("native backend: array assignment requires matching modes"
                                 .to_owned());
                         }
-                        let size = array_size_expression(info.kind)?;
-                        self.line(
-                            out,
-                            &format!("memcpy({}, {}, {size});", info.c_name, source_info.c_name),
-                        );
+                        self.copy_kind(out, &info.c_name, &source_info.c_name, info.kind)?;
                         return Ok(());
                     }
                     self.emit_array_value_into(out, &info, value)?;
@@ -2520,20 +2955,55 @@ impl Generator<'_> {
             self.emit_text_store(out, &target_code, length, &code, value_kind)?;
             return Ok(());
         }
-        if matches!(target_kind, Kind::PowerSet(_)) {
-            let function = match op {
-                AssignOp::Add => Some("z_ps_union"),
-                AssignOp::Sub => Some("z_ps_difference"),
-                AssignOp::Mul => Some("z_ps_intersection"),
-                AssignOp::Assign | AssignOp::Div | AssignOp::Concat => None,
-            };
-            if let Some(function) = function {
-                self.line(
-                    out,
-                    &format!("{target_code} = {function}({target_code}, {code});"),
-                );
-                return Ok(());
+        if target_kind == Kind::String {
+            match op {
+                AssignOp::Assign => {
+                    self.copy_kind(out, &target_code, &code, Kind::String)?;
+                }
+                AssignOp::Concat => {
+                    let value =
+                        self.temporary(&format!("z_concat({target_code}, {code})"), Kind::String)?;
+                    self.copy_kind(out, &target_code, &value, Kind::String)?;
+                }
+                _ => {
+                    return Err(
+                        "native backend: this compound string assignment is not supported"
+                            .to_owned(),
+                    )
+                }
             }
+            return Ok(());
+        }
+        if matches!(target_kind, Kind::Struct(_) | Kind::Array { .. }) {
+            if op != AssignOp::Assign {
+                return Err(
+                    "native backend: compound aggregate assignment is not supported yet".to_owned(),
+                );
+            }
+            self.copy_kind(out, &target_code, &code, target_kind)?;
+            return Ok(());
+        }
+        if let Kind::PowerSet(_) = target_kind {
+            let value = match op {
+                AssignOp::Assign => code.clone(),
+                AssignOp::Add | AssignOp::Sub | AssignOp::Mul => {
+                    let function = match op {
+                        AssignOp::Add => "z_ps_union",
+                        AssignOp::Sub => "z_ps_difference",
+                        AssignOp::Mul => "z_ps_intersection",
+                        _ => unreachable!(),
+                    };
+                    self.temporary(&format!("{function}({target_code}, {code})"), target_kind)?
+                }
+                AssignOp::Div | AssignOp::Concat => {
+                    return Err(
+                        "native backend: this powerset compound assignment is not supported"
+                            .to_owned(),
+                    )
+                }
+            };
+            self.copy_kind(out, &target_code, &value, target_kind)?;
+            return Ok(());
         }
         let operator = match op {
             AssignOp::Assign => "=",
@@ -2837,6 +3307,13 @@ impl Generator<'_> {
                     if let Some(ApplyResolution::Procedure(signature)) =
                         self.check.resolutions.get(span)
                     {
+                        if let Some(result_ty) = signature.result {
+                            let result_kind = kind_from_type(result_ty)?;
+                            if self.kind_owns(result_kind) {
+                                let _ = self.emit_procedure_call(name, args, *span)?;
+                                return Ok(());
+                            }
+                        }
                         let lowered = self.lower_call_args(args, signature)?;
                         let (target_module, target_name) = self.resolved_proc_name(name);
                         let name = proc_name(target_module, &target_name);
@@ -2946,7 +3423,8 @@ impl Generator<'_> {
         member: types::PowerSetMember,
     ) -> Result<(String, Kind), String> {
         if elements.is_empty() {
-            return Ok(("z_ps_empty()".to_owned(), Kind::PowerSet(member)));
+            let value = self.temporary("z_ps_empty()", Kind::PowerSet(member))?;
+            return Ok((value, Kind::PowerSet(member)));
         }
         let mut ranges = Vec::with_capacity(elements.len());
         for element in elements {
@@ -2962,14 +3440,15 @@ impl Generator<'_> {
             };
             ranges.push(format!("{{{low}, {high}}}"));
         }
-        Ok((
-            format!(
+        let value = self.temporary(
+            &format!(
                 "z_ps_literal({}, (ZPSRange[]){{{}}})",
                 ranges.len(),
                 ranges.join(", ")
             ),
             Kind::PowerSet(member),
-        ))
+        )?;
+        Ok((value, Kind::PowerSet(member)))
     }
 
     fn emit_expr(&mut self, expr: &Expr) -> Result<(String, Kind), String> {
@@ -3490,7 +3969,9 @@ impl Generator<'_> {
                         BinaryOp::Mul => "z_ps_intersection",
                         _ => unreachable!(),
                     };
-                    return Ok((format!("{function}({left}, {right})"), left_kind));
+                    let value =
+                        self.temporary(&format!("{function}({left}, {right})"), left_kind)?;
+                    return Ok((value, left_kind));
                 }
                 if matches!(
                     op,
@@ -3524,7 +4005,9 @@ impl Generator<'_> {
                     if left_kind != Kind::String || right_kind != Kind::String {
                         return Err("native backend: `//` requires character strings".to_owned());
                     }
-                    return Ok((format!("z_concat({left}, {right})"), Kind::String));
+                    let value =
+                        self.temporary(&format!("z_concat({left}, {right})"), Kind::String)?;
+                    return Ok((value, Kind::String));
                 }
                 let (operator, kind) = match op {
                     BinaryOp::Or | BinaryOp::OrIf => ("||", Kind::Bool),
@@ -3571,7 +4054,8 @@ impl Generator<'_> {
                     Err("native backend: SETTEXTINDEX cannot be used as a value".to_owned())
                 }
                 Some(ApplyResolution::Builtin(crate::builtins::Builtin::ReadLine)) => {
-                    Ok(("z_readline()".to_owned(), Kind::String))
+                    let value = self.temporary("z_readline()", Kind::String)?;
+                    Ok((value, Kind::String))
                 }
                 Some(ApplyResolution::Procedure(_)) => {
                     let (code, kind) = self.emit_procedure_call(name, args, *span)?;
@@ -3752,7 +4236,18 @@ impl Generator<'_> {
             Some(ty) => {
                 let kind = kind_from_type(ty)?;
                 if matches!(kind, Kind::Array { .. }) {
-                    Ok((format!("{call}.items"), kind))
+                    let unique = self.temp_counter;
+                    self.temp_counter += 1;
+                    let wrapper = format!("__own_ret_{unique}");
+                    self.prelude.push(format!(
+                        "z_ret_{name} {wrapper} = {call};"
+                    ));
+                    let data = format!("{wrapper}.items");
+                    self.register_temporary(data.clone(), kind);
+                    Ok((data, kind))
+                } else if self.kind_owns(kind) {
+                    let value = self.temporary(&call, kind)?;
+                    Ok((value, kind))
                 } else {
                     Ok((call, kind))
                 }

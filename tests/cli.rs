@@ -2834,6 +2834,135 @@ stderr: {}",
 }
 
 #[test]
+fn native_refcounted_payloads_are_reclaimed() {
+    let dir = TempDir::new("z200c-native-rc");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativrc"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL i INT;
+  DCL gs CHARS INIT := "g";
+  DCL gp POWERSET INT INIT := [1];
+  DCL extra POWERSET INT INIT := [2];
+  DCL gt TEXT(10) INIT := "t";
+  NEWMODE Holder = STRUCT (s CHARS, p POWERSET INT, t TEXT(10));
+
+  F: PROC (s CHARS) RETURNS (CHARS);
+    DCL local CHARS;
+    local := s // "!";
+    RETURN local;
+  END F;
+
+  G: PROC (s CHARS OUT);
+    s := "g";
+  END G;
+
+  H: PROC (h Holder) RETURNS (Holder);
+    DCL copy Holder;
+    copy := h;
+    copy.s := copy.s // "?";
+    RETURN copy;
+  END H;
+
+  Make: PROC () RETURNS (ARRAY (1:2) CHARS);
+    RETURN ["a", "b"];
+  END Make;
+
+  MakeP: PROC () RETURNS (POWERSET INT);
+    RETURN [1, 2];
+  END MakeP;
+
+  MakeT: PROC () RETURNS (TEXT(10));
+    DCL t TEXT(10);
+    t := "t";
+    RETURN t;
+  END MakeT;
+
+  gs := gs // "!";
+  gp := gp + extra;
+  SETTEXTINDEX(gt, 1);
+  WRITETEXT(gt, "x");
+
+  DO FOR i := 1 TO 25;
+    BEGIN
+      DCL a ARRAY(1:2) CHARS;
+      DCL s CHARS;
+      DCL p POWERSET INT;
+      DCL t TEXT(10);
+      DCL h Holder;
+      DCL h2 Holder;
+
+      a := ["a", "b"];
+      s := F(a(1));
+      ASSERT s = "a!";
+      a(2) := s;
+      ASSERT a(2) = "a!";
+      G(s);
+      ASSERT s = "g";
+
+      p := [1];
+      p := p + extra;
+      ASSERT 2 IN p;
+
+      t := "q";
+      SETTEXTINDEX(t, 1);
+      WRITETEXT(t, "%C", 3);
+      ASSERT t = "q3";
+
+      h.s := "h";
+      h.p := [1];
+      h.t := "t";
+      h2 := H(h);
+      ASSERT h2.s = "h?";
+      ASSERT 1 IN h2.p;
+      ASSERT h2.t = "t";
+
+      a := Make();
+      ASSERT a(2) = "b";
+      p := MakeP();
+      ASSERT 2 IN p;
+      t := MakeT();
+      ASSERT t = "t";
+    END;
+  OD;
+  WRITELINE("rc ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativrc");
+    let run = std::process::Command::new(binary)
+        .env("Z200C_RC_STATS", "1")
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        stdout.contains("rc ok") && stdout.contains("live-payloads: 0"),
+        "stdout: {stdout}"
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
