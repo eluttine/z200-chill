@@ -70,6 +70,9 @@ reference implementation for the complete supported language.
 - `WRITE` and `WRITELINE` with one value argument,
 - runtime checks for array bounds, division/modulo by zero, signed overflow in
   `+`/`-`/`*`/unary `-`, and `NULL` dereference,
+- signed range checks for `SHORT_INT`, `INT`, and `LONG_INT` on literals, assignments,
+  initializers, conversions, procedure results, array elements, and arithmetic. Values
+  still use an `int64_t` C representation, with the default 16/32/64 width profile,
 - `CAUSE` and `ON` handlers on module, procedure, and action bodies, including
   catching `ASSERTFAIL`, `RANGEFAIL`, and `OVERFLOW`.
 
@@ -96,7 +99,6 @@ Windows).
   operations allocate and are not freed),
 - MSVC-specific compiler flags and discovery,
 - grant-file-only dependencies without available source,
-- integer width enforcement beyond the C integer representation.
 
 Exceptions use a generated `setjmp`/`longjmp` handler chain. Unhandled exceptions and
 runtime failures print a CHILL-style code and message to stderr and exit with status 1;

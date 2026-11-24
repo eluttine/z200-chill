@@ -114,6 +114,7 @@ fn compile_impl(target: &Path) -> Result<PathBuf, String> {
         &package.program,
         &check,
         &package.manifest.package.name,
+        crate::manifest::WidthProfile::default(),
         &info.modes,
         &module_modes,
     )?;

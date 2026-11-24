@@ -2422,6 +2422,139 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_integer_widths() {
+    let dir = TempDir::new("z200c-native-widths");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativewidths"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL a ARRAY(1:2) SHORT_INT;
+  DCL s SHORT_INT;
+  DCL i INT;
+
+  F: PROC () RETURNS (SHORT_INT);
+    RETURN 32767;
+  END F;
+
+  a := [32766, 32767];
+  ASSERT a(2) = 32767;
+  s := F();
+  ASSERT s = 32767;
+  i := 2147483647;
+  ASSERT i = 2147483647;
+
+  BEGIN
+    DCL local SHORT_INT INIT := 123;
+    ASSERT local = 123;
+  END;
+  WRITELINE("widths ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativewidths");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "widths ok
+"
+    );
+}
+
+#[test]
+fn native_integer_width_failures_are_clean() {
+    let cases = [
+        (
+            "short",
+            r#"
+M: MODULE
+  DCL s SHORT_INT INIT := 32766;
+  s := s + 1;
+  s := s + 1;
+END M;
+"#,
+            "OVERFLOW: integer value does not fit its mode",
+        ),
+        (
+            "int",
+            r#"
+M: MODULE
+  DCL i INT INIT := 2147483646;
+  i := i + 1;
+  i := i + 1;
+END M;
+"#,
+            "OVERFLOW: integer value does not fit its mode",
+        ),
+        (
+            "conversion",
+            r#"
+M: MODULE
+  DCL s SHORT_INT;
+  DCL l LONG_INT INIT := 40000;
+  s := SHORT_INT(l);
+END M;
+"#,
+            "OVERFLOW: integer value does not fit its mode",
+        ),
+    ];
+    for (name, source, expected) in cases {
+        let dir = TempDir::new(&format!("z200c-native-width-{name}"));
+        let package = format!("nativewidth{name}");
+        std::fs::write(
+            dir.join("Chill.toml"),
+            format!(
+                r#"
+[package]
+name = "{package}"
+
+[build]
+entry = "src/main.ch"
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/main.ch"), source).unwrap();
+        let output = z200c().arg("compile").arg(&dir).output().unwrap();
+        assert!(
+            output.status.success(),
+            "compile {name}: stdout: {}
+stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let binary = dir.join(format!("target/z200c/{package}"));
+        let run = std::process::Command::new(binary).output().unwrap();
+        assert!(!run.status.success());
+        assert!(
+            String::from_utf8_lossy(&run.stderr).contains(expected),
+            "stderr: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

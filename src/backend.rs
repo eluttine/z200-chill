@@ -9,14 +9,15 @@ use crate::ast::{
     ProcDef, Program, UnaryOp,
 };
 use crate::builtins::{ClauseWidth, ConversionCode, FormatOp, TextIo};
+use crate::manifest::WidthProfile;
 use crate::modes::ModeTable;
 use crate::sema::{ApplyResolution, CheckResult, ImportedKind, ImportedSymbol};
-use crate::types::{self, ModeId, Type};
+use crate::types::{self, IntKind, ModeId, Type};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
-    Int,
+    Int(IntKind),
     Bool,
     Char,
     String,
@@ -55,7 +56,7 @@ impl Dim {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScalarKind {
-    Int,
+    Int(IntKind),
     Bool,
     Char,
     String,
@@ -66,7 +67,7 @@ enum ScalarKind {
 impl ScalarKind {
     fn c_type(self) -> String {
         match self {
-            ScalarKind::Int => "int64_t".to_owned(),
+            ScalarKind::Int(_) => "int64_t".to_owned(),
             ScalarKind::Bool => "int".to_owned(),
             ScalarKind::Char => "int".to_owned(),
             ScalarKind::String => "const char *".to_owned(),
@@ -77,7 +78,7 @@ impl ScalarKind {
 
     fn kind(self) -> Kind {
         match self {
-            ScalarKind::Int => Kind::Int,
+            ScalarKind::Int(kind) => Kind::Int(kind),
             ScalarKind::Bool => Kind::Bool,
             ScalarKind::Char => Kind::Char,
             ScalarKind::String => Kind::String,
@@ -96,7 +97,7 @@ struct VarInfo {
 impl Kind {
     fn c_type(self) -> String {
         match self {
-            Kind::Int => "int64_t".to_owned(),
+            Kind::Int(_) => "int64_t".to_owned(),
             Kind::Bool => "int".to_owned(),
             Kind::Char => "int".to_owned(),
             Kind::String => "const char *".to_owned(),
@@ -104,7 +105,7 @@ impl Kind {
                 unreachable!("array kinds are emitted through c_declaration")
             }
             Kind::Ref(element) => match element {
-                ScalarKind::Int => "int64_t *".to_owned(),
+                ScalarKind::Int(_) => "int64_t *".to_owned(),
                 ScalarKind::Bool => "int *".to_owned(),
                 ScalarKind::Char => "int *".to_owned(),
                 ScalarKind::String => "const char **".to_owned(),
@@ -123,7 +124,7 @@ impl Kind {
 
     fn default_value(self) -> &'static str {
         match self {
-            Kind::Int | Kind::Bool | Kind::Char => "0",
+            Kind::Int(_) | Kind::Bool | Kind::Char => "0",
             Kind::String => "\"\"",
             Kind::Array { .. } => "{0}",
             Kind::Ref(_) | Kind::RefArray { .. } | Kind::Null => "NULL",
@@ -148,6 +149,7 @@ impl Kind {
 
 struct Generator<'a> {
     check: &'a CheckResult,
+    profile: WidthProfile,
     modes: &'a ModeTable,
     module_modes: &'a [HashMap<String, Type>],
     module_index: usize,
@@ -164,6 +166,7 @@ pub fn generate(
     program: &Program,
     check: &CheckResult,
     package: &str,
+    profile: WidthProfile,
     modes: &ModeTable,
     module_modes: &[HashMap<String, Type>],
 ) -> Result<String, String> {
@@ -289,6 +292,13 @@ static int64_t z_mul(int64_t a, int64_t b) {
 static int64_t z_neg(int64_t a) {
     if (a == INT64_MIN) { z_fail("OVERFLOW", "integer overflow"); }
     return -a;
+}
+
+static int64_t z_check_int(int64_t value, int64_t low, int64_t high) {
+    if (value < low || value > high) {
+        z_fail("OVERFLOW", "integer value does not fit its mode");
+    }
+    return value;
 }
 
 static void *z_check_ref(const void *pointer) {
@@ -691,6 +701,7 @@ static int z_text_equal_string(const ZText *left, const char *right) {
                 emit_proc(
                     &mut out,
                     check,
+                    profile,
                     modes,
                     module_modes,
                     index,
@@ -706,6 +717,7 @@ static int z_text_equal_string(const ZText *left, const char *right) {
         out.push_str(&format!("static void run_module_{index}(void) {{\n"));
         let mut generator = Generator {
             check,
+            profile,
             module_index: index,
             modes,
             module_modes,
@@ -913,9 +925,11 @@ fn emit_proc_signature(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_proc(
     out: &mut String,
     check: &CheckResult,
+    profile: WidthProfile,
     modes: &ModeTable,
     module_modes: &[HashMap<String, Type>],
     module: usize,
@@ -935,6 +949,7 @@ fn emit_proc(
     };
     let mut generator = Generator {
         check,
+        profile,
         module_index: module,
         modes,
         module_modes,
@@ -1038,6 +1053,11 @@ impl Generator<'_> {
                     continue;
                 }
                 let (code, value_kind) = self.emit_expr(&init.value)?;
+                if let Kind::Int(kind) = info.kind {
+                    let code = self.checked_int(&code, kind)?;
+                    self.line(out, &format!("{} = {code};", info.c_name));
+                    continue;
+                }
                 if let Kind::Text { length } = info.kind {
                     self.emit_text_store(out, &info.c_name, length, &code, value_kind)?;
                     continue;
@@ -1056,7 +1076,10 @@ impl Generator<'_> {
         span: crate::lexer::Span,
     ) -> Result<(), String> {
         let Kind::Array {
-            dims, rank, total, ..
+            element,
+            dims,
+            rank,
+            total,
         } = info.kind
         else {
             return Err("native backend: internal: not an array initializer".to_owned());
@@ -1072,6 +1095,14 @@ impl Generator<'_> {
                 values.len()
             ));
         }
+        let values = if let ScalarKind::Int(kind) = element {
+            values
+                .into_iter()
+                .map(|code| self.checked_int(&code, kind))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            values
+        };
         for (index, code) in values.into_iter().enumerate() {
             self.line(out, &format!("{}[{}] = {code};", info.c_name, index));
         }
@@ -1238,7 +1269,10 @@ impl Generator<'_> {
                         let init = match &var.init {
                             Some(init) => {
                                 let (code, value_kind) = self.emit_expr(&init.value)?;
+                                let compatible_ints = matches!(value_kind, Kind::Int(_))
+                                    && matches!(kind, Kind::Int(_));
                                 if value_kind != kind
+                                    && !compatible_ints
                                     && !(matches!(kind, Kind::Ref(_)) && value_kind == Kind::Null)
                                 {
                                     return Err(format!(
@@ -1246,7 +1280,11 @@ impl Generator<'_> {
                                         var.name
                                     ));
                                 }
-                                code
+                                if let Kind::Int(int_kind) = kind {
+                                    self.checked_int(&code, int_kind)?
+                                } else {
+                                    code
+                                }
                             }
                             None => kind.default_value().to_owned(),
                         };
@@ -1309,6 +1347,11 @@ impl Generator<'_> {
                         match value {
                             Some(value) => {
                                 let (code, _) = self.emit_expr(value)?;
+                                let code = if let Some((_, Kind::Int(kind))) = &self.result {
+                                    self.checked_int(&code, *kind)?
+                                } else {
+                                    code
+                                };
                                 self.line(out, "z_handlers = __z_entry_handlers;");
                                 self.line(out, &format!("return {code};"));
                             }
@@ -1332,6 +1375,11 @@ impl Generator<'_> {
                         self.emit_array_value_into(out, &target, value)?;
                     } else {
                         let (code, _) = self.emit_expr(value)?;
+                        let code = if let Kind::Int(int_kind) = kind {
+                            self.checked_int(&code, int_kind)?
+                        } else {
+                            code
+                        };
                         self.line(out, &format!("{name} = {code};"));
                     }
                 }
@@ -1656,7 +1704,7 @@ impl Generator<'_> {
                     counter.clone(),
                     VarInfo {
                         c_name: counter_c.clone(),
-                        kind: Kind::Int,
+                        kind: Kind::Int(IntKind::Int),
                     },
                 );
                 self.line(
@@ -1766,6 +1814,39 @@ impl Generator<'_> {
         Ok(())
     }
 
+    fn int_bounds(&self, kind: IntKind) -> Result<(i128, i128), String> {
+        types::int_bounds(kind, self.profile).ok_or_else(|| {
+            format!(
+                "native backend: integer width for {} is not supported",
+                kind.name()
+            )
+        })
+    }
+
+    fn checked_int(&self, code: &str, kind: IntKind) -> Result<String, String> {
+        let (low, high) = self.int_bounds(kind)?;
+        if low == i64::MIN as i128 && high == i64::MAX as i128 {
+            return Ok(code.to_owned());
+        }
+        Ok(format!("z_check_int({code}, {low}, {high})"))
+    }
+
+    fn binary_int_kind(left: Kind, right: Kind) -> Option<IntKind> {
+        match (left, right) {
+            (Kind::Int(left), Kind::Int(right)) if left == right => Some(left),
+            (Kind::Int(left), Kind::Int(right)) => {
+                if left == IntKind::Long {
+                    Some(right)
+                } else if right == IntKind::Long {
+                    Some(left)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn emit_assignment(
         &mut self,
         out: &mut String,
@@ -1845,6 +1926,28 @@ impl Generator<'_> {
             }
         };
         let (code, value_kind) = self.emit_expr(value)?;
+        if let Kind::Int(kind) = target_kind {
+            let result = match op {
+                AssignOp::Assign => self.checked_int(&code, kind)?,
+                AssignOp::Add | AssignOp::Sub | AssignOp::Mul | AssignOp::Div => {
+                    let function = match op {
+                        AssignOp::Add => "z_add",
+                        AssignOp::Sub => "z_sub",
+                        AssignOp::Mul => "z_mul",
+                        AssignOp::Div => "z_div",
+                        _ => unreachable!(),
+                    };
+                    self.checked_int(&format!("{function}({target_code}, {code})"), kind)?
+                }
+                AssignOp::Concat => {
+                    return Err(
+                        "native backend: `//=` requires a character-string target".to_owned()
+                    )
+                }
+            };
+            self.line(out, &format!("{target_code} = {result};"));
+            return Ok(());
+        }
         if let Kind::Text { length } = target_kind {
             if op != AssignOp::Assign {
                 return Err(
@@ -1980,7 +2083,7 @@ impl Generator<'_> {
                             let (code, value_kind) = self.emit_expr(argument)?;
                             let call =
                                 match value_kind {
-                                    Kind::Int => "z_text_write_int",
+                                    Kind::Int(_) => "z_text_write_int",
                                     Kind::Bool => "z_text_write_bool",
                                     Kind::Char => "z_text_write_char",
                                     Kind::String => "z_text_write_string",
@@ -2004,7 +2107,7 @@ impl Generator<'_> {
                                 ));
                             };
                             let call = match info.kind {
-                                Kind::Int => "z_text_read_int",
+                                Kind::Int(_) => "z_text_read_int",
                                 Kind::Char => "z_text_read_char",
                                 Kind::Bool => "z_text_read_bool",
                                 _ => {
@@ -2014,10 +2117,13 @@ impl Generator<'_> {
                                     )
                                 }
                             };
-                            self.line(
-                                out,
-                                &format!("{} = {call}(&{target}, {length});", info.c_name),
-                            );
+                            let read = format!("{call}(&{target}, {length})");
+                            let read = if let Kind::Int(kind) = info.kind {
+                                self.checked_int(&read, kind)?
+                            } else {
+                                read
+                            };
+                            self.line(out, &format!("{} = {read};", info.c_name));
                         }
                     }
                 }
@@ -2073,7 +2179,7 @@ impl Generator<'_> {
                                     format!("printf(\"%d\", {code});")
                                 }
                             }
-                            Kind::Int => {
+                            Kind::Int(_) => {
                                 if newline {
                                     format!("printf(\"%lld\\n\", (long long)({code}));")
                                 } else {
@@ -2173,7 +2279,7 @@ impl Generator<'_> {
                 Kind::Ref(_) | Kind::RefArray { .. } | Kind::Null => {
                     comparisons.push(format!("({left_field} == {right_field})"))
                 }
-                Kind::Int | Kind::Bool | Kind::Char => {
+                Kind::Int(_) | Kind::Bool | Kind::Char => {
                     comparisons.push(format!("({left_field} == {right_field})"))
                 }
             }
@@ -2265,7 +2371,9 @@ impl Generator<'_> {
 
     fn emit_expr(&mut self, expr: &Expr) -> Result<(String, Kind), String> {
         match expr {
-            Expr::Integer { value, .. } => Ok((format!("INT64_C({value})"), Kind::Int)),
+            Expr::Integer { value, .. } => {
+                Ok((format!("INT64_C({value})"), Kind::Int(IntKind::Long)))
+            }
             Expr::Bool { value, .. } => {
                 Ok(((if *value { "1" } else { "0" }).to_owned(), Kind::Bool))
             }
@@ -2367,7 +2475,7 @@ impl Generator<'_> {
                 if let Some(ApplyResolution::SetElement { value, .. }) =
                     self.check.resolutions.get(span)
                 {
-                    return Ok((value.to_string(), Kind::Int));
+                    return Ok((value.to_string(), Kind::Int(IntKind::Long)));
                 }
                 let info = self
                     .vars
@@ -2382,14 +2490,18 @@ impl Generator<'_> {
                 Ok((info.c_name, info.kind))
             }
             Expr::Unary { op, operand, .. } => {
-                let (code, _) = self.emit_expr(operand)?;
-                Ok((
-                    match op {
-                        UnaryOp::Neg => format!("z_neg({code})"),
-                        UnaryOp::Not => format!("(!({code}))"),
-                    },
-                    Kind::Int,
-                ))
+                let (code, kind) = self.emit_expr(operand)?;
+                match op {
+                    UnaryOp::Neg => {
+                        let result = format!("z_neg({code})");
+                        if let Kind::Int(int_kind) = kind {
+                            Ok((self.checked_int(&result, int_kind)?, Kind::Int(int_kind)))
+                        } else {
+                            Ok((result, Kind::Int(IntKind::Long)))
+                        }
+                    }
+                    UnaryOp::Not => Ok((format!("!({code})"), Kind::Bool)),
+                }
             }
             Expr::Binary {
                 op, left, right, ..
@@ -2599,10 +2711,22 @@ impl Generator<'_> {
                         BinaryOp::Div => "z_div",
                         _ => unreachable!(),
                     };
-                    return Ok((format!("{function}({left}, {right})"), Kind::Int));
+                    let kind =
+                        Self::binary_int_kind(left_kind, right_kind).unwrap_or(IntKind::Long);
+                    let result = format!("{function}({left}, {right})");
+                    return Ok((self.checked_int(&result, kind)?, Kind::Int(kind)));
                 }
                 if matches!(op, BinaryOp::Mod | BinaryOp::Rem) {
-                    return Ok((format!("z_mod({left}, {right})"), Kind::Int));
+                    let kind =
+                        Self::binary_int_kind(left_kind, right_kind).unwrap_or(IntKind::Long);
+                    let result = format!("z_mod({left}, {right})");
+                    return Ok((self.checked_int(&result, kind)?, Kind::Int(kind)));
+                }
+                if *op == BinaryOp::Xor {
+                    let kind =
+                        Self::binary_int_kind(left_kind, right_kind).unwrap_or(IntKind::Long);
+                    let result = format!("(({left}) ^ ({right}))");
+                    return Ok((self.checked_int(&result, kind)?, Kind::Int(kind)));
                 }
                 if *op == BinaryOp::Concat {
                     if left_kind != Kind::String || right_kind != Kind::String {
@@ -2613,16 +2737,16 @@ impl Generator<'_> {
                 let (operator, kind) = match op {
                     BinaryOp::Or | BinaryOp::OrIf => ("||", Kind::Bool),
                     BinaryOp::And | BinaryOp::AndIf => ("&&", Kind::Bool),
-                    BinaryOp::Xor => ("^", Kind::Int),
+                    BinaryOp::Xor => unreachable!(),
                     BinaryOp::Eq => ("==", Kind::Bool),
                     BinaryOp::Ne => ("!=", Kind::Bool),
                     BinaryOp::Lt => ("<", Kind::Bool),
                     BinaryOp::Le => ("<=", Kind::Bool),
                     BinaryOp::Gt => (">", Kind::Bool),
                     BinaryOp::Ge => (">=", Kind::Bool),
-                    BinaryOp::Add => ("+", Kind::Int),
-                    BinaryOp::Sub => ("-", Kind::Int),
-                    BinaryOp::Mul => ("*", Kind::Int),
+                    BinaryOp::Add => ("+", Kind::Int(IntKind::Long)),
+                    BinaryOp::Sub => ("-", Kind::Int(IntKind::Long)),
+                    BinaryOp::Mul => ("*", Kind::Int(IntKind::Long)),
                     BinaryOp::Div | BinaryOp::Mod | BinaryOp::Rem => unreachable!(),
                     BinaryOp::Concat => unreachable!(),
                     BinaryOp::Pow | BinaryOp::In => {
@@ -2646,7 +2770,10 @@ impl Generator<'_> {
                         return Err("native backend: malformed GETTEXTINDEX call".to_owned());
                     }
                     let (target, _) = self.text_location(&args[0])?;
-                    Ok((format!("z_text_get_index({target})"), Kind::Int))
+                    Ok((
+                        format!("z_text_get_index({target})"),
+                        Kind::Int(IntKind::Int),
+                    ))
                 }
                 Some(ApplyResolution::TextIndex { get: false }) => {
                     Err("native backend: SETTEXTINDEX cannot be used as a value".to_owned())
@@ -2658,12 +2785,12 @@ impl Generator<'_> {
                     let (code, kind) = self.emit_procedure_call(name, args, *span)?;
                     Ok((code, kind))
                 }
-                Some(ApplyResolution::Conversion(_)) => {
+                Some(ApplyResolution::Conversion(kind)) => {
                     if args.len() != 1 {
                         return Err("native backend: malformed conversion call".to_owned());
                     }
                     let (code, _) = self.emit_expr(&args[0])?;
-                    Ok((format!("((int64_t)({code}))"), Kind::Int))
+                    Ok((format!("((int64_t)({code}))"), Kind::Int(*kind)))
                 }
                 _ => Err(format!(
                     "native backend: call to `{name}` is not supported in native code yet"
@@ -2848,7 +2975,8 @@ fn array_size_expression(kind: Kind) -> Result<String, String> {
 
 fn array_scalar_kind(ty: Type) -> Result<ScalarKind, String> {
     match ty {
-        Type::Int(_) | Type::IntLiteral | Type::Set(_) => Ok(ScalarKind::Int),
+        Type::Int(kind) => Ok(ScalarKind::Int(kind)),
+        Type::IntLiteral | Type::Set(_) => Ok(ScalarKind::Int(IntKind::Long)),
         Type::Bool => Ok(ScalarKind::Bool),
         Type::Char | Type::WChar => Ok(ScalarKind::Char),
         Type::String | Type::BoundedString { .. } | Type::WString | Type::WBoundedString { .. } => {
@@ -2865,7 +2993,7 @@ fn array_scalar_kind(ty: Type) -> Result<ScalarKind, String> {
 
 fn scalar_kind(kind: Kind) -> Option<ScalarKind> {
     match kind {
-        Kind::Int => Some(ScalarKind::Int),
+        Kind::Int(kind) => Some(ScalarKind::Int(kind)),
         Kind::Bool => Some(ScalarKind::Bool),
         Kind::Char => Some(ScalarKind::Char),
         Kind::String => Some(ScalarKind::String),
@@ -2878,7 +3006,7 @@ fn scalar_kind(kind: Kind) -> Option<ScalarKind> {
 fn scalar_ref_target(target: types::RefTarget) -> Result<ScalarKind, String> {
     use types::RefTarget;
     match target {
-        RefTarget::Int(_) => Ok(ScalarKind::Int),
+        RefTarget::Int(kind) => Ok(ScalarKind::Int(kind)),
         RefTarget::Bool => Ok(ScalarKind::Bool),
         RefTarget::Struct(id) => Ok(ScalarKind::Struct(id)),
         RefTarget::PowerSet(set) => Ok(ScalarKind::PowerSet(set.member)),
@@ -2896,9 +3024,10 @@ fn scalar_ref_target(target: types::RefTarget) -> Result<ScalarKind, String> {
 
 fn kind_from_type(ty: Type) -> Result<Kind, String> {
     match ty {
-        Type::Int(_) | Type::IntLiteral => Ok(Kind::Int),
+        Type::Int(kind) => Ok(Kind::Int(kind)),
+        Type::IntLiteral => Ok(Kind::Int(IntKind::Long)),
         Type::Bool => Ok(Kind::Bool),
-        Type::Set(_) => Ok(Kind::Int),
+        Type::Set(_) => Ok(Kind::Int(IntKind::Long)),
         Type::Struct(id) => Ok(Kind::Struct(id)),
         Type::PowerSet(set) => Ok(Kind::PowerSet(set.member)),
         Type::Text {
@@ -2919,9 +3048,10 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
         }
         Type::Array(array) => {
             let element = match array.element.ty() {
-                Type::Int(_) | Type::IntLiteral => ScalarKind::Int,
+                Type::Int(kind) => ScalarKind::Int(kind),
+                Type::IntLiteral => ScalarKind::Int(IntKind::Long),
                 Type::Bool => ScalarKind::Bool,
-                Type::Set(_) => ScalarKind::Int,
+                Type::Set(_) => ScalarKind::Int(IntKind::Long),
                 Type::Struct(id) => ScalarKind::Struct(id),
                 Type::PowerSet(set) => ScalarKind::PowerSet(set.member),
                 Type::Char => ScalarKind::Char,
@@ -2986,9 +3116,10 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
         },
         Type::MultiArray(array) => {
             let element = match array.element.ty() {
-                Type::Int(_) | Type::IntLiteral => ScalarKind::Int,
+                Type::Int(kind) => ScalarKind::Int(kind),
+                Type::IntLiteral => ScalarKind::Int(IntKind::Long),
                 Type::Bool => ScalarKind::Bool,
-                Type::Set(_) => ScalarKind::Int,
+                Type::Set(_) => ScalarKind::Int(IntKind::Long),
                 Type::Struct(id) => ScalarKind::Struct(id),
                 Type::PowerSet(set) => ScalarKind::PowerSet(set.member),
                 Type::Char => ScalarKind::Char,
