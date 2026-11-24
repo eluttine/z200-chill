@@ -61,6 +61,9 @@ reference implementation for the complete supported language.
 - scalar and structure arrays of up to four dimensions with indexing, element
   assignment, nested initializers, array-literal assignment, same-mode array copying,
   and same-mode array equality/inequality,
+- one-dimensional array slices with constant or runtime bounds, `UP` sizes, slice
+  reads, slice assignment, slice arguments, and slice equality. Runtime slices carry a
+  data pointer and element count and check length when converted to fixed array modes,
 - narrow sequential `TEXT(n)` records, including assignment, equality, direct
   procedure parameters, and structure fields,
 - `SETTEXTINDEX` / `GETTEXTINDEX`,
@@ -91,6 +94,7 @@ Windows).
 - arrays of more complex composite element modes,
 - structure initializers and structure literals,
 - references to array slices, text, and buffers,
+- multidimensional slices and slice-valued references,
 - wide, indexed, or array-valued text modes; text associations and file transfer;
   text formatting widths, editing clauses, and io-control clauses,
 - exception propagation across separate packages,

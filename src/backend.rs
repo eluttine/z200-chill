@@ -34,6 +34,10 @@ enum Kind {
         rank: usize,
         total: usize,
     },
+    DynamicArray {
+        element: ScalarKind,
+        low: i128,
+    },
     Struct(ModeId),
     PowerSet(types::PowerSetMember),
     Text {
@@ -116,6 +120,7 @@ impl Kind {
             Kind::Struct(id) => format!("z_struct_{}", id.0),
             Kind::PowerSet(_) => "ZPowerSet".to_owned(),
             Kind::Text { .. } => "ZText".to_owned(),
+            Kind::DynamicArray { .. } => "ZSlice".to_owned(),
             Kind::Null => {
                 unreachable!("NULL is never used as a declared variable type")
             }
@@ -129,6 +134,7 @@ impl Kind {
             Kind::Array { .. } => "{0}",
             Kind::Ref(_) | Kind::RefArray { .. } | Kind::Null => "NULL",
             Kind::Struct(_) | Kind::PowerSet(_) | Kind::Text { .. } => "{0}",
+            Kind::DynamicArray { .. } => "{0}",
         }
     }
 
@@ -498,6 +504,86 @@ static int z_ps_array_equal(ZPowerSet *left, ZPowerSet *right, size_t count) {
 static int z_string_array_equal(const char **left, const char **right, size_t count) {
     for (size_t index = 0; index < count; index++) {
         if (strcmp(left[index], right[index]) != 0) { return 0; }
+    }
+    return 1;
+}
+
+typedef struct {
+    void *data;
+    int64_t len;
+    int64_t low;
+} ZSlice;
+
+static ZSlice z_slice_make(
+    void *data,
+    int64_t low,
+    int64_t high,
+    int64_t first,
+    int64_t last,
+    int up,
+    size_t element_size
+) {
+    int64_t upper;
+    if (up) {
+        if (last < 1) { z_fail("RANGEFAIL", "array slice size must be positive"); }
+        if (first > INT64_MAX - (last - 1)) {
+            z_fail("RANGEFAIL", "array slice bounds overflow");
+        }
+        upper = first + last - 1;
+    } else {
+        upper = last;
+    }
+    if (first > upper || first < low || upper > high) {
+        z_fail("RANGEFAIL", "array slice is outside the array bounds");
+    }
+    ZSlice slice;
+    slice.data = (char *)data + (size_t)(first - low) * element_size;
+    slice.len = upper - first + 1;
+    slice.low = low;
+    return slice;
+}
+
+static void *z_slice_check_len(ZSlice slice, int64_t expected) {
+    if (slice.len != expected) {
+        z_fail("RANGEFAIL", "array slice length mismatch");
+    }
+    return slice.data;
+}
+
+static int z_slice_equal_bytes(
+    const void *left,
+    int64_t left_len,
+    const void *right,
+    int64_t right_len,
+    size_t element_size
+) {
+    return left_len == right_len
+        && (left_len == 0
+            || memcmp(left, right, (size_t)left_len * element_size) == 0);
+}
+
+static int z_slice_equal_strings(
+    const char **left,
+    int64_t left_len,
+    const char **right,
+    int64_t right_len
+) {
+    if (left_len != right_len) { return 0; }
+    for (int64_t index = 0; index < left_len; index++) {
+        if (strcmp(left[index], right[index]) != 0) { return 0; }
+    }
+    return 1;
+}
+
+static int z_slice_equal_powersets(
+    ZPowerSet *left,
+    int64_t left_len,
+    ZPowerSet *right,
+    int64_t right_len
+) {
+    if (left_len != right_len) { return 0; }
+    for (int64_t index = 0; index < left_len; index++) {
+        if (!z_ps_equal(left[index], right[index])) { return 0; }
     }
     return 1;
 }
@@ -1783,14 +1869,52 @@ impl Generator<'_> {
             }
         }
         let (code, kind) = self.emit_expr(value)?;
-        if !matches!(kind, Kind::Array { .. }) {
-            return Err("native backend: array assignment requires an array value".to_owned());
+        let Kind::Array { element, total, .. } = target.kind else {
+            return Err("native backend: array assignment target is not an array".to_owned());
+        };
+        match kind {
+            Kind::Array {
+                element: value_element,
+                total: value_total,
+                ..
+            } => {
+                if element != value_element || total != value_total {
+                    return Err("native backend: array assignment mode mismatch".to_owned());
+                }
+                let size = array_size_expression(target.kind)?;
+                self.line(
+                    out,
+                    &format!("memcpy({}, {}, {size});", target.c_name, code),
+                );
+            }
+            Kind::DynamicArray {
+                element: value_element,
+                ..
+            } => {
+                if element != value_element {
+                    return Err("native backend: array assignment mode mismatch".to_owned());
+                }
+                let unique = self.temp_counter;
+                self.temp_counter += 1;
+                let slice = format!("__slice_assign_{unique}");
+                self.line(out, &format!("ZSlice {slice} = {code};"));
+                self.line(
+                    out,
+                    &format!(
+                        "if ({slice}.len != {total}) {{ z_fail(\"RANGEFAIL\", \"array slice length mismatch\"); }}"
+                    ),
+                );
+                self.line(
+                    out,
+                    &format!(
+                        "memcpy({}, {slice}.data, (size_t){total} * sizeof({}));",
+                        target.c_name,
+                        element.c_type()
+                    ),
+                );
+            }
+            _ => return Err("native backend: array assignment requires an array value".to_owned()),
         }
-        let size = array_size_expression(target.kind)?;
-        self.line(
-            out,
-            &format!("memcpy({}, {}, {size});", target.c_name, code),
-        );
         Ok(())
     }
 
@@ -1847,6 +1971,210 @@ impl Generator<'_> {
         }
     }
 
+    fn array_element_of(kind: Kind) -> Result<ScalarKind, String> {
+        match kind {
+            Kind::Array { element, .. } | Kind::DynamicArray { element, .. } => Ok(element),
+            _ => Err("native backend: array value expected".to_owned()),
+        }
+    }
+
+    fn array_parts(code: &str, kind: Kind) -> Result<(String, String), String> {
+        match kind {
+            Kind::Array { total, .. } => Ok((code.to_owned(), total.to_string())),
+            Kind::DynamicArray { .. } => Ok((format!("({code}).data"), format!("({code}).len"))),
+            _ => Err("native backend: array value expected".to_owned()),
+        }
+    }
+
+    fn array_equality_code(
+        &self,
+        left_code: &str,
+        left_kind: Kind,
+        right_code: &str,
+        right_kind: Kind,
+    ) -> Result<String, String> {
+        let element = Self::array_element_of(left_kind)?;
+        if element != Self::array_element_of(right_kind)? {
+            return Err("native backend: array comparison requires matching modes".to_owned());
+        }
+        let (left_data, left_len) = Self::array_parts(left_code, left_kind)?;
+        let (right_data, right_len) = Self::array_parts(right_code, right_kind)?;
+        Ok(match element {
+            ScalarKind::Int(_) | ScalarKind::Bool | ScalarKind::Char | ScalarKind::Struct(_) => {
+                format!(
+                    "z_slice_equal_bytes((const void *)({left_data}), {left_len}, (const void *)({right_data}), {right_len}, sizeof({}))",
+                    element.c_type()
+                )
+            }
+            ScalarKind::String => format!(
+                "z_slice_equal_strings((const char **)({left_data}), {left_len}, (const char **)({right_data}), {right_len})"
+            ),
+            ScalarKind::PowerSet(_) => format!(
+                "z_slice_equal_powersets((ZPowerSet *)({left_data}), {left_len}, (ZPowerSet *)({right_data}), {right_len})"
+            ),
+        })
+    }
+
+    fn emit_array_value_expr(
+        &mut self,
+        expression: &Expr,
+        expected_element: ScalarKind,
+    ) -> Result<(String, Kind), String> {
+        if let Expr::Name { name, .. } = expression {
+            let Some(info) = self.vars.get(name).cloned() else {
+                return Err(format!("native backend: unknown array `{name}`"));
+            };
+            if let Kind::Array { element, total, .. } = info.kind {
+                let _ = total;
+                if element != expected_element {
+                    return Err("native backend: array element mode mismatch".to_owned());
+                }
+                return Ok((info.c_name, info.kind));
+            }
+        }
+        if let Expr::ArrayTuple { elements, .. } = expression {
+            let total = elements.len();
+            let mut dims = [Dim { low: 0, high: 0 }; 4];
+            dims[0] = Dim {
+                low: 1,
+                high: total as i128,
+            };
+            let expected = Kind::Array {
+                element: expected_element,
+                dims,
+                rank: 1,
+                total,
+            };
+            let code = self.emit_array_argument(expression, expected)?;
+            return Ok((code, expected));
+        }
+        let (code, kind) = self.emit_expr(expression)?;
+        match kind {
+            Kind::Array { element, .. } | Kind::DynamicArray { element, .. } => {
+                if element != expected_element {
+                    return Err("native backend: array element mode mismatch".to_owned());
+                }
+                Ok((code, kind))
+            }
+            _ => Err("native backend: array value expected".to_owned()),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_slice_assignment(
+        &mut self,
+        out: &mut String,
+        name: &str,
+        first: &Expr,
+        last: &Expr,
+        up: bool,
+        span: crate::lexer::Span,
+        op: AssignOp,
+        value: &Expr,
+    ) -> Result<(), String> {
+        if op != AssignOp::Assign {
+            return Err(
+                "native backend: compound slice assignment is not supported yet".to_owned(),
+            );
+        }
+        let Some(info) = self.vars.get(name).cloned() else {
+            return Err(format!("native backend: unknown array `{name}`"));
+        };
+        let Kind::Array {
+            element,
+            dims,
+            rank,
+            ..
+        } = info.kind
+        else {
+            return Err(format!("native backend: `{name}` is not an array"));
+        };
+        if rank != 1 {
+            return Err(
+                "native backend: multidimensional slice assignment is not supported yet".to_owned(),
+            );
+        }
+        let low = dims[0].low;
+        let high = dims[0].high;
+        let (dest, target_len, target_is_fixed) = match self.check.types.get(&span) {
+            Some(Type::Array(_)) => {
+                let Some(first) = crate::sema::constant_int(first) else {
+                    return Err("native backend: constant slice bounds expected".to_owned());
+                };
+                let Some(last) = crate::sema::constant_int(last) else {
+                    return Err("native backend: constant slice bounds expected".to_owned());
+                };
+                let upper = if up {
+                    first
+                        .checked_add(last - 1)
+                        .ok_or_else(|| "array slice bounds overflow".to_owned())?
+                } else {
+                    last
+                };
+                let count = (upper - first + 1).max(0);
+                let start = first - low;
+                (
+                    format!("({} + {start})", info.c_name),
+                    count.to_string(),
+                    true,
+                )
+            }
+            Some(Type::DynamicArray { .. }) => {
+                let (first_code, _) = self.emit_expr(first)?;
+                let (last_code, _) = self.emit_expr(last)?;
+                let unique = self.temp_counter;
+                self.temp_counter += 1;
+                let slice = format!("__slice_target_{unique}");
+                self.line(
+                    out,
+                    &format!(
+                        "ZSlice {slice} = z_slice_make((void *)({}), {}, {}, {}, {}, {}, sizeof({}));",
+                        info.c_name,
+                        low,
+                        high,
+                        first_code,
+                        last_code,
+                        if up { 1 } else { 0 },
+                        element.c_type()
+                    ),
+                );
+                (format!("{slice}.data"), format!("{slice}.len"), false)
+            }
+            _ => return Err("native backend: slice target has no array mode".to_owned()),
+        };
+        let (value_code, value_kind) = self.emit_array_value_expr(value, element)?;
+        let (value_ptr, value_len, value_is_fixed) = match value_kind {
+            Kind::Array { total, .. } => (value_code, total.to_string(), true),
+            Kind::DynamicArray { .. } => {
+                let unique = self.temp_counter;
+                self.temp_counter += 1;
+                let slice = format!("__slice_value_{unique}");
+                self.line(out, &format!("ZSlice {slice} = {value_code};"));
+                (format!("{slice}.data"), format!("{slice}.len"), false)
+            }
+            _ => return Err("native backend: slice assignment requires an array value".to_owned()),
+        };
+        if value_is_fixed && target_is_fixed && value_len != target_len {
+            return Err("native backend: array slice length mismatch".to_owned());
+        }
+        if !(value_is_fixed && target_is_fixed) {
+            self.line(
+                out,
+                &format!(
+                    "if ({value_len} != {target_len}) {{ z_fail(\"RANGEFAIL\", \"array slice length mismatch\"); }}"
+                ),
+            );
+        }
+        self.line(
+            out,
+            &format!(
+                "memcpy({dest}, {value_ptr}, (size_t)({target_len}) * sizeof({}));",
+                element.c_type()
+            ),
+        );
+        Ok(())
+    }
+
     fn emit_assignment(
         &mut self,
         out: &mut String,
@@ -1854,6 +2182,16 @@ impl Generator<'_> {
         op: AssignOp,
         value: &Expr,
     ) -> Result<(), String> {
+        if let Expr::ArraySlice {
+            name,
+            first,
+            last,
+            up,
+            span,
+        } = target
+        {
+            return self.emit_slice_assignment(out, name, first, last, *up, *span, op, value);
+        }
         let (target_code, target_kind) = match target {
             Expr::Name { name, .. } => {
                 let Some(info) = self.vars.get(name).cloned() else {
@@ -2192,6 +2530,7 @@ impl Generator<'_> {
                             | Kind::Struct(_)
                             | Kind::PowerSet(_)
                             | Kind::Text { .. }
+                            | Kind::DynamicArray { .. }
                             | Kind::Null => return Err(
                                 "native backend: arrays, references, structures, powersets, and NULL cannot be passed to WRITE/WRITELINE yet"
                                     .to_owned(),
@@ -2276,6 +2615,11 @@ impl Generator<'_> {
                 Kind::Text { .. } => comparisons.push(format!(
                     "(z_text_equal_text(&{left_field}, &{right_field}))"
                 )),
+                Kind::DynamicArray { .. } => {
+                    return Err(
+                        "native backend: dynamic slices cannot be structure fields".to_owned()
+                    )
+                }
                 Kind::Ref(_) | Kind::RefArray { .. } | Kind::Null => {
                     comparisons.push(format!("({left_field} == {right_field})"))
                 }
@@ -2386,6 +2730,90 @@ impl Generator<'_> {
                 span,
                 ..
             } => self.deref_index_expr(base, indices, *span),
+            Expr::ArraySlice {
+                name,
+                first,
+                last,
+                up,
+                span,
+            } => {
+                let Some(info) = self.vars.get(name).cloned() else {
+                    return Err(format!("native backend: unknown array `{name}`"));
+                };
+                let Kind::Array {
+                    element,
+                    dims,
+                    rank,
+                    ..
+                } = info.kind
+                else {
+                    return Err(format!("native backend: `{name}` is not an array"));
+                };
+                if rank != 1 {
+                    return Err(
+                        "native backend: multidimensional slices are not supported yet".to_owned(),
+                    );
+                }
+                let low = dims[0].low;
+                let high = dims[0].high;
+                match self.check.types.get(span) {
+                    Some(Type::Array(array)) => {
+                        let Some(first) = crate::sema::constant_int(first) else {
+                            return Err("native backend: constant slice bounds expected".to_owned());
+                        };
+                        let Some(last) = crate::sema::constant_int(last) else {
+                            return Err("native backend: constant slice bounds expected".to_owned());
+                        };
+                        let upper = if *up {
+                            first
+                                .checked_add(last - 1)
+                                .ok_or_else(|| "array slice bounds overflow".to_owned())?
+                        } else {
+                            last
+                        };
+                        let total = (upper - first + 1).max(0) as usize;
+                        let start = first - low;
+                        let mut new_dims = [Dim { low: 0, high: 0 }; 4];
+                        new_dims[0] = Dim {
+                            low: array.low,
+                            high: array.high,
+                        };
+                        Ok((
+                            format!("({} + {start})", info.c_name),
+                            Kind::Array {
+                                element,
+                                dims: new_dims,
+                                rank: 1,
+                                total,
+                            },
+                        ))
+                    }
+                    Some(Type::DynamicArray {
+                        low: result_low, ..
+                    }) => {
+                        let (first_code, _) = self.emit_expr(first)?;
+                        let (last_code, _) = self.emit_expr(last)?;
+                        let code = format!(
+                            "z_slice_make((void *)({}), {}, {}, {}, {}, {}, sizeof({}))",
+                            info.c_name,
+                            low,
+                            high,
+                            first_code,
+                            last_code,
+                            if *up { 1 } else { 0 },
+                            element.c_type()
+                        );
+                        Ok((
+                            code,
+                            Kind::DynamicArray {
+                                element,
+                                low: *result_low,
+                            },
+                        ))
+                    }
+                    _ => Err("native backend: slice has no array mode".to_owned()),
+                }
+            }
             Expr::ArrayTuple { elements, span } => {
                 let Some(Type::PowerSet(set)) = self.check.types.get(span) else {
                     return Err(
@@ -2506,6 +2934,33 @@ impl Generator<'_> {
             Expr::Binary {
                 op, left, right, ..
             } => {
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+                    && (matches!(left.as_ref(), Expr::ArraySlice { .. })
+                        || matches!(right.as_ref(), Expr::ArraySlice { .. }))
+                {
+                    let (left_code, left_kind, right_code, right_kind) =
+                        if matches!(left.as_ref(), Expr::ArraySlice { .. }) {
+                            let (left_code, left_kind) = self.emit_expr(left)?;
+                            let element = Self::array_element_of(left_kind)?;
+                            let (right_code, right_kind) =
+                                self.emit_array_value_expr(right, element)?;
+                            (left_code, left_kind, right_code, right_kind)
+                        } else {
+                            let (right_code, right_kind) = self.emit_expr(right)?;
+                            let element = Self::array_element_of(right_kind)?;
+                            let (left_code, left_kind) =
+                                self.emit_array_value_expr(left, element)?;
+                            (left_code, left_kind, right_code, right_kind)
+                        };
+                    let equality =
+                        self.array_equality_code(&left_code, left_kind, &right_code, right_kind)?;
+                    let code = if *op == BinaryOp::Eq {
+                        equality
+                    } else {
+                        format!("!({equality})")
+                    };
+                    return Ok((code, Kind::Bool));
+                }
                 if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
                     if let (
                         Expr::Name {
@@ -2849,6 +3304,44 @@ impl Generator<'_> {
                 }
                 Ok(code)
             }
+            Expr::ArraySlice { .. } => {
+                let Kind::Array {
+                    element, total, ..
+                } = expected
+                else {
+                    return Err("native backend: expected an array parameter mode".to_owned());
+                };
+                let (code, kind) = self.emit_expr(argument)?;
+                match kind {
+                    Kind::Array {
+                        element: value_element,
+                        total: value_total,
+                        ..
+                    } => {
+                        if value_element != element || value_total != total {
+                            return Err(
+                                "native backend: array argument mode mismatch".to_owned()
+                            );
+                        }
+                        Ok(code)
+                    }
+                    Kind::DynamicArray {
+                        element: value_element,
+                        ..
+                    } => {
+                        if value_element != element {
+                            return Err(
+                                "native backend: array argument mode mismatch".to_owned()
+                            );
+                        }
+                        Ok(format!(
+                            "(({} *)z_slice_check_len({code}, {total}))",
+                            element.c_type()
+                        ))
+                    }
+                    _ => Err("native backend: array slice expected".to_owned()),
+                }
+            }
             Expr::ArrayTuple { elements, .. } => {
                 let Kind::Array {
                     element,
@@ -2868,6 +3361,14 @@ impl Generator<'_> {
                         values.len()
                     ));
                 }
+                let values = if let ScalarKind::Int(kind) = element {
+                    values
+                        .into_iter()
+                        .map(|code| self.checked_int(&code, kind))
+                        .collect::<Result<Vec<_>, _>>()?
+                } else {
+                    values
+                };
                 let element = element.c_type();
                 if values.is_empty() {
                     return Ok(format!("({element}[]){{0}}"));

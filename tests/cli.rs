@@ -2555,6 +2555,146 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_array_slices() {
+    let dir = TempDir::new("z200c-native-slices");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativeslices"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL a ARRAY (1:5) INT;
+  DCL b ARRAY (1:3) INT;
+  DCL c ARRAY (1:2) INT;
+  DCL p ARRAY (1:3) INT INIT := [7, 8, 9];
+  DCL s ARRAY (1:3) CHARS;
+  DCL first INT INIT := 2;
+  DCL upper INT INIT := 4;
+  DCL size INT INIT := 2;
+
+  Sum: PROC (v ARRAY (1:3) INT) RETURNS (INT);
+    RETURN v(1) + v(2) + v(3);
+  END Sum;
+
+  a := [10, 20, 30, 40, 50];
+
+  b := a(2:4);
+  ASSERT b(1) = 20;
+  ASSERT b(3) = 40;
+
+  c := a(2 UP 2);
+  ASSERT c(1) = 20;
+  ASSERT c(2) = 30;
+
+  ASSERT a(2:3) = [20, 30];
+  ASSERT a(2:4) = b;
+  ASSERT a(2:4) /= a(1:3);
+  ASSERT Sum(a(first:upper)) = 90;
+  ASSERT a(first:upper) = b;
+
+  a(2:3) := p(1:2);
+  ASSERT a(2) = 7;
+  ASSERT a(3) = 8;
+  a(4 UP 2) := p(1:2);
+  ASSERT a(4) = 7;
+  ASSERT a(5) = 8;
+
+  a(first:upper) := p;
+  ASSERT a(2) = 7;
+  ASSERT a(3) = 8;
+  ASSERT a(4) = 9;
+  a(first UP size) := p(2:3);
+  ASSERT a(2) = 8;
+  ASSERT a(3) = 9;
+
+  s := ["a", "b", "c"];
+  s(2:3) := ["x", "y"];
+  ASSERT s(1) = "a";
+  ASSERT s(2) = "x";
+  ASSERT s(3) = "y";
+  WRITELINE("slices ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativeslices");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "slices ok
+"
+    );
+}
+
+#[test]
+fn native_slice_length_mismatch_fails_cleanly() {
+    let dir = TempDir::new("z200c-native-slice-length");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativeslicelen"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL a ARRAY (1:5) INT;
+  DCL first INT INIT := 2;
+  DCL upper INT INIT := 3;
+
+  Sum: PROC (v ARRAY (1:3) INT) RETURNS (INT);
+    RETURN v(1) + v(2) + v(3);
+  END Sum;
+
+  a := [1,2,3,4,5];
+  ASSERT Sum(a(first:upper)) = 0;
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativeslicelen");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(!run.status.success());
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("RANGEFAIL: array slice length mismatch"),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
