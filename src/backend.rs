@@ -207,7 +207,7 @@ static void z_throw(const char *name) {
     z_exception_name = name;
     if (z_handlers != NULL) { longjmp(z_handlers->env, 1); }
     fprintf(stderr, "UNHANDLED: %s\n", name);
-    abort();
+    exit(1);
 }
 
 static void z_fail(const char *code, const char *message) {
@@ -216,7 +216,7 @@ static void z_fail(const char *code, const char *message) {
         longjmp(z_handlers->env, 1);
     }
     fprintf(stderr, "%s: %s\n", code, message);
-    abort();
+    exit(1);
 }
 
 static int64_t z_check_index(int64_t index, int64_t low, int64_t high) {

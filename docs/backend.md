@@ -80,7 +80,8 @@ Windows).
 - integer width enforcement beyond the C integer representation.
 
 Exceptions use a generated `setjmp`/`longjmp` handler chain. Unhandled exceptions and
-runtime failures print a CHILL-style code and message to stderr and abort. Handler
+runtime failures print a CHILL-style code and message to stderr and exit with status 1;
+they do not abort or produce a core dump. Handler
 support uses C `setjmp` semantics: reading an automatic local variable in a handler is
 only reliable if that variable was not modified after the protected action called
 `setjmp`. Module-level state and heap-backed values are safe. A future runtime frame or
