@@ -24,7 +24,8 @@ else.
 - procedure calls, `RETURN`, and `RESULT`,
 - integer conversions in the generated C representation,
 - scalar arrays of up to four dimensions with indexing, element assignment,
-  nested initializers, array-literal assignment, and same-mode array copying,
+  nested initializers, array-literal assignment, same-mode array copying, and
+  same-mode array equality/inequality,
 - `WRITE` and `WRITELINE` with one value argument.
 
 Generated code is C11 with `int64_t` integers, `int` booleans/characters, and

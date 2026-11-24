@@ -951,6 +951,39 @@ impl Generator<'_> {
             Expr::Binary {
                 op, left, right, ..
             } => {
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+                    if let (
+                        Expr::Name {
+                            name: left_name, ..
+                        },
+                        Expr::Name {
+                            name: right_name, ..
+                        },
+                    ) = (left.as_ref(), right.as_ref())
+                    {
+                        if let (Some(left_info), Some(right_info)) = (
+                            self.vars.get(left_name).cloned(),
+                            self.vars.get(right_name).cloned(),
+                        ) {
+                            if matches!(left_info.kind, Kind::Array { .. }) {
+                                if left_info.kind != right_info.kind {
+                                    return Err(
+                                        "native backend: array comparison requires matching modes"
+                                            .to_owned(),
+                                    );
+                                }
+                                let comparison = if *op == BinaryOp::Eq { "== 0" } else { "!= 0" };
+                                return Ok((
+                                    format!(
+                                        "(memcmp({}, {}, sizeof({})) {comparison})",
+                                        left_info.c_name, right_info.c_name, left_info.c_name
+                                    ),
+                                    Kind::Bool,
+                                ));
+                            }
+                        }
+                    }
+                }
                 let (left, _) = self.emit_expr(left)?;
                 let (right, _) = self.emit_expr(right)?;
                 let (operator, kind) = match op {
