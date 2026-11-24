@@ -1654,6 +1654,123 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_array_parameters() {
+    let dir = TempDir::new("z200c-native-array-params");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativearrparam"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL a ARRAY(1:3) INT;
+  DCL b ARRAY(1:3) INT;
+  DCL m ARRAY(1:2, 1:2) INT;
+  DCL n ARRAY(0:1, 2:3) INT;
+  NEWMODE Point = STRUCT (x INT, y INT);
+  DCL points ARRAY(1:2) Point;
+
+  Sum: PROC (v ARRAY(1:3) INT) RETURNS (INT);
+    RETURN v(1) + v(2) + v(3);
+  END Sum;
+
+  MutateIn: PROC (v ARRAY(1:3) INT);
+    v(1) := 99;
+  END MutateIn;
+
+  Fill: PROC (v ARRAY(1:3) INT OUT);
+    v(1) := 7;
+    v(2) := 8;
+    v(3) := 9;
+  END Fill;
+
+  Bump: PROC (v ARRAY(1:3) INT INOUT);
+    v(1) +:= 10;
+    v(2) +:= 10;
+    v(3) +:= 10;
+  END Bump;
+
+  Alias: PROC (v ARRAY(1:3) INT LOC);
+    v(3) := 42;
+  END Alias;
+
+  Sum2: PROC (v ARRAY(1:2, 1:2) INT) RETURNS (INT);
+    RETURN v(1,1) + v(1,2) + v(2,1) + v(2,2);
+  END Sum2;
+
+  Fill2: PROC (v ARRAY(0:1, 2:3) INT OUT);
+    v(0,2) := 1;
+    v(0,3) := 2;
+    v(1,2) := 3;
+    v(1,3) := 4;
+  END Fill2;
+
+  MovePoint: PROC (p ARRAY(1:2) Point INOUT);
+    p(1).x := 5;
+    p(2).y := 6;
+  END MovePoint;
+
+  a := [1, 2, 3];
+  ASSERT Sum(a) = 6;
+  MutateIn(a);
+  ASSERT a(1) = 1;
+  ASSERT a(2) = 2;
+  ASSERT a(3) = 3;
+
+  Fill(b);
+  ASSERT b(1) = 7;
+  ASSERT b(2) = 8;
+  ASSERT b(3) = 9;
+  Bump(b);
+  ASSERT b(1) = 17;
+  ASSERT b(2) = 18;
+  ASSERT b(3) = 19;
+  Alias(b);
+  ASSERT b(3) = 42;
+
+  m := [[1,2],[3,4]];
+  ASSERT Sum2(m) = 10;
+  Fill2(n);
+  ASSERT n(0,2) = 1;
+  ASSERT n(0,3) = 2;
+  ASSERT n(1,2) = 3;
+  ASSERT n(1,3) = 4;
+
+  MovePoint(points);
+  ASSERT points(1).x = 5;
+  ASSERT points(2).y = 6;
+  WRITELINE("array params ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativearrparam");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "array params ok
+"
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

@@ -47,8 +47,9 @@ reference implementation for the complete supported language.
   unparenthesized `ELSE` alternatives,
 - `DO WHILE`, `DO FOR`, `DO FOR EVER`, labelled actions/blocks, and labelled or
   unlabelled `EXIT`,
-- procedures with `IN`, `OUT`, `INOUT`, and `LOC` scalar parameters and optional
-  integer/boolean/character/string results,
+- procedures with `IN`, `OUT`, `INOUT`, and `LOC` scalar and array parameters,
+  including multidimensional arrays and arrays of structures, and optional
+  integer/boolean/character/string/powerset results,
 - procedure calls, `RETURN`, and `RESULT`,
 - integer conversions in the generated C representation,
 - scalar and structure arrays of up to four dimensions with indexing, element
@@ -73,6 +74,7 @@ Windows).
 - generics,
 - moreta modes and objects,
 - arrays of more complex composite element modes,
+- array procedure results,
 - structure initializers and structure literals,
 - references to fields or composite locations, text, and buffers,
 - exception propagation across separate packages,

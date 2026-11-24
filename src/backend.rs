@@ -655,10 +655,17 @@ fn emit_proc_signature(
             out.push_str(", ");
         }
         let kind = mode_kind(&param.mode, module_modes, module)?;
-        if matches!(kind, Kind::Array { .. }) {
-            return Err("native backend: array parameters are not supported yet".to_owned());
-        }
         let name = c_ident(&format!("p_{}", param.name));
+        if let Kind::Array { element, .. } = kind {
+            let element = element.c_type();
+            match param.passing {
+                Passing::In => out.push_str(&format!("const {element} *{name}")),
+                Passing::Out | Passing::InOut | Passing::Loc => {
+                    out.push_str(&format!("{element} *{name}"))
+                }
+            }
+            continue;
+        }
         match param.passing {
             Passing::In => out.push_str(&format!("{} {name}", kind.c_type())),
             Passing::Out | Passing::InOut | Passing::Loc => {
@@ -712,11 +719,25 @@ fn emit_proc(
     }
     for param in &proc_def.params {
         let kind = mode_kind(&param.mode, module_modes, module)?;
+        let p_name = c_ident(&format!("p_{}", param.name));
+        if let Kind::Array { element, total, .. } = kind {
+            let c_name = match param.passing {
+                Passing::In => {
+                    let local = c_ident(&format!("l_{}", param.name));
+                    generator.line(out, &format!("{} {local}[{total}];", element.c_type()));
+                    generator.line(out, &format!("memcpy({local}, {p_name}, sizeof({local}));"));
+                    local
+                }
+                Passing::Out | Passing::InOut | Passing::Loc => p_name,
+            };
+            generator
+                .vars
+                .insert(param.name.clone(), VarInfo { c_name, kind });
+            continue;
+        }
         let c_name = match param.passing {
-            Passing::In => c_ident(&format!("p_{}", param.name)),
-            Passing::Out | Passing::InOut | Passing::Loc => {
-                format!("(*{})", c_ident(&format!("p_{}", param.name)))
-            }
+            Passing::In => p_name,
+            Passing::Out | Passing::InOut | Passing::Loc => format!("(*{p_name})"),
         };
         generator
             .vars
@@ -1357,12 +1378,10 @@ impl Generator<'_> {
                             return Err("native backend: array assignment requires matching modes"
                                 .to_owned());
                         }
+                        let size = array_size_expression(info.kind)?;
                         self.line(
                             out,
-                            &format!(
-                                "memcpy({}, {}, sizeof({}));",
-                                info.c_name, source_info.c_name, info.c_name
-                            ),
+                            &format!("memcpy({}, {}, {size});", info.c_name, source_info.c_name),
                         );
                         return Ok(());
                     }
@@ -1523,16 +1542,7 @@ impl Generator<'_> {
                     if let Some(ApplyResolution::Procedure(signature)) =
                         self.check.resolutions.get(span)
                     {
-                        let mut lowered = Vec::with_capacity(args.len());
-                        for (arg, passing) in args.iter().zip(&signature.passing) {
-                            let code = match passing {
-                                Passing::In => self.emit_expr(arg)?.0,
-                                Passing::Out | Passing::InOut | Passing::Loc => {
-                                    self.emit_location_address(arg)?
-                                }
-                            };
-                            lowered.push(code);
-                        }
+                        let lowered = self.lower_call_args(args, signature)?;
                         let name = proc_name(self.module_index, name);
                         self.line(out, &format!("{name}({});", lowered.join(", ")));
                         return Ok(());
@@ -1781,10 +1791,13 @@ impl Generator<'_> {
                                         "z_string_array_equal({}, {}, {total})",
                                         left_info.c_name, right_info.c_name
                                     ),
-                                    _ => format!(
-                                        "(memcmp({}, {}, sizeof({})) == 0)",
-                                        left_info.c_name, right_info.c_name, left_info.c_name
-                                    ),
+                                    _ => {
+                                        let size = array_size_expression(left_info.kind)?;
+                                        format!(
+                                            "(memcmp({}, {}, {size}) == 0)",
+                                            left_info.c_name, right_info.c_name
+                                        )
+                                    }
                                 };
                                 let code = if *op == BinaryOp::Eq {
                                     equality
@@ -1982,6 +1995,45 @@ impl Generator<'_> {
         }
     }
 
+    fn lower_call_args(
+        &mut self,
+        args: &[Expr],
+        signature: &types::ProcType,
+    ) -> Result<Vec<String>, String> {
+        let mut lowered = Vec::with_capacity(args.len());
+        for ((arg, passing), ty) in args.iter().zip(&signature.passing).zip(&signature.params) {
+            let kind = kind_from_type(*ty)?;
+            let code = if matches!(kind, Kind::Array { .. }) {
+                self.emit_array_argument(arg)?
+            } else {
+                match passing {
+                    Passing::In => self.emit_expr(arg)?.0,
+                    Passing::Out | Passing::InOut | Passing::Loc => {
+                        self.emit_location_address(arg)?
+                    }
+                }
+            };
+            lowered.push(code);
+        }
+        Ok(lowered)
+    }
+
+    fn emit_array_argument(&mut self, argument: &Expr) -> Result<String, String> {
+        let Expr::Name { name, .. } = argument else {
+            return Err(
+                "native backend: array arguments currently require a simple array variable"
+                    .to_owned(),
+            );
+        };
+        let Some(info) = self.vars.get(name).cloned() else {
+            return Err(format!("native backend: unknown array `{name}`"));
+        };
+        if !matches!(info.kind, Kind::Array { .. }) {
+            return Err(format!("native backend: `{name}` is not an array"));
+        }
+        Ok(info.c_name)
+    }
+
     fn emit_procedure_call(
         &mut self,
         name: &str,
@@ -1991,17 +2043,10 @@ impl Generator<'_> {
         let Some(ApplyResolution::Procedure(signature)) = self.check.resolutions.get(&span) else {
             return Err("native backend: procedure call has no resolved signature".to_owned());
         };
-        if signature.passing.len() != args.len() {
+        if signature.passing.len() != args.len() || signature.params.len() != args.len() {
             return Err("native backend: procedure argument count mismatch".to_owned());
         }
-        let mut lowered = Vec::with_capacity(args.len());
-        for (arg, passing) in args.iter().zip(&signature.passing) {
-            let code = match passing {
-                Passing::In => self.emit_expr(arg)?.0,
-                Passing::Out | Passing::InOut | Passing::Loc => self.emit_location_address(arg)?,
-            };
-            lowered.push(code);
-        }
+        let lowered = self.lower_call_args(args, signature)?;
         let name = proc_name(self.module_index, name);
         let call = format!("{name}({})", lowered.join(", "));
         match signature.result {
@@ -2019,10 +2064,7 @@ impl Generator<'_> {
                     return Err(format!("native backend: unknown variable `{name}`"));
                 };
                 if matches!(info.kind, Kind::Array { .. }) {
-                    return Err(
-                        "native backend: whole-array OUT/INOUT arguments are not supported yet"
-                            .to_owned(),
-                    );
+                    return Ok(info.c_name);
                 }
                 Ok(format!("&{}", info.c_name))
             }
@@ -2036,6 +2078,13 @@ impl Generator<'_> {
             _ => Err("native backend: OUT/INOUT arguments must be simple locations".to_owned()),
         }
     }
+}
+
+fn array_size_expression(kind: Kind) -> Result<String, String> {
+    let Kind::Array { element, total, .. } = kind else {
+        return Err("native backend: expected an array mode".to_owned());
+    };
+    Ok(format!("((size_t){total} * sizeof({}))", element.c_type()))
 }
 
 fn scalar_kind(kind: Kind) -> Option<ScalarKind> {
