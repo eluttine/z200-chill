@@ -69,7 +69,8 @@ all existing tests pass with no new special cases.
 - [x] Minimal C backend and `z200c compile`: basic variables, expressions,
       assignments, `ASSERT`, `IF`, `WRITE`/`WRITELINE`, procedures with `IN`
       parameters, calls, `RETURN`, `RESULT`, integer conversions, one-dimensional
-      scalar arrays, array initializers/literals, and loop actions.
+      scalar arrays, array initializers/literals, same-mode array copying, and loop
+      actions.
 - [ ] Extend native codegen to procedures, calls, arrays, text, references, exceptions,
       and a dedicated CHILL runtime ABI.
 - [-] Full native concurrency and moreta object lowering remain deferred.
