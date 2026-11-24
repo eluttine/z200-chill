@@ -30,8 +30,8 @@ reference implementation for the complete supported language.
 - integer/boolean arithmetic, comparisons, and logical operators,
 - character-string equality, inequality, ordering comparisons, concatenation, and
   `//:=` concatenation assignment,
-- scalar `REF` modes, taking addresses of scalar variables, dereference reads, and
-  dereference assignment,
+- scalar `REF` modes, `NULL`, reference comparison, taking addresses of scalar
+  variables, dereference reads, and dereference assignment,
 - `ASSERT`,
 - `IF` / `ELSE IF` / `ELSE`,
 - `BEGIN` blocks with scoped local declarations and shadowing,

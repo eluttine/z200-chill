@@ -25,6 +25,7 @@ enum Kind {
         total: usize,
     },
     Ref(ScalarKind),
+    Null,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +90,9 @@ impl Kind {
                 ScalarKind::Char => "int *",
                 ScalarKind::String => "const char **",
             },
+            Kind::Null => {
+                unreachable!("NULL is never used as a declared variable type")
+            }
         }
     }
 
@@ -97,7 +101,7 @@ impl Kind {
             Kind::Int | Kind::Bool | Kind::Char => "0",
             Kind::String => "\"\"",
             Kind::Array { .. } => "{0}",
-            Kind::Ref(_) => "NULL",
+            Kind::Ref(_) | Kind::Null => "NULL",
         }
     }
 
@@ -107,6 +111,7 @@ impl Kind {
                 format!("{} {}[{}]", element.c_type(), name, total)
             }
             Kind::Ref(element) => format!("{} *{}", element.c_type(), name),
+            Kind::Null => unreachable!("NULL is never used as a declared variable type"),
             other => format!("{} {}", other.c_type(), name),
         }
     }
@@ -477,7 +482,9 @@ impl Generator<'_> {
                         let init = match &var.init {
                             Some(init) => {
                                 let (code, value_kind) = self.emit_expr(&init.value)?;
-                                if value_kind != kind {
+                                if value_kind != kind
+                                    && !(matches!(kind, Kind::Ref(_)) && value_kind == Kind::Null)
+                                {
                                     return Err(format!(
                                         "native backend: initializer for `{}` has incompatible kind",
                                         var.name
@@ -938,8 +945,8 @@ impl Generator<'_> {
                                     format!("printf(\"%lld\", (long long)({code}));")
                                 }
                             }
-                            Kind::Array { .. } | Kind::Ref(_) => return Err(
-                                "native backend: arrays and references cannot be passed to WRITE/WRITELINE yet"
+                            Kind::Array { .. } | Kind::Ref(_) | Kind::Null => return Err(
+                                "native backend: arrays, references, and NULL cannot be passed to WRITE/WRITELINE yet"
                                     .to_owned(),
                             ),
                         };
@@ -984,6 +991,7 @@ impl Generator<'_> {
             }
             Expr::Char { value, .. } => Ok(((*value as u32).to_string(), Kind::Char)),
             Expr::String { value, .. } => Ok((format!("\"{}\"", c_escape(value)), Kind::String)),
+            Expr::Null { .. } => Ok(("NULL".to_owned(), Kind::Null)),
             Expr::AddressOf { target, .. } => {
                 let Expr::Name { name, .. } = target.as_ref() else {
                     return Err(
