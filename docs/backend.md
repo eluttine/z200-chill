@@ -31,6 +31,9 @@ reference implementation for the complete supported language.
 - character-string equality, inequality, ordering comparisons, concatenation, and
   `//:=` concatenation assignment,
 - named set modes and set-element constants,
+- powersets over integer, character, and boolean members, with literals and ranges,
+  `IN`, union/difference/intersection, equality, subset ordering, structure fields,
+  procedure parameters/results, and arrays of powersets,
 - named structure modes with scalar/string or nested structure fields, field access,
   field assignment, whole-structure assignment, structure equality, and references to
   scalar fields,
@@ -71,10 +74,11 @@ Windows).
 - moreta modes and objects,
 - arrays of more complex composite element modes,
 - structure initializers and structure literals,
-- powersets, references to fields or composite locations, text, and buffers,
+- references to fields or composite locations, text, and buffers,
 - exception propagation across separate packages,
 - processes, regions, tasks, signals, and timing,
-- string memory reclamation (generated concatenations allocate and are not freed),
+- string and powerset memory reclamation (generated concatenations and powerset
+  operations allocate and are not freed),
 - MSVC-specific compiler flags and discovery,
 - package dependencies and grant linking,
 - integer width enforcement beyond the C integer representation.

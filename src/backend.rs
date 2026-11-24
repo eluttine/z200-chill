@@ -27,6 +27,7 @@ enum Kind {
     },
     Ref(ScalarKind),
     Struct(ModeId),
+    PowerSet(types::PowerSetMember),
     Null,
 }
 
@@ -49,6 +50,7 @@ enum ScalarKind {
     Char,
     String,
     Struct(ModeId),
+    PowerSet(types::PowerSetMember),
 }
 
 impl ScalarKind {
@@ -59,6 +61,7 @@ impl ScalarKind {
             ScalarKind::Char => "int".to_owned(),
             ScalarKind::String => "const char *".to_owned(),
             ScalarKind::Struct(id) => format!("z_struct_{}", id.0),
+            ScalarKind::PowerSet(_) => "ZPowerSet".to_owned(),
         }
     }
 
@@ -69,6 +72,7 @@ impl ScalarKind {
             ScalarKind::Char => Kind::Char,
             ScalarKind::String => Kind::String,
             ScalarKind::Struct(id) => Kind::Struct(id),
+            ScalarKind::PowerSet(member) => Kind::PowerSet(member),
         }
     }
 }
@@ -95,8 +99,10 @@ impl Kind {
                 ScalarKind::Char => "int *".to_owned(),
                 ScalarKind::String => "const char **".to_owned(),
                 ScalarKind::Struct(id) => format!("z_struct_{} *", id.0),
+                ScalarKind::PowerSet(_) => "ZPowerSet *".to_owned(),
             },
             Kind::Struct(id) => format!("z_struct_{}", id.0),
+            Kind::PowerSet(_) => "ZPowerSet".to_owned(),
             Kind::Null => {
                 unreachable!("NULL is never used as a declared variable type")
             }
@@ -109,7 +115,7 @@ impl Kind {
             Kind::String => "\"\"",
             Kind::Array { .. } => "{0}",
             Kind::Ref(_) | Kind::Null => "NULL",
-            Kind::Struct(_) => "{0}",
+            Kind::Struct(_) | Kind::PowerSet(_) => "{0}",
         }
     }
 
@@ -265,6 +271,200 @@ static void *z_check_ref(const void *pointer) {
 }
 
 #define Z_DEREF(type, pointer) (*((type *)z_check_ref((const void *)(pointer))))
+
+typedef struct {
+    int64_t *items;
+    size_t len;
+} ZPowerSet;
+
+typedef struct {
+    int64_t low;
+    int64_t high;
+} ZPSRange;
+
+static ZPowerSet z_ps_empty(void) {
+    ZPowerSet set = { NULL, 0 };
+    return set;
+}
+
+static int z_ps_int_compare(const void *left, const void *right) {
+    int64_t a = *(const int64_t *)left;
+    int64_t b = *(const int64_t *)right;
+    return (a > b) - (a < b);
+}
+
+static ZPowerSet z_ps_literal(size_t count, const ZPSRange *ranges) {
+    if (count == 0) { return z_ps_empty(); }
+    size_t cap = 16;
+    size_t len = 0;
+    int64_t *items = (int64_t *)malloc(cap * sizeof(int64_t));
+    if (items == NULL) { z_fail("STORAGE", "out of memory"); }
+    for (size_t index = 0; index < count; index++) {
+        int64_t low = ranges[index].low;
+        int64_t high = ranges[index].high;
+        if (low > high) { continue; }
+        for (int64_t value = low;; value++) {
+            if (len == cap) {
+                cap *= 2;
+                int64_t *grown = (int64_t *)realloc(items, cap * sizeof(int64_t));
+                if (grown == NULL) { z_fail("STORAGE", "out of memory"); }
+                items = grown;
+            }
+            items[len++] = value;
+            if (value == high) { break; }
+        }
+    }
+    qsort(items, len, sizeof(int64_t), z_ps_int_compare);
+    size_t unique = 0;
+    for (size_t index = 0; index < len; index++) {
+        if (unique == 0 || items[unique - 1] != items[index]) {
+            items[unique++] = items[index];
+        }
+    }
+    ZPowerSet set = { items, unique };
+    return set;
+}
+
+static int z_ps_equal(ZPowerSet left, ZPowerSet right) {
+    return left.len == right.len
+        && (left.len == 0 || memcmp(left.items, right.items, left.len * sizeof(int64_t)) == 0);
+}
+
+static int z_ps_contains(ZPowerSet set, int64_t value) {
+    size_t low = 0;
+    size_t high = set.len;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        if (set.items[middle] == value) { return 1; }
+        if (set.items[middle] < value) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    return 0;
+}
+
+static int z_ps_subset(ZPowerSet left, ZPowerSet right) {
+    size_t i = 0;
+    size_t j = 0;
+    while (i < left.len && j < right.len) {
+        if (left.items[i] == right.items[j]) {
+            i++;
+            j++;
+        } else if (left.items[i] > right.items[j]) {
+            j++;
+        } else {
+            return 0;
+        }
+    }
+    return i == left.len;
+}
+
+static void z_ps_require_ordered(ZPowerSet left, ZPowerSet right) {
+    if (!z_ps_subset(left, right) && !z_ps_subset(right, left)) {
+        z_fail("E0500", "powersets are not ordered");
+    }
+}
+
+static int z_ps_le(ZPowerSet left, ZPowerSet right) {
+    z_ps_require_ordered(left, right);
+    return z_ps_subset(left, right);
+}
+
+static int z_ps_ge(ZPowerSet left, ZPowerSet right) {
+    z_ps_require_ordered(left, right);
+    return z_ps_subset(right, left);
+}
+
+static int z_ps_lt(ZPowerSet left, ZPowerSet right) {
+    z_ps_require_ordered(left, right);
+    return z_ps_subset(left, right) && !z_ps_equal(left, right);
+}
+
+static int z_ps_gt(ZPowerSet left, ZPowerSet right) {
+    z_ps_require_ordered(left, right);
+    return z_ps_subset(right, left) && !z_ps_equal(left, right);
+}
+
+static ZPowerSet z_ps_union(ZPowerSet left, ZPowerSet right) {
+    size_t cap = left.len + right.len;
+    if (cap == 0) { return z_ps_empty(); }
+    int64_t *items = (int64_t *)malloc(cap * sizeof(int64_t));
+    if (items == NULL) { z_fail("STORAGE", "out of memory"); }
+    size_t i = 0;
+    size_t j = 0;
+    size_t len = 0;
+    while (i < left.len || j < right.len) {
+        if (j == right.len || (i < left.len && left.items[i] < right.items[j])) {
+            items[len++] = left.items[i++];
+        } else if (i == left.len || right.items[j] < left.items[i]) {
+            items[len++] = right.items[j++];
+        } else {
+            items[len++] = left.items[i++];
+            j++;
+        }
+    }
+    ZPowerSet set = { items, len };
+    return set;
+}
+
+static ZPowerSet z_ps_intersection(ZPowerSet left, ZPowerSet right) {
+    size_t cap = left.len < right.len ? left.len : right.len;
+    if (cap == 0) { return z_ps_empty(); }
+    int64_t *items = (int64_t *)malloc(cap * sizeof(int64_t));
+    if (items == NULL) { z_fail("STORAGE", "out of memory"); }
+    size_t i = 0;
+    size_t j = 0;
+    size_t len = 0;
+    while (i < left.len && j < right.len) {
+        if (left.items[i] == right.items[j]) {
+            items[len++] = left.items[i++];
+            j++;
+        } else if (left.items[i] < right.items[j]) {
+            i++;
+        } else {
+            j++;
+        }
+    }
+    ZPowerSet set = { items, len };
+    return set;
+}
+
+static ZPowerSet z_ps_difference(ZPowerSet left, ZPowerSet right) {
+    if (left.len == 0) { return z_ps_empty(); }
+    int64_t *items = (int64_t *)malloc(left.len * sizeof(int64_t));
+    if (items == NULL) { z_fail("STORAGE", "out of memory"); }
+    size_t i = 0;
+    size_t j = 0;
+    size_t len = 0;
+    while (i < left.len) {
+        if (j == right.len || left.items[i] < right.items[j]) {
+            items[len++] = left.items[i++];
+        } else if (left.items[i] == right.items[j]) {
+            i++;
+            j++;
+        } else {
+            j++;
+        }
+    }
+    ZPowerSet set = { items, len };
+    return set;
+}
+
+static int z_ps_array_equal(ZPowerSet *left, ZPowerSet *right, size_t count) {
+    for (size_t index = 0; index < count; index++) {
+        if (!z_ps_equal(left[index], right[index])) { return 0; }
+    }
+    return 1;
+}
+
+static int z_string_array_equal(const char **left, const char **right, size_t count) {
+    for (size_t index = 0; index < count; index++) {
+        if (strcmp(left[index], right[index]) != 0) { return 0; }
+    }
+    return 1;
+}
 
 "#,
     );
@@ -1137,7 +1337,7 @@ impl Generator<'_> {
         op: AssignOp,
         value: &Expr,
     ) -> Result<(), String> {
-        let target_code = match target {
+        let (target_code, target_kind) = match target {
             Expr::Name { name, .. } => {
                 let Some(info) = self.vars.get(name).cloned() else {
                     return Err(format!("native backend: unknown variable `{name}`"));
@@ -1169,7 +1369,7 @@ impl Generator<'_> {
                     self.emit_array_literal(out, &info, value, target.span())?;
                     return Ok(());
                 }
-                info.c_name
+                (info.c_name, info.kind)
             }
             Expr::Apply {
                 name, args, span, ..
@@ -1184,15 +1384,18 @@ impl Generator<'_> {
                 ) {
                     return Err(format!("native backend: `{name}` is not an indexed array"));
                 }
-                self.array_index_expr(&info, args, *span)?.0
+                self.array_index_expr(&info, args, *span)?
             }
-            Expr::Field { .. } => self.emit_field_location(target)?.0,
+            Expr::Field { .. } => self.emit_field_location(target)?,
             Expr::Deref { base, .. } => {
                 let (code, kind) = self.emit_expr(base)?;
                 let Kind::Ref(element) = kind else {
                     return Err("native backend: dereference target is not a reference".to_owned());
                 };
-                format!("Z_DEREF({}, {code})", element.c_type())
+                (
+                    format!("Z_DEREF({}, {code})", element.c_type()),
+                    element.kind(),
+                )
             }
             _ => {
                 return Err(
@@ -1202,6 +1405,21 @@ impl Generator<'_> {
             }
         };
         let (code, _) = self.emit_expr(value)?;
+        if matches!(target_kind, Kind::PowerSet(_)) {
+            let function = match op {
+                AssignOp::Add => Some("z_ps_union"),
+                AssignOp::Sub => Some("z_ps_difference"),
+                AssignOp::Mul => Some("z_ps_intersection"),
+                AssignOp::Assign | AssignOp::Div | AssignOp::Concat => None,
+            };
+            if let Some(function) = function {
+                self.line(
+                    out,
+                    &format!("{target_code} = {function}({target_code}, {code});"),
+                );
+                return Ok(());
+            }
+        }
         let operator = match op {
             AssignOp::Assign => "=",
             AssignOp::Add => "+=",
@@ -1288,8 +1506,9 @@ impl Generator<'_> {
                             Kind::Array { .. }
                             | Kind::Ref(_)
                             | Kind::Struct(_)
+                            | Kind::PowerSet(_)
                             | Kind::Null => return Err(
-                                "native backend: arrays, references, structures, and NULL cannot be passed to WRITE/WRITELINE yet"
+                                "native backend: arrays, references, structures, powersets, and NULL cannot be passed to WRITE/WRITELINE yet"
                                     .to_owned(),
                             ),
                         };
@@ -1343,6 +1562,9 @@ impl Generator<'_> {
                 Kind::Array { .. } => comparisons.push(format!(
                     "(memcmp(&{left_field}, &{right_field}, sizeof({left_field})) == 0)"
                 )),
+                Kind::PowerSet(_) => {
+                    comparisons.push(format!("(z_ps_equal({left_field}, {right_field}))"))
+                }
                 Kind::Ref(_) | Kind::Null => {
                     comparisons.push(format!("({left_field} == {right_field})"))
                 }
@@ -1395,6 +1617,38 @@ impl Generator<'_> {
         }
     }
 
+    fn emit_powerset_literal(
+        &mut self,
+        elements: &[crate::ast::ArrayTupleElement],
+        member: types::PowerSetMember,
+    ) -> Result<(String, Kind), String> {
+        if elements.is_empty() {
+            return Ok(("z_ps_empty()".to_owned(), Kind::PowerSet(member)));
+        }
+        let mut ranges = Vec::with_capacity(elements.len());
+        for element in elements {
+            if element.labels.is_some() {
+                return Err(
+                    "native backend: labelled powerset literals are not supported yet".to_owned(),
+                );
+            }
+            let (low, _) = self.emit_expr(&element.value)?;
+            let high = match &element.range_end {
+                Some(end) => self.emit_expr(end)?.0,
+                None => low.clone(),
+            };
+            ranges.push(format!("{{{low}, {high}}}"));
+        }
+        Ok((
+            format!(
+                "z_ps_literal({}, (ZPSRange[]){{{}}})",
+                ranges.len(),
+                ranges.join(", ")
+            ),
+            Kind::PowerSet(member),
+        ))
+    }
+
     fn emit_expr(&mut self, expr: &Expr) -> Result<(String, Kind), String> {
         match expr {
             Expr::Integer { value, .. } => Ok((format!("INT64_C({value})"), Kind::Int)),
@@ -1404,6 +1658,15 @@ impl Generator<'_> {
             Expr::Char { value, .. } => Ok(((*value as u32).to_string(), Kind::Char)),
             Expr::String { value, .. } => Ok((format!("\"{}\"", c_escape(value)), Kind::String)),
             Expr::Null { .. } => Ok(("NULL".to_owned(), Kind::Null)),
+            Expr::ArrayTuple { elements, span } => {
+                let Some(Type::PowerSet(set)) = self.check.types.get(span) else {
+                    return Err(
+                        "native backend: array literals are only supported in array assignments yet"
+                            .to_owned(),
+                    );
+                };
+                self.emit_powerset_literal(elements, set.member)
+            }
             Expr::Field { .. } => self.emit_field_location(expr),
             Expr::AddressOf { target, .. } => match target.as_ref() {
                 Expr::Name { name, .. } => {
@@ -1501,14 +1764,34 @@ impl Generator<'_> {
                                             .to_owned(),
                                     );
                                 }
-                                let comparison = if *op == BinaryOp::Eq { "== 0" } else { "!= 0" };
-                                return Ok((
-                                    format!(
-                                        "(memcmp({}, {}, sizeof({})) {comparison})",
+                                let equality = match left_info.kind {
+                                    Kind::Array {
+                                        element: ScalarKind::PowerSet(_),
+                                        total,
+                                        ..
+                                    } => format!(
+                                        "z_ps_array_equal({}, {}, {total})",
+                                        left_info.c_name, right_info.c_name
+                                    ),
+                                    Kind::Array {
+                                        element: ScalarKind::String,
+                                        total,
+                                        ..
+                                    } => format!(
+                                        "z_string_array_equal({}, {}, {total})",
+                                        left_info.c_name, right_info.c_name
+                                    ),
+                                    _ => format!(
+                                        "(memcmp({}, {}, sizeof({})) == 0)",
                                         left_info.c_name, right_info.c_name, left_info.c_name
                                     ),
-                                    Kind::Bool,
-                                ));
+                                };
+                                let code = if *op == BinaryOp::Eq {
+                                    equality
+                                } else {
+                                    format!("!({equality})")
+                                };
+                                return Ok((code, Kind::Bool));
                             }
                         }
                     }
@@ -1560,6 +1843,67 @@ impl Generator<'_> {
                         return Ok((equality, Kind::Bool));
                     }
                     return Ok((format!("!({equality})"), Kind::Bool));
+                }
+                if *op == BinaryOp::In {
+                    if !matches!(right_kind, Kind::PowerSet(_)) {
+                        return Err(
+                            "native backend: the right operand of IN must be a powerset".to_owned()
+                        );
+                    }
+                    return Ok((format!("z_ps_contains({right}, {left})"), Kind::Bool));
+                }
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+                    && matches!(left_kind, Kind::PowerSet(_))
+                {
+                    if !matches!(right_kind, Kind::PowerSet(_)) {
+                        return Err(
+                            "native backend: powerset comparison requires matching modes"
+                                .to_owned(),
+                        );
+                    }
+                    let equality = format!("z_ps_equal({left}, {right})");
+                    let code = if *op == BinaryOp::Eq {
+                        equality
+                    } else {
+                        format!("!({equality})")
+                    };
+                    return Ok((code, Kind::Bool));
+                }
+                if matches!(
+                    op,
+                    BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+                ) && matches!(left_kind, Kind::PowerSet(_))
+                {
+                    if !matches!(right_kind, Kind::PowerSet(_)) {
+                        return Err(
+                            "native backend: powerset comparison requires matching modes"
+                                .to_owned(),
+                        );
+                    }
+                    let function = match op {
+                        BinaryOp::Lt => "z_ps_lt",
+                        BinaryOp::Le => "z_ps_le",
+                        BinaryOp::Gt => "z_ps_gt",
+                        BinaryOp::Ge => "z_ps_ge",
+                        _ => unreachable!(),
+                    };
+                    return Ok((format!("{function}({left}, {right})"), Kind::Bool));
+                }
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+                    && matches!(left_kind, Kind::PowerSet(_))
+                {
+                    if !matches!(right_kind, Kind::PowerSet(_)) {
+                        return Err(
+                            "native backend: powerset operation requires matching modes".to_owned()
+                        );
+                    }
+                    let function = match op {
+                        BinaryOp::Add => "z_ps_union",
+                        BinaryOp::Sub => "z_ps_difference",
+                        BinaryOp::Mul => "z_ps_intersection",
+                        _ => unreachable!(),
+                    };
+                    return Ok((format!("{function}({left}, {right})"), left_kind));
                 }
                 if matches!(
                     op,
@@ -1701,6 +2045,7 @@ fn scalar_kind(kind: Kind) -> Option<ScalarKind> {
         Kind::Char => Some(ScalarKind::Char),
         Kind::String => Some(ScalarKind::String),
         Kind::Struct(id) => Some(ScalarKind::Struct(id)),
+        Kind::PowerSet(member) => Some(ScalarKind::PowerSet(member)),
         _ => None,
     }
 }
@@ -1711,6 +2056,7 @@ fn scalar_ref_target(target: types::RefTarget) -> Result<ScalarKind, String> {
         RefTarget::Int(_) => Ok(ScalarKind::Int),
         RefTarget::Bool => Ok(ScalarKind::Bool),
         RefTarget::Struct(id) => Ok(ScalarKind::Struct(id)),
+        RefTarget::PowerSet(set) => Ok(ScalarKind::PowerSet(set.member)),
         RefTarget::Char | RefTarget::WChar => Ok(ScalarKind::Char),
         RefTarget::String
         | RefTarget::BoundedString { .. }
@@ -1729,6 +2075,7 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
         Type::Bool => Ok(Kind::Bool),
         Type::Set(_) => Ok(Kind::Int),
         Type::Struct(id) => Ok(Kind::Struct(id)),
+        Type::PowerSet(set) => Ok(Kind::PowerSet(set.member)),
         Type::Char | Type::WChar => Ok(Kind::Char),
         Type::String | Type::BoundedString { .. } | Type::WString | Type::WBoundedString { .. } => {
             Ok(Kind::String)
@@ -1739,6 +2086,7 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
                 Type::Bool => ScalarKind::Bool,
                 Type::Set(_) => ScalarKind::Int,
                 Type::Struct(id) => ScalarKind::Struct(id),
+                Type::PowerSet(set) => ScalarKind::PowerSet(set.member),
                 Type::Char => ScalarKind::Char,
                 Type::String
                 | Type::BoundedString { .. }
@@ -1773,6 +2121,7 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
                 Type::Bool => ScalarKind::Bool,
                 Type::Set(_) => ScalarKind::Int,
                 Type::Struct(id) => ScalarKind::Struct(id),
+                Type::PowerSet(set) => ScalarKind::PowerSet(set.member),
                 Type::Char => ScalarKind::Char,
                 Type::String
                 | Type::BoundedString { .. }

@@ -1511,6 +1511,149 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_powersets() {
+    let dir = TempDir::new("z200c-native-powersets");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativeps"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  NEWMODE Flags = STRUCT (on POWERSET CHAR, count INT);
+  DCL f Flags;
+  DCL g Flags;
+  DCL base POWERSET CHAR INIT := ['a':'c'];
+  DCL extra POWERSET CHAR INIT := ['x'];
+  DCL digits POWERSET INT;
+  DCL two POWERSET INT INIT := [2];
+  DCL middle POWERSET INT INIT := [3:4];
+  DCL three POWERSET INT INIT := [3];
+  DCL sets ARRAY(1:2) POWERSET INT;
+  DCL copy ARRAY(1:2) POWERSET INT;
+
+  F: PROC (left POWERSET CHAR, right POWERSET CHAR) RETURNS (POWERSET CHAR);
+    RETURN left + right;
+  END F;
+
+  P: PROC (io POWERSET CHAR INOUT);
+    io +:= ['z'];
+  END P;
+
+  base := ['a':'c'];
+  ASSERT 'b' IN base;
+  ASSERT NOT ('z' IN base);
+  ASSERT base = ['a', 'b', 'c'];
+
+  digits := [1, 3:5];
+  ASSERT 3 IN digits;
+  ASSERT NOT (2 IN digits);
+  ASSERT digits = [1, 3, 4, 5];
+  ASSERT digits + two = [1:5];
+  ASSERT digits * middle = [3, 4];
+  ASSERT digits - three = [1, 4, 5];
+
+  f.on := base;
+  f.count := 3;
+  g := f;
+  ASSERT g.on = ['a':'c'];
+  g.on -:= ['b'];
+  ASSERT g.on = ['a', 'c'];
+  ASSERT f.on = ['a':'c'];
+
+  ASSERT F(base, extra) = ['a':'c', 'x'];
+  P(base);
+  ASSERT base = ['a':'c', 'z'];
+  ASSERT 'z' IN base;
+
+  sets(1) := [1, 3];
+  sets(2) := [2:4];
+  copy := sets;
+  ASSERT sets = copy;
+  ASSERT 3 IN sets(1);
+  copy(2) := [9];
+  ASSERT sets /= copy;
+
+  base := [];
+  ASSERT base = [];
+  ASSERT NOT ('a' IN base);
+  WRITELINE("powerset ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativeps");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "powerset ok
+"
+    );
+}
+
+#[test]
+fn native_unordered_powerset_comparison_fails_cleanly() {
+    let dir = TempDir::new("z200c-native-powerset-order");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativepsorder"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL a POWERSET INT;
+  DCL b POWERSET INT;
+  a := [1];
+  b := [2];
+  ASSERT a < b;
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativepsorder");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(!run.status.success());
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("E0500: powersets are not ordered"),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
@@ -1528,7 +1671,7 @@ entry = "src/main.ch"
         dir.join("src/main.ch"),
         r#"
 M: MODULE
-  DCL values ARRAY(1:2) POWERSET INT;
+  DCL values ARRAY(1:2) FLOAT;
 END M;
 "#,
     )
