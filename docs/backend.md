@@ -28,7 +28,8 @@ reference implementation for the complete supported language.
 - initializers,
 - assignments to simple variables,
 - integer/boolean arithmetic, comparisons, and logical operators,
-- character-string equality, inequality, and ordering comparisons,
+- character-string equality, inequality, ordering comparisons, concatenation, and
+  `//:=` concatenation assignment,
 - `ASSERT`,
 - `IF` / `ELSE IF` / `ELSE`,
 - `BEGIN` blocks with scoped local declarations and shadowing,
@@ -56,6 +57,7 @@ Generated code is C11 with `int64_t` integers, `int` booleans/characters, and
 - exceptions and handlers,
 - processes, regions, tasks, signals, and timing,
 - runtime range/overflow checks,
+- string memory reclamation (generated concatenations allocate and are not freed),
 - package dependencies and grant linking,
 - integer width enforcement beyond the C integer representation.
 
