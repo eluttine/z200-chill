@@ -84,12 +84,26 @@ pub enum ApplyResolution {
 /// The checker's result: diagnostics plus expression annotations that the
 /// interpreter consumes instead of re-inferring modes.
 #[derive(Debug, Clone)]
+pub enum ImportedKind {
+    Var(Box<Type>),
+    Proc,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportedSymbol {
+    pub module: usize,
+    pub name: String,
+    pub kind: ImportedKind,
+}
+
 pub struct CheckResult {
     pub diagnostics: Vec<Diagnostic>,
     pub types: HashMap<Span, Type>,
     pub resolutions: HashMap<Span, ApplyResolution>,
     /// Concrete indices assigned by each entry of a labelled array tuple.
     pub labelled_tuples: HashMap<Span, Vec<Vec<i128>>>,
+    /// Module-level symbols brought in through `SEIZE`.
+    pub imports: HashMap<(usize, String), ImportedSymbol>,
 }
 
 pub fn check(program: &Program, profile: WidthProfile) -> Result<(), Error> {
@@ -146,6 +160,7 @@ pub fn analyze_with_externals(
                 types: HashMap::new(),
                 resolutions: HashMap::new(),
                 labelled_tuples: HashMap::new(),
+                imports: HashMap::new(),
             };
         }
     };
@@ -157,6 +172,7 @@ pub fn analyze_with_externals(
                 types: HashMap::new(),
                 resolutions: HashMap::new(),
                 labelled_tuples: HashMap::new(),
+                imports: HashMap::new(),
             };
         }
     };
@@ -197,6 +213,7 @@ pub fn analyze_with_externals(
         resolutions: HashMap::new(),
         exception_sets: Vec::new(),
         labelled_tuples: HashMap::new(),
+        imports: HashMap::new(),
     };
     for (index, module) in program.modules.iter().enumerate() {
         checker.current_module = index;
@@ -218,6 +235,7 @@ pub fn analyze_with_externals(
         types: checker.types,
         resolutions: checker.resolutions,
         labelled_tuples: checker.labelled_tuples,
+        imports: checker.imports,
     }
 }
 
@@ -227,6 +245,7 @@ fn external_error(message: String) -> CheckResult {
         types: HashMap::new(),
         resolutions: HashMap::new(),
         labelled_tuples: HashMap::new(),
+        imports: HashMap::new(),
     }
 }
 
@@ -287,6 +306,7 @@ struct Checker {
     /// checked. A new set is pushed around procedure/module bodies and handlers.
     exception_sets: Vec<HashSet<String>>,
     labelled_tuples: HashMap<Span, Vec<Vec<i128>>>,
+    imports: HashMap<(usize, String), ImportedSymbol>,
 }
 
 impl Checker {
@@ -972,6 +992,21 @@ impl Checker {
         export: &program::ExportEntry,
         span: Span,
     ) -> Result<(), Error> {
+        let imported = match &export.kind {
+            ExportKind::Var(ty) => Some(ImportedKind::Var(Box::new(*ty))),
+            ExportKind::Proc(_) => Some(ImportedKind::Proc),
+            ExportKind::Mode(_) => None,
+        };
+        if let Some(kind) = imported {
+            self.imports.insert(
+                (self.current_module, local_name.to_owned()),
+                ImportedSymbol {
+                    module: export.module,
+                    name: export.name.clone(),
+                    kind,
+                },
+            );
+        }
         match &export.kind {
             ExportKind::Var(ty) => self.declare_var(local_name, *ty, span),
             ExportKind::Proc(signature) => self.declare_proc(local_name, signature.clone(), span),

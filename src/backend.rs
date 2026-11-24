@@ -9,7 +9,7 @@ use crate::ast::{
     ProcDef, Program, UnaryOp,
 };
 use crate::modes::ModeTable;
-use crate::sema::{ApplyResolution, CheckResult};
+use crate::sema::{ApplyResolution, CheckResult, ImportedKind, ImportedSymbol};
 use crate::types::{self, ModeId, Type};
 use std::collections::HashMap;
 
@@ -162,10 +162,11 @@ pub fn generate(
     modes: &ModeTable,
     module_modes: &[HashMap<String, Type>],
 ) -> Result<String, String> {
-    let modules: Vec<&Module> = program
+    let modules: Vec<(usize, &Module)> = program
         .modules
         .iter()
-        .filter(|module| !module.kind.is_spec())
+        .enumerate()
+        .filter(|(_, module)| !module.kind.is_spec())
         .collect();
 
     let mut out = String::new();
@@ -484,7 +485,7 @@ static int z_string_array_equal(const char **left, const char **right, size_t co
     out.push('\n');
 
     // Module globals.
-    for (index, module) in modules.iter().enumerate() {
+    for &(index, module) in &modules {
         for declaration in &module.declarations {
             let Declaration::Var(vars) = declaration else {
                 continue;
@@ -501,7 +502,7 @@ static int z_string_array_equal(const char **left, const char **right, size_t co
     out.push('\n');
 
     // Procedure prototypes.
-    for (index, module) in modules.iter().enumerate() {
+    for &(index, module) in &modules {
         for declaration in &module.declarations {
             if let Declaration::Proc(proc_def) = declaration {
                 emit_proc_signature(&mut out, index, proc_def, module_modes)?;
@@ -512,7 +513,7 @@ static int z_string_array_equal(const char **left, const char **right, size_t co
     out.push('\n');
 
     // Procedure definitions.
-    for (index, module) in modules.iter().enumerate() {
+    for &(index, module) in &modules {
         for declaration in &module.declarations {
             if let Declaration::Proc(proc_def) = declaration {
                 emit_proc(
@@ -529,14 +530,14 @@ static int z_string_array_equal(const char **left, const char **right, size_t co
     }
 
     // Module run functions.
-    for (index, module) in modules.iter().enumerate() {
+    for &(index, module) in &modules {
         out.push_str(&format!("static void run_module_{index}(void) {{\n"));
         let mut generator = Generator {
             check,
             module_index: index,
             modes,
             module_modes,
-            vars: module_vars(module, index, module_modes),
+            vars: module_vars(module, index, module_modes, &check.imports),
             indent: 1,
             result: None,
             result_wrapper: None,
@@ -555,7 +556,7 @@ static int z_string_array_equal(const char **left, const char **right, size_t co
     }
 
     out.push_str("int main(void) {\n");
-    for index in 0..modules.len() {
+    for &(index, _) in &modules {
         out.push_str(&format!("    run_module_{index}();\n"));
     }
     out.push_str(&format!("    (void)\"{}\";\n", c_escape(package)));
@@ -612,6 +613,7 @@ fn module_vars(
     module: &Module,
     index: usize,
     module_modes: &[HashMap<String, Type>],
+    imports: &HashMap<(usize, String), ImportedSymbol>,
 ) -> HashMap<String, VarInfo> {
     let mut vars = HashMap::new();
     for declaration in &module.declarations {
@@ -624,6 +626,22 @@ fn module_vars(
                     var.name.clone(),
                     VarInfo {
                         c_name: global_name(index, &var.name),
+                        kind,
+                    },
+                );
+            }
+        }
+    }
+    for ((owner, local), symbol) in imports {
+        if *owner != index {
+            continue;
+        }
+        if let ImportedKind::Var(ty) = &symbol.kind {
+            if let Ok(kind) = kind_from_type(**ty) {
+                vars.insert(
+                    local.clone(),
+                    VarInfo {
+                        c_name: global_name(symbol.module, &symbol.name),
                         kind,
                     },
                 );
@@ -647,10 +665,10 @@ fn array_result_wrapper(module: usize, name: &str) -> String {
 
 fn emit_array_result_typedefs(
     out: &mut String,
-    modules: &[&Module],
+    modules: &[(usize, &Module)],
     module_modes: &[HashMap<String, Type>],
 ) -> Result<(), String> {
-    for (index, module) in modules.iter().enumerate() {
+    for &(index, module) in modules {
         for declaration in &module.declarations {
             let Declaration::Proc(proc_def) = declaration else {
                 continue;
@@ -748,7 +766,7 @@ fn emit_proc(
         module_index: module,
         modes,
         module_modes,
-        vars: module_vars(owner, module, module_modes),
+        vars: module_vars(owner, module, module_modes, &check.imports),
         indent: 1,
         result: result_kind.map(|kind| (format!("__result_{}", c_ident(&proc_def.name)), kind)),
         result_wrapper,
@@ -1737,7 +1755,8 @@ impl Generator<'_> {
                         self.check.resolutions.get(span)
                     {
                         let lowered = self.lower_call_args(args, signature)?;
-                        let name = proc_name(self.module_index, name);
+                        let (target_module, target_name) = self.resolved_proc_name(name);
+                        let name = proc_name(target_module, &target_name);
                         self.line(out, &format!("{name}({});", lowered.join(", ")));
                         return Ok(());
                     }
@@ -2314,6 +2333,19 @@ impl Generator<'_> {
         }
     }
 
+    fn resolved_proc_name(&self, name: &str) -> (usize, String) {
+        if let Some(symbol) = self
+            .check
+            .imports
+            .get(&(self.module_index, name.to_owned()))
+        {
+            if matches!(symbol.kind, ImportedKind::Proc) {
+                return (symbol.module, symbol.name.clone());
+            }
+        }
+        (self.module_index, name.to_owned())
+    }
+
     fn emit_procedure_call(
         &mut self,
         name: &str,
@@ -2327,7 +2359,8 @@ impl Generator<'_> {
             return Err("native backend: procedure argument count mismatch".to_owned());
         }
         let lowered = self.lower_call_args(args, signature)?;
-        let name = proc_name(self.module_index, name);
+        let (target_module, target_name) = self.resolved_proc_name(name);
+        let name = proc_name(target_module, &target_name);
         let call = format!("{name}({})", lowered.join(", "));
         match signature.result {
             Some(ty) => {

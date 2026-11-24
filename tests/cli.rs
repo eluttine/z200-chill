@@ -2020,6 +2020,67 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_cross_module_grants() {
+    let dir = TempDir::new("z200c-native-grants");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativegrants"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+Counter: SPEC MODULE
+  GRANT value, Bump;
+  DCL value INT;
+  Bump: PROC () END;
+END Counter;
+
+Counter: MODULE
+  DCL value INT INIT := 40;
+
+  Bump: PROC ();
+    value := value + 1;
+  END Bump;
+END Counter;
+
+Driver: MODULE
+  SEIZE value, Bump;
+  ASSERT value = 40;
+  Bump();
+  ASSERT value = 41;
+  Bump();
+  ASSERT value = 42;
+  WRITELINE("cross module ok");
+END Driver;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativegrants");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "cross module ok
+"
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
