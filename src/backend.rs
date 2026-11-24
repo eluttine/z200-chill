@@ -315,10 +315,47 @@ impl Generator<'_> {
                     self.vars.get(&var.name).cloned().ok_or_else(|| {
                         format!("native backend: unknown variable `{}`", var.name)
                     })?;
+                if matches!(info.kind, Kind::Array { .. }) {
+                    self.emit_array_literal(out, &info, &init.value, var.span)?;
+                    continue;
+                }
                 let (code, _) = self.emit_expr(&init.value)?;
                 self.line(out, &format!("{} = {};", info.c_name, code));
             }
         }
+        Ok(())
+    }
+
+    fn emit_array_literal(
+        &mut self,
+        out: &mut String,
+        info: &VarInfo,
+        value: &Expr,
+        span: crate::lexer::Span,
+    ) -> Result<(), String> {
+        let Kind::Array { count, .. } = info.kind else {
+            return Err("native backend: internal: not an array initializer".to_owned());
+        };
+        let Expr::ArrayTuple { elements, .. } = value else {
+            return Err("native backend: array initializers must be array literals".to_owned());
+        };
+        if elements.len() != count {
+            return Err(format!(
+                "native backend: array literal has {} element(s), expected {count}",
+                elements.len()
+            ));
+        }
+        for (index, item) in elements.iter().enumerate() {
+            if item.labels.is_some() || item.range_end.is_some() {
+                return Err(
+                    "native backend: labelled or ranged array literals are not supported yet"
+                        .to_owned(),
+                );
+            }
+            let (code, _) = self.emit_expr(&item.value)?;
+            self.line(out, &format!("{}[{}] = {code};", info.c_name, index));
+        }
+        let _ = span;
         Ok(())
     }
 
@@ -334,14 +371,15 @@ impl Generator<'_> {
                         let kind = mode_kind(&var.mode)?;
                         let c_name = c_ident(&format!("l_{}", var.name));
                         if matches!(kind, Kind::Array { .. }) {
-                            if var.init.is_some() {
-                                return Err(
-                                    "native backend: array initializers are not supported yet"
-                                        .to_owned(),
-                                );
-                            }
                             self.line(out, &format!("{} = {{0}};", kind.c_declaration(&c_name)));
-                            self.vars.insert(var.name.clone(), VarInfo { c_name, kind });
+                            let info = VarInfo {
+                                c_name: c_name.clone(),
+                                kind,
+                            };
+                            if let Some(init) = &var.init {
+                                self.emit_array_literal(out, &info, &init.value, var.span)?;
+                            }
+                            self.vars.insert(var.name.clone(), info);
                             continue;
                         }
                         let init = match &var.init {
@@ -556,48 +594,52 @@ impl Generator<'_> {
         op: AssignOp,
         value: &Expr,
     ) -> Result<(), String> {
-        let target_code = match target {
-            Expr::Name { name, .. } => {
-                let Some(info) = self.vars.get(name).cloned() else {
-                    return Err(format!("native backend: unknown variable `{name}`"));
-                };
-                if matches!(info.kind, Kind::Array { .. }) {
-                    return Err(
-                        "native backend: whole-array assignment is not supported yet".to_owned(),
-                    );
+        let target_code =
+            match target {
+                Expr::Name { name, .. } => {
+                    let Some(info) = self.vars.get(name).cloned() else {
+                        return Err(format!("native backend: unknown variable `{name}`"));
+                    };
+                    if matches!(info.kind, Kind::Array { .. }) {
+                        if op != AssignOp::Assign {
+                            return Err(
+                            "native backend: compound whole-array assignment is not supported yet"
+                                .to_owned(),
+                        );
+                        }
+                        self.emit_array_literal(out, &info, value, target.span())?;
+                        return Ok(());
+                    }
+                    info.c_name
                 }
-                info.c_name
-            }
-            Expr::Apply {
-                name, args, span, ..
-            } => {
-                if args.len() != 1 {
-                    return Err(
-                        "native backend: multidimensional array targets are not supported yet"
-                            .to_owned(),
-                    );
+                Expr::Apply {
+                    name, args, span, ..
+                } => {
+                    if args.len() != 1 {
+                        return Err(
+                            "native backend: multidimensional array targets are not supported yet"
+                                .to_owned(),
+                        );
+                    }
+                    let Some(info) = self.vars.get(name).cloned() else {
+                        return Err(format!("native backend: unknown array `{name}`"));
+                    };
+                    let Kind::Array { low, .. } = info.kind else {
+                        return Err(format!("native backend: `{name}` is not an array"));
+                    };
+                    let Some(ApplyResolution::ArrayIndex(Type::Array(_))) =
+                        self.check.resolutions.get(span)
+                    else {
+                        return Err(format!("native backend: `{name}` is not an indexed array"));
+                    };
+                    let (index, _) = self.emit_expr(&args[0])?;
+                    format!("{}[({index}) - ({low})]", info.c_name)
                 }
-                let Some(info) = self.vars.get(name).cloned() else {
-                    return Err(format!("native backend: unknown array `{name}`"));
-                };
-                let Kind::Array { low, .. } = info.kind else {
-                    return Err(format!("native backend: `{name}` is not an array"));
-                };
-                let Some(ApplyResolution::ArrayIndex(Type::Array(_))) =
-                    self.check.resolutions.get(span)
-                else {
-                    return Err(format!("native backend: `{name}` is not an indexed array"));
-                };
-                let (index, _) = self.emit_expr(&args[0])?;
-                format!("{}[({index}) - ({low})]", info.c_name)
-            }
-            _ => {
-                return Err(
+                _ => return Err(
                     "native backend: this assignment target is not supported in native code yet"
                         .to_owned(),
-                )
-            }
-        };
+                ),
+            };
         let (code, _) = self.emit_expr(value)?;
         let operator = match op {
             AssignOp::Assign => "=",

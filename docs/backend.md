@@ -20,7 +20,8 @@ else.
 - procedures with `IN` parameters and optional integer/boolean/character/string results,
 - procedure calls, `RETURN`, and `RESULT`,
 - integer conversions in the generated C representation,
-- one-dimensional scalar arrays with indexing and element assignment,
+- one-dimensional scalar arrays with indexing, element assignment, initializers, and
+  array-literal assignment,
 - `WRITE` and `WRITELINE` with one value argument.
 
 Generated code is C11 with `int64_t` integers, `int` booleans/characters, and
@@ -31,7 +32,7 @@ Generated code is C11 with `int64_t` integers, `int` booleans/characters, and
 - non-`IN` procedure parameters,
 - generics,
 - moreta modes and objects,
-- multidimensional arrays and array initializers,
+- multidimensional arrays,
 - sets, powersets, references, text, and buffers,
 - exceptions and handlers,
 - processes, regions, tasks, signals, and timing,
