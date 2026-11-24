@@ -70,8 +70,8 @@ all existing tests pass with no new special cases.
       assignments, `ASSERT`, `IF`, `WRITE`/`WRITELINE`, procedures with `IN`
       parameters, calls, `RETURN`, `RESULT`, integer conversions, one-dimensional
       scalar arrays (including multidimensional), array initializers/literals,
-      same-mode array copying and comparison, loop actions, multi-selector `CASE`, and
-      scoped `BEGIN` blocks.
+      same-mode array copying and comparison, string comparisons, loop actions,
+      multi-selector `CASE`, and scoped `BEGIN` blocks.
 - [ ] Extend native codegen to procedures, calls, arrays, text, references, exceptions,
       and a dedicated CHILL runtime ABI.
 - [-] Full native concurrency and moreta object lowering remain deferred.

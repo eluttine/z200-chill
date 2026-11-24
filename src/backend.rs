@@ -984,8 +984,37 @@ impl Generator<'_> {
                         }
                     }
                 }
-                let (left, _) = self.emit_expr(left)?;
-                let (right, _) = self.emit_expr(right)?;
+                let (left, left_kind) = self.emit_expr(left)?;
+                let (right, right_kind) = self.emit_expr(right)?;
+                if matches!(
+                    op,
+                    BinaryOp::Eq
+                        | BinaryOp::Ne
+                        | BinaryOp::Lt
+                        | BinaryOp::Le
+                        | BinaryOp::Gt
+                        | BinaryOp::Ge
+                ) && (left_kind == Kind::String || right_kind == Kind::String)
+                {
+                    if left_kind != Kind::String || right_kind != Kind::String {
+                        return Err(
+                            "native backend: string comparison requires two strings".to_owned()
+                        );
+                    }
+                    let comparison = match op {
+                        BinaryOp::Eq => "== 0",
+                        BinaryOp::Ne => "!= 0",
+                        BinaryOp::Lt => "< 0",
+                        BinaryOp::Le => "<= 0",
+                        BinaryOp::Gt => "> 0",
+                        BinaryOp::Ge => ">= 0",
+                        _ => unreachable!(),
+                    };
+                    return Ok((
+                        format!("(strcmp({left}, {right}) {comparison})"),
+                        Kind::Bool,
+                    ));
+                }
                 let (operator, kind) = match op {
                     BinaryOp::Or | BinaryOp::OrIf => ("||", Kind::Bool),
                     BinaryOp::And | BinaryOp::AndIf => ("&&", Kind::Bool),

@@ -7,6 +7,20 @@ The interpreter remains the reference implementation. The native backend deliber
 accepts only a small, deterministic subset and reports a clear diagnostic for anything
 else.
 
+## Backend strategy
+
+This project uses a two-tier native strategy:
+
+- **C backend** — a portable bootstrap/fallback backend aimed at a broad
+  sequential/static subset: procedures, arrays, text, references, exceptions, runtime
+  checks, and module linking.
+- **LLVM backend** — the eventual full-native target for optimized code, a dedicated
+  CHILL runtime ABI, moreta lowering, and concurrency.
+
+The C backend is not intended to become the sole full-language backend. Full CHILL
+concurrency is unlikely to be implemented in generated C. The interpreter remains the
+reference implementation for the complete supported language.
+
 ## Current native subset
 
 - one or more non-spec modules,
@@ -14,6 +28,7 @@ else.
 - initializers,
 - assignments to simple variables,
 - integer/boolean arithmetic, comparisons, and logical operators,
+- character-string equality, inequality, and ordering comparisons,
 - `ASSERT`,
 - `IF` / `ELSE IF` / `ELSE`,
 - `BEGIN` blocks with scoped local declarations and shadowing,

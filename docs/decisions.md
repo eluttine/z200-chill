@@ -164,6 +164,14 @@ See [contexts.md](contexts.md).
 
 ---
 
+## 10.17 Native backend strategy (resolved)
+
+The project uses a two-tier native strategy. The C backend is a portable
+bootstrap/fallback target covering a broad sequential/static subset. The LLVM backend is
+the planned route to full native language support, a dedicated runtime ABI, moreta
+lowering, and concurrency. The C backend is not intended to become the sole
+full-language backend; the interpreter remains the complete reference implementation.
+
 ## 10.16 First-release concurrency policy (resolved)
 
 The first release targets **language coverage and static semantics** with a
