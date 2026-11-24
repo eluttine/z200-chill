@@ -992,21 +992,32 @@ impl Generator<'_> {
             Expr::Char { value, .. } => Ok(((*value as u32).to_string(), Kind::Char)),
             Expr::String { value, .. } => Ok((format!("\"{}\"", c_escape(value)), Kind::String)),
             Expr::Null { .. } => Ok(("NULL".to_owned(), Kind::Null)),
-            Expr::AddressOf { target, .. } => {
-                let Expr::Name { name, .. } = target.as_ref() else {
-                    return Err(
-                        "native backend: references to fields or array elements are not supported yet"
-                            .to_owned(),
-                    );
-                };
-                let Some(info) = self.vars.get(name).cloned() else {
-                    return Err(format!("native backend: unknown variable `{name}`"));
-                };
-                let element = scalar_kind(info.kind).ok_or_else(|| {
-                    "native backend: only scalar references are supported yet".to_owned()
-                })?;
-                Ok((format!("&{}", info.c_name), Kind::Ref(element)))
-            }
+            Expr::AddressOf { target, .. } => match target.as_ref() {
+                Expr::Name { name, .. } => {
+                    let Some(info) = self.vars.get(name).cloned() else {
+                        return Err(format!("native backend: unknown variable `{name}`"));
+                    };
+                    let element = scalar_kind(info.kind).ok_or_else(|| {
+                        "native backend: only scalar references are supported yet".to_owned()
+                    })?;
+                    Ok((format!("&{}", info.c_name), Kind::Ref(element)))
+                }
+                Expr::Apply { name, args, span } => {
+                    let Some(info) = self.vars.get(name).cloned() else {
+                        return Err(format!("native backend: unknown array `{name}`"));
+                    };
+                    let (code, kind) = self.array_index_expr(&info, args, *span)?;
+                    let element = scalar_kind(kind).ok_or_else(|| {
+                        "native backend: only scalar array-element references are supported yet"
+                            .to_owned()
+                    })?;
+                    Ok((format!("&{code}"), Kind::Ref(element)))
+                }
+                _ => Err(
+                    "native backend: references to fields or composite locations are not supported yet"
+                        .to_owned(),
+                ),
+            },
             Expr::Deref { base, .. } => {
                 let (code, kind) = self.emit_expr(base)?;
                 let Kind::Ref(element) = kind else {
