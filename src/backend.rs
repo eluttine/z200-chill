@@ -491,6 +491,20 @@ impl Generator<'_> {
                             .to_owned(),
                     )
                 }
+                Action::Begin {
+                    declarations,
+                    actions,
+                    ..
+                } => {
+                    let previous = self.vars.clone();
+                    self.line(out, "{");
+                    self.indent += 1;
+                    self.emit_local_declarations(out, declarations)?;
+                    self.emit_actions(out, actions)?;
+                    self.indent -= 1;
+                    self.line(out, "}");
+                    self.vars = previous;
+                }
                 Action::Case {
                     selectors,
                     alternatives,

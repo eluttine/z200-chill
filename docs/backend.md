@@ -16,6 +16,7 @@ else.
 - integer/boolean arithmetic, comparisons, and logical operators,
 - `ASSERT`,
 - `IF` / `ELSE IF` / `ELSE`,
+- `BEGIN` blocks with scoped local declarations and shadowing,
 - `CASE` with one or more selectors, typed labels, ranges, `(ELSE)`, `(*)`, and
   unparenthesized `ELSE` alternatives,
 - `DO WHILE`, `DO FOR`, `DO FOR EVER`, and unlabelled `EXIT` inside loops,
