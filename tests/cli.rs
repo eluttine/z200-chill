@@ -1211,6 +1211,55 @@ END M;
 }
 
 #[test]
+fn compiles_native_structure_equality_and_field_references() {
+    let dir = TempDir::new("z200c-native-structeq");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativestructeq"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  NEWMODE Point = STRUCT (x INT, y INT);
+  DCL p Point;
+  DCL q Point;
+  DCL r REF INT;
+  p.x := 2;
+  p.y := 3;
+  q := p;
+  ASSERT p = q;
+  q.y := 9;
+  ASSERT p /= q;
+  r := ->q.y;
+  r-> := 7;
+  ASSERT q.y = 7;
+  WRITELINE("structeq ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativestructeq");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "structeq ok\n");
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

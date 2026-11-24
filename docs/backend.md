@@ -32,7 +32,8 @@ reference implementation for the complete supported language.
   `//:=` concatenation assignment,
 - named set modes and set-element constants,
 - named structure modes with scalar/string or nested structure fields, field access,
-  field assignment, and whole-structure assignment,
+  field assignment, whole-structure assignment, structure equality, and references to
+  scalar fields,
 - `READLINE` input,
 - scalar `REF` modes, `NULL`, reference comparison, taking addresses of scalar
   variables and scalar array elements, dereference reads, and dereference assignment,

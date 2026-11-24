@@ -1161,8 +1161,16 @@ impl Generator<'_> {
                     })?;
                     Ok((format!("&{code}"), Kind::Ref(element)))
                 }
+                Expr::Field { .. } => {
+                    let (code, kind) = self.emit_field_location(target.as_ref())?;
+                    let element = scalar_kind(kind).ok_or_else(|| {
+                        "native backend: only scalar structure-field references are supported yet"
+                            .to_owned()
+                    })?;
+                    Ok((format!("&{code}"), Kind::Ref(element)))
+                }
                 _ => Err(
-                    "native backend: references to fields or composite locations are not supported yet"
+                    "native backend: references to composite locations are not supported yet"
                         .to_owned(),
                 ),
             },
@@ -1265,6 +1273,23 @@ impl Generator<'_> {
                     };
                     return Ok((
                         format!("(strcmp({left}, {right}) {comparison})"),
+                        Kind::Bool,
+                    ));
+                }
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne) && matches!(left_kind, Kind::Struct(_))
+                {
+                    if left_kind != right_kind {
+                        return Err(
+                            "native backend: structure comparison requires matching modes"
+                                .to_owned(),
+                        );
+                    }
+                    let comparison = if *op == BinaryOp::Eq { "== 0" } else { "!= 0" };
+                    return Ok((
+                        format!(
+                            "(memcmp(&{}, &{}, sizeof({})) {comparison})",
+                            left, right, left
+                        ),
                         Kind::Bool,
                     ));
                 }
