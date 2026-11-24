@@ -16,7 +16,7 @@ else.
 - integer/boolean arithmetic, comparisons, and logical operators,
 - `ASSERT`,
 - `IF` / `ELSE IF` / `ELSE`,
-- single-selector `CASE` with integer, boolean, character, range, `(ELSE)`, `(*)`, and
+- `CASE` with one or more selectors, typed labels, ranges, `(ELSE)`, `(*)`, and
   unparenthesized `ELSE` alternatives,
 - `DO WHILE`, `DO FOR`, `DO FOR EVER`, and unlabelled `EXIT` inside loops,
 - procedures with `IN` parameters and optional integer/boolean/character/string results,
