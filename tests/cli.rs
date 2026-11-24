@@ -2763,6 +2763,77 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_text_formatting() {
+    let dir = TempDir::new("z200c-native-text-format");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativetextfmt"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL t TEXT(40);
+
+  t := "";
+  WRITETEXT(t, "%C5", 42);
+  ASSERT t = "   42";
+
+  t := "";
+  WRITETEXT(t, "%CL5", 42);
+  ASSERT t = "42   ";
+
+  t := "";
+  WRITETEXT(t, "%CE3", 12345);
+  ASSERT t = "***";
+
+  t := "";
+  WRITETEXT(t, "%B", 10);
+  ASSERT t = "1010";
+
+  t := "";
+  WRITETEXT(t, "%O", 15);
+  ASSERT t = "17";
+
+  t := "";
+  WRITETEXT(t, "%H", 255);
+  ASSERT t = "ff";
+
+  t := "";
+  WRITETEXT(t, "%B5:%C:%H5", 3, "Z", 31);
+  ASSERT t = "   11:Z:   1f";
+
+  WRITELINE("text formats ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativetextfmt");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "text formats ok
+"
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

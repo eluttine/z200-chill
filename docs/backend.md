@@ -70,9 +70,10 @@ reference implementation for the complete supported language.
 - narrow sequential `TEXT(n)` records, including assignment, equality, direct
   procedure parameters, and structure fields,
 - `SETTEXTINDEX` / `GETTEXTINDEX`,
-- disconnected `WRITETEXT` / `READTEXT` with literal text and `%C` conversions for
-  `INT`, `BOOL`, `CHAR`, and character-string writes and `INT`/`BOOL`/`CHAR` reads,
-  including explicit text indices and `TEXTFAIL` length/index checks,
+- disconnected `WRITETEXT` / `READTEXT` with literal text and conversions. Writes
+  support `%C`, `%B`, `%O`, and `%H` for `INT`, `BOOL`, `CHAR`, and strings, including
+  fixed widths, left alignment, padding, and overflow markers. Reads support `%C` for
+  `INT`, `BOOL`, and `CHAR`. Explicit text indices and `TEXTFAIL` checks are supported,
 - `WRITE` and `WRITELINE` with one value argument,
 - runtime checks for array bounds, division/modulo by zero, signed overflow in
   `+`/`-`/`*`/unary `-`, and `NULL` dereference,
@@ -99,7 +100,8 @@ Windows).
 - references to array slices, text, and buffers,
 - dynamic multidimensional slice bounds and slice-valued references,
 - wide, indexed, or array-valued text modes; text associations and file transfer;
-  text formatting widths, editing clauses, and io-control clauses,
+  READTEXT conversion widths, variable text widths, editing clauses, and io-control
+  clauses,
 - exception propagation across separate packages,
 - processes, regions, tasks, signals, and timing,
 - string and powerset memory reclamation (generated concatenations and powerset

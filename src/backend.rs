@@ -658,6 +658,126 @@ static void z_text_write_string(ZText *text, const char *value, size_t limit) {
     z_text_write(text, value, limit);
 }
 
+static void z_text_write_padded(
+    ZText *text,
+    const char *value,
+    size_t limit,
+    int64_t width,
+    int left,
+    char pad,
+    int overflow
+) {
+    size_t len = strlen(value);
+    if (width <= 0) {
+        z_text_write(text, value, limit);
+        return;
+    }
+    size_t target = (size_t)width;
+    if (len > target) {
+        if (overflow) {
+            char *stars = (char *)malloc(target + 1);
+            if (stars == NULL) { z_fail("STORAGE", "out of memory"); }
+            memset(stars, '*', target);
+            stars[target] = '\0';
+            z_text_write(text, stars, limit);
+        } else if (left) {
+            char *copy = (char *)malloc(target + 1);
+            if (copy == NULL) { z_fail("STORAGE", "out of memory"); }
+            memcpy(copy, value, target);
+            copy[target] = '\0';
+            z_text_write(text, copy, limit);
+        } else {
+            z_text_write(text, value + (len - target), limit);
+        }
+        return;
+    }
+    char *out = (char *)malloc(target + 1);
+    if (out == NULL) { z_fail("STORAGE", "out of memory"); }
+    memset(out, pad, target);
+    if (left) {
+        memcpy(out, value, len);
+    } else {
+        memcpy(out + (target - len), value, len);
+    }
+    out[target] = '\0';
+    z_text_write(text, out, limit);
+}
+
+static void z_text_write_int_format(
+    ZText *text,
+    int64_t value,
+    size_t limit,
+    int base,
+    int64_t width,
+    int left,
+    char pad,
+    int overflow
+) {
+    char raw[80];
+    int position = 0;
+    if (value < 0) {
+        raw[position++] = '-';
+    }
+    uint64_t magnitude = value < 0
+        ? (uint64_t)(-(value + 1)) + 1
+        : (uint64_t)value;
+    char digits[64];
+    int count = 0;
+    if (magnitude == 0) {
+        digits[count++] = '0';
+    } else {
+        while (magnitude != 0) {
+            unsigned digit = (unsigned)(magnitude % (uint64_t)base);
+            digits[count++] = (char)(digit < 10 ? '0' + digit : 'a' + (digit - 10));
+            magnitude /= (uint64_t)base;
+        }
+    }
+    while (count > 0) {
+        raw[position++] = digits[--count];
+    }
+    raw[position] = '\0';
+    z_text_write_padded(text, raw, limit, width, left, pad, overflow);
+}
+
+static void z_text_write_bool_format(
+    ZText *text,
+    int value,
+    size_t limit,
+    int64_t width,
+    int left,
+    char pad,
+    int overflow
+) {
+    z_text_write_padded(text, value ? "TRUE" : "FALSE", limit, width, left, pad, overflow);
+}
+
+static void z_text_write_char_format(
+    ZText *text,
+    int value,
+    size_t limit,
+    int64_t width,
+    int left,
+    char pad,
+    int overflow
+) {
+    char buffer[2];
+    buffer[0] = (char)value;
+    buffer[1] = '\0';
+    z_text_write_padded(text, buffer, limit, width, left, pad, overflow);
+}
+
+static void z_text_write_string_format(
+    ZText *text,
+    const char *value,
+    size_t limit,
+    int64_t width,
+    int left,
+    char pad,
+    int overflow
+) {
+    z_text_write_padded(text, value, limit, width, left, pad, overflow);
+}
+
 static void z_text_read_literal(ZText *text, const char *expected, size_t limit) {
     (void)limit;
     if (text->index < 0) {
@@ -2514,28 +2634,62 @@ impl Generator<'_> {
                     ),
                 },
                 FormatOp::Convert(conversion) => {
-                    text_conversion_supported(conversion)?;
+                    text_conversion_supported(conversion, kind)?;
                     let Some(argument) = args.get(io_index) else {
                         return Err(
                             "native backend: text transfer is missing an io argument".to_owned()
                         );
                     };
                     io_index += 1;
+                    let ClauseWidth::Fixed(width) = conversion.width else {
+                        unreachable!("validated above");
+                    };
+                    let left = if conversion.left { 1 } else { 0 };
+                    let overflow = if conversion.overflow { 1 } else { 0 };
+                    let pad = conversion.pad as u32;
                     match kind {
                         TextIo::Write => {
                             let (code, value_kind) = self.emit_expr(argument)?;
-                            let call =
-                                match value_kind {
-                                    Kind::Int(_) => "z_text_write_int",
-                                    Kind::Bool => "z_text_write_bool",
-                                    Kind::Char => "z_text_write_char",
-                                    Kind::String => "z_text_write_string",
-                                    _ => return Err(
-                                        "native backend: this value cannot be written with %C yet"
-                                            .to_owned(),
+                            let formats = format!("{width}, {left}, (char){pad}, {overflow}");
+                            match value_kind {
+                                Kind::Int(_) => {
+                                    let base = match conversion.code {
+                                        ConversionCode::Binary => 2,
+                                        ConversionCode::Octal => 8,
+                                        ConversionCode::Hex => 16,
+                                        ConversionCode::Default => 10,
+                                        ConversionCode::Scientific => unreachable!(),
+                                    };
+                                    self.line(
+                                        out,
+                                        &format!(
+                                            "z_text_write_int_format(&{target}, {code}, {length}, {base}, {formats});"
+                                        ),
+                                    );
+                                }
+                                Kind::Bool => self.line(
+                                    out,
+                                    &format!(
+                                        "z_text_write_bool_format(&{target}, {code}, {length}, {formats});"
                                     ),
-                                };
-                            self.line(out, &format!("{call}(&{target}, {code}, {length});"));
+                                ),
+                                Kind::Char => self.line(
+                                    out,
+                                    &format!(
+                                        "z_text_write_char_format(&{target}, {code}, {length}, {formats});"
+                                    ),
+                                ),
+                                Kind::String => self.line(
+                                    out,
+                                    &format!(
+                                        "z_text_write_string_format(&{target}, {code}, {length}, {formats});"
+                                    ),
+                                ),
+                                _ => return Err(
+                                    "native backend: this value cannot be written with a text conversion yet"
+                                        .to_owned(),
+                                ),
+                            }
                         }
                         TextIo::Read => {
                             let Expr::Name { name, .. } = argument else {
@@ -3632,20 +3786,36 @@ impl Generator<'_> {
     }
 }
 
-fn text_conversion_supported(conversion: &crate::builtins::Conversion) -> Result<(), String> {
-    if !matches!(conversion.code, ConversionCode::Default) {
-        return Err("native backend: only %C text conversions are supported yet".to_owned());
+fn text_conversion_supported(
+    conversion: &crate::builtins::Conversion,
+    kind: TextIo,
+) -> Result<(), String> {
+    if !matches!(
+        conversion.code,
+        ConversionCode::Default
+            | ConversionCode::Binary
+            | ConversionCode::Octal
+            | ConversionCode::Hex
+    ) {
+        return Err("native backend: scientific text conversions are not supported yet".to_owned());
     }
-    if !matches!(conversion.width, ClauseWidth::Fixed(0)) {
-        return Err("native backend: text conversion widths are not supported yet".to_owned());
+    if !matches!(conversion.width, ClauseWidth::Fixed(_)) {
+        return Err(
+            "native backend: variable text conversion widths are not supported yet".to_owned(),
+        );
     }
-    if conversion.fractional_width.is_some()
-        || conversion.exponent_width.is_some()
-        || conversion.left
-        || conversion.overflow
-        || conversion.pad != ' '
-    {
-        return Err("native backend: text conversion modifiers are not supported yet".to_owned());
+    if matches!(kind, TextIo::Read) && !matches!(conversion.code, ConversionCode::Default) {
+        return Err(
+            "native backend: only %C reads are supported for TEXT locations yet".to_owned(),
+        );
+    }
+    if matches!(kind, TextIo::Read) && !matches!(conversion.width, ClauseWidth::Fixed(0)) {
+        return Err("native backend: READTEXT conversion widths are not supported yet".to_owned());
+    }
+    if conversion.fractional_width.is_some() || conversion.exponent_width.is_some() {
+        return Err(
+            "native backend: text fractional/exponent widths are not supported yet".to_owned(),
+        );
     }
     Ok(())
 }
