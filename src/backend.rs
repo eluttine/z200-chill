@@ -8,6 +8,7 @@ use crate::ast::{
     Action, AssignOp, BinaryOp, CaseLabel, Declaration, Expr, Handler, ModeRef, Module, Passing,
     ProcDef, Program, UnaryOp,
 };
+use crate::builtins::{ClauseWidth, ConversionCode, FormatOp, TextIo};
 use crate::modes::ModeTable;
 use crate::sema::{ApplyResolution, CheckResult, ImportedKind, ImportedSymbol};
 use crate::types::{self, ModeId, Type};
@@ -34,6 +35,9 @@ enum Kind {
     },
     Struct(ModeId),
     PowerSet(types::PowerSetMember),
+    Text {
+        length: usize,
+    },
     Null,
 }
 
@@ -110,6 +114,7 @@ impl Kind {
             Kind::RefArray { element, .. } => format!("{} *", element.c_type()),
             Kind::Struct(id) => format!("z_struct_{}", id.0),
             Kind::PowerSet(_) => "ZPowerSet".to_owned(),
+            Kind::Text { .. } => "ZText".to_owned(),
             Kind::Null => {
                 unreachable!("NULL is never used as a declared variable type")
             }
@@ -122,7 +127,7 @@ impl Kind {
             Kind::String => "\"\"",
             Kind::Array { .. } => "{0}",
             Kind::Ref(_) | Kind::RefArray { .. } | Kind::Null => "NULL",
-            Kind::Struct(_) | Kind::PowerSet(_) => "{0}",
+            Kind::Struct(_) | Kind::PowerSet(_) | Kind::Text { .. } => "{0}",
         }
     }
 
@@ -485,6 +490,163 @@ static int z_string_array_equal(const char **left, const char **right, size_t co
         if (strcmp(left[index], right[index]) != 0) { return 0; }
     }
     return 1;
+}
+
+typedef struct {
+    char *record;
+    size_t len;
+    int64_t index;
+} ZText;
+
+static const char *z_text_view(const ZText *text) {
+    return text->record == NULL ? "" : text->record;
+}
+
+static void z_text_assign(ZText *text, const char *value, size_t limit) {
+    size_t len = strlen(value);
+    if (len > limit) {
+        z_fail("TEXTFAIL", "text record exceeds the text length");
+    }
+    char *copy = (char *)malloc(len + 1);
+    if (copy == NULL) { z_fail("STORAGE", "out of memory"); }
+    memcpy(copy, value, len + 1);
+    text->record = copy;
+    text->len = len;
+}
+
+static void z_text_write(ZText *text, const char *value, size_t limit) {
+    if (text->index < 0) {
+        z_fail("TEXTFAIL", "negative text index");
+    }
+    size_t at = (size_t)text->index;
+    size_t add = strlen(value);
+    size_t end = at + add;
+    if (end > limit) {
+        z_fail("TEXTFAIL", "text record exceeds the text length");
+    }
+    size_t len = text->len > end ? text->len : end;
+    if (len > limit) {
+        z_fail("TEXTFAIL", "text record exceeds the text length");
+    }
+    char *copy = (char *)malloc(len + 1);
+    if (copy == NULL) { z_fail("STORAGE", "out of memory"); }
+    memset(copy, ' ', len);
+    if (text->record != NULL && text->len > 0) {
+        memcpy(copy, text->record, text->len);
+    }
+    memcpy(copy + at, value, add);
+    copy[len] = '\0';
+    text->record = copy;
+    text->len = len;
+    text->index = (int64_t)end;
+}
+
+static void z_text_write_int(ZText *text, int64_t value, size_t limit) {
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
+    z_text_write(text, buffer, limit);
+}
+
+static void z_text_write_bool(ZText *text, int value, size_t limit) {
+    z_text_write(text, value ? "TRUE" : "FALSE", limit);
+}
+
+static void z_text_write_char(ZText *text, int value, size_t limit) {
+    char buffer[2];
+    buffer[0] = (char)value;
+    buffer[1] = '\0';
+    z_text_write(text, buffer, limit);
+}
+
+static void z_text_write_string(ZText *text, const char *value, size_t limit) {
+    z_text_write(text, value, limit);
+}
+
+static void z_text_read_literal(ZText *text, const char *expected, size_t limit) {
+    (void)limit;
+    if (text->index < 0) {
+        z_fail("TEXTFAIL", "negative text index");
+    }
+    size_t at = (size_t)text->index;
+    size_t len = strlen(expected);
+    if (at + len > text->len
+        || memcmp(z_text_view(text) + at, expected, len) != 0) {
+        z_fail("TEXTFAIL", "text does not match the format");
+    }
+    text->index = (int64_t)(at + len);
+}
+
+static int64_t z_text_read_int(ZText *text, size_t limit) {
+    (void)limit;
+    if (text->index < 0) {
+        z_fail("TEXTFAIL", "negative text index");
+    }
+    const char *view = z_text_view(text);
+    size_t at = (size_t)text->index;
+    if (at > text->len) {
+        z_fail("TEXTFAIL", "text index is past the text");
+    }
+    while (at < text->len && view[at] == ' ') {
+        at++;
+    }
+    char *end = NULL;
+    long long value = strtoll(view + at, &end, 10);
+    if (end == view + at) {
+        z_fail("TEXTFAIL", "invalid numeric text");
+    }
+    text->index = (int64_t)(end - view);
+    return (int64_t)value;
+}
+
+static int64_t z_text_read_char(ZText *text, size_t limit) {
+    (void)limit;
+    if (text->index < 0 || (size_t)text->index >= text->len) {
+        z_fail("TEXTFAIL", "text index is out of bounds");
+    }
+    unsigned char value = (unsigned char)text->record[text->index];
+    text->index++;
+    return (int64_t)value;
+}
+
+static int z_text_read_bool(ZText *text, size_t limit) {
+    (void)limit;
+    if (text->index < 0) {
+        z_fail("TEXTFAIL", "negative text index");
+    }
+    size_t at = (size_t)text->index;
+    if (at + 4 <= text->len && memcmp(z_text_view(text) + at, "TRUE", 4) == 0) {
+        text->index = (int64_t)(at + 4);
+        return 1;
+    }
+    if (at + 5 <= text->len && memcmp(z_text_view(text) + at, "FALSE", 5) == 0) {
+        text->index = (int64_t)(at + 5);
+        return 0;
+    }
+    z_fail("TEXTFAIL", "invalid boolean text");
+    return 0;
+}
+
+static void z_text_reset_index(ZText *text) {
+    text->index = 0;
+}
+
+static int64_t z_text_get_index(ZText text) {
+    return text.index;
+}
+
+static void z_text_set_index(ZText *text, int64_t index, size_t limit) {
+    if (index < 0 || (size_t)index > limit) {
+        z_fail("TEXTFAIL", "text index is outside the text length");
+    }
+    text->index = index;
+}
+
+static int z_text_equal_text(const ZText *left, const ZText *right) {
+    return strcmp(z_text_view(left), z_text_view(right)) == 0;
+}
+
+static int z_text_equal_string(const ZText *left, const char *right) {
+    return strcmp(z_text_view(left), right) == 0;
 }
 
 "#,
@@ -875,7 +1037,11 @@ impl Generator<'_> {
                     self.emit_array_literal(out, &info, &init.value, var.span)?;
                     continue;
                 }
-                let (code, _) = self.emit_expr(&init.value)?;
+                let (code, value_kind) = self.emit_expr(&init.value)?;
+                if let Kind::Text { length } = info.kind {
+                    self.emit_text_store(out, &info.c_name, length, &code, value_kind)?;
+                    continue;
+                }
                 self.line(out, &format!("{} = {};", info.c_name, code));
             }
         }
@@ -1058,6 +1224,15 @@ impl Generator<'_> {
                                 self.emit_array_literal(out, &info, &init.value, var.span)?;
                             }
                             self.vars.insert(var.name.clone(), info);
+                            continue;
+                        }
+                        if let Kind::Text { length } = kind {
+                            self.line(out, &format!("{} = {{0}};", kind.c_declaration(&c_name)));
+                            if let Some(init) = &var.init {
+                                let (code, value_kind) = self.emit_expr(&init.value)?;
+                                self.emit_text_store(out, &c_name, length, &code, value_kind)?;
+                            }
+                            self.vars.insert(var.name.clone(), VarInfo { c_name, kind });
                             continue;
                         }
                         let init = match &var.init {
@@ -1508,6 +1683,31 @@ impl Generator<'_> {
         Ok(())
     }
 
+    fn emit_text_store(
+        &mut self,
+        out: &mut String,
+        target: &str,
+        length: usize,
+        code: &str,
+        kind: Kind,
+    ) -> Result<(), String> {
+        match kind {
+            Kind::String => {
+                self.line(out, &format!("z_text_assign(&{target}, {code}, {length});"));
+            }
+            Kind::Text { .. } => {
+                self.line(out, &format!("{target} = {code};"));
+            }
+            _ => {
+                return Err(
+                    "native backend: text assignment requires a character string or TEXT value"
+                        .to_owned(),
+                )
+            }
+        }
+        Ok(())
+    }
+
     fn emit_array_value_into(
         &mut self,
         out: &mut String,
@@ -1644,7 +1844,16 @@ impl Generator<'_> {
                 )
             }
         };
-        let (code, _) = self.emit_expr(value)?;
+        let (code, value_kind) = self.emit_expr(value)?;
+        if let Kind::Text { length } = target_kind {
+            if op != AssignOp::Assign {
+                return Err(
+                    "native backend: compound text assignment is not supported yet".to_owned(),
+                );
+            }
+            self.emit_text_store(out, &target_code, length, &code, value_kind)?;
+            return Ok(());
+        }
         if matches!(target_kind, Kind::PowerSet(_)) {
             let function = match op {
                 AssignOp::Add => Some("z_ps_union"),
@@ -1699,6 +1908,134 @@ impl Generator<'_> {
         Ok(())
     }
 
+    fn text_location(&self, expression: &Expr) -> Result<(String, usize), String> {
+        let Expr::Name { name, .. } = expression else {
+            return Err(
+                "native backend: text operations require a simple text variable".to_owned(),
+            );
+        };
+        let info = self
+            .vars
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("native backend: unknown text variable `{name}`"))?;
+        let Kind::Text { length } = info.kind else {
+            return Err(format!(
+                "native backend: `{name}` is not a narrow sequential TEXT location"
+            ));
+        };
+        Ok((info.c_name, length))
+    }
+
+    fn emit_text_io(
+        &mut self,
+        out: &mut String,
+        args: &[Expr],
+        kind: TextIo,
+        format: &[FormatOp],
+        indexed: bool,
+    ) -> Result<(), String> {
+        let Some(target_expr) = args.first() else {
+            return Err("native backend: text transfer requires a target".to_owned());
+        };
+        let (target, length) = self.text_location(target_expr)?;
+        let mut offset = 1;
+        if indexed {
+            let Some(index) = args.get(1) else {
+                return Err("native backend: text transfer is missing its index".to_owned());
+            };
+            let (value, _) = self.emit_expr(index)?;
+            self.line(
+                out,
+                &format!("z_text_set_index(&{target}, {value}, {length});"),
+            );
+            offset = 2;
+        }
+        let mut io_index = offset + 1;
+        for operation in format {
+            match operation {
+                FormatOp::Text(text) => match kind {
+                    TextIo::Write => self.line(
+                        out,
+                        &format!("z_text_write(&{target}, \"{}\", {length});", c_escape(text)),
+                    ),
+                    TextIo::Read => self.line(
+                        out,
+                        &format!(
+                            "z_text_read_literal(&{target}, \"{}\", {length});",
+                            c_escape(text)
+                        ),
+                    ),
+                },
+                FormatOp::Convert(conversion) => {
+                    text_conversion_supported(conversion)?;
+                    let Some(argument) = args.get(io_index) else {
+                        return Err(
+                            "native backend: text transfer is missing an io argument".to_owned()
+                        );
+                    };
+                    io_index += 1;
+                    match kind {
+                        TextIo::Write => {
+                            let (code, value_kind) = self.emit_expr(argument)?;
+                            let call =
+                                match value_kind {
+                                    Kind::Int => "z_text_write_int",
+                                    Kind::Bool => "z_text_write_bool",
+                                    Kind::Char => "z_text_write_char",
+                                    Kind::String => "z_text_write_string",
+                                    _ => return Err(
+                                        "native backend: this value cannot be written with %C yet"
+                                            .to_owned(),
+                                    ),
+                                };
+                            self.line(out, &format!("{call}(&{target}, {code}, {length});"));
+                        }
+                        TextIo::Read => {
+                            let Expr::Name { name, .. } = argument else {
+                                return Err(
+                                    "native backend: READTEXT conversion targets must be simple variables"
+                                        .to_owned(),
+                                );
+                            };
+                            let Some(info) = self.vars.get(name).cloned() else {
+                                return Err(format!(
+                                    "native backend: unknown READTEXT target `{name}`"
+                                ));
+                            };
+                            let call = match info.kind {
+                                Kind::Int => "z_text_read_int",
+                                Kind::Char => "z_text_read_char",
+                                Kind::Bool => "z_text_read_bool",
+                                _ => {
+                                    return Err(
+                                        "native backend: this READTEXT target mode is not supported yet"
+                                            .to_owned(),
+                                    )
+                                }
+                            };
+                            self.line(
+                                out,
+                                &format!("{} = {call}(&{target}, {length});", info.c_name),
+                            );
+                        }
+                    }
+                }
+                FormatOp::Edit(_) | FormatOp::Io(_) => {
+                    return Err(
+                        "native backend: text editing and io-control clauses are not supported yet"
+                            .to_owned(),
+                    )
+                }
+            }
+        }
+        if io_index != args.len() {
+            return Err("native backend: text io argument count mismatch".to_owned());
+        }
+        self.line(out, &format!("z_text_reset_index(&{target});"));
+        Ok(())
+    }
+
     fn emit_call(&mut self, out: &mut String, callee: &Expr) -> Result<(), String> {
         let Expr::Apply { name, args, .. } = callee else {
             return Err("native backend: only direct procedure calls are supported".to_owned());
@@ -1748,6 +2085,7 @@ impl Generator<'_> {
                             | Kind::RefArray { .. }
                             | Kind::Struct(_)
                             | Kind::PowerSet(_)
+                            | Kind::Text { .. }
                             | Kind::Null => return Err(
                                 "native backend: arrays, references, structures, powersets, and NULL cannot be passed to WRITE/WRITELINE yet"
                                     .to_owned(),
@@ -1760,7 +2098,38 @@ impl Generator<'_> {
                 Ok(())
             }
             _ => {
-                if let Expr::Apply { name, args, span } = callee {
+                if let Expr::Apply {
+                    name, args, span, ..
+                } = callee
+                {
+                    match self.check.resolutions.get(span) {
+                        Some(ApplyResolution::TextIndex { get: false }) => {
+                            if args.len() != 2 {
+                                return Err(
+                                    "native backend: malformed SETTEXTINDEX call".to_owned()
+                                );
+                            }
+                            let (target, length) = self.text_location(&args[0])?;
+                            let (value, _) = self.emit_expr(&args[1])?;
+                            self.line(
+                                out,
+                                &format!("z_text_set_index(&{target}, {value}, {length});"),
+                            );
+                            return Ok(());
+                        }
+                        Some(ApplyResolution::TextIo {
+                            kind,
+                            format,
+                            indexed,
+                        }) => {
+                            let kind = *kind;
+                            let format = format.clone();
+                            let indexed = *indexed;
+                            self.emit_text_io(out, args, kind, &format, indexed)?;
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
                     if let Some(ApplyResolution::Procedure(signature)) =
                         self.check.resolutions.get(span)
                     {
@@ -1798,6 +2167,9 @@ impl Generator<'_> {
                 Kind::PowerSet(_) => {
                     comparisons.push(format!("(z_ps_equal({left_field}, {right_field}))"))
                 }
+                Kind::Text { .. } => comparisons.push(format!(
+                    "(z_text_equal_text(&{left_field}, &{right_field}))"
+                )),
                 Kind::Ref(_) | Kind::RefArray { .. } | Kind::Null => {
                     comparisons.push(format!("({left_field} == {right_field})"))
                 }
@@ -2088,7 +2460,9 @@ impl Generator<'_> {
                         | BinaryOp::Le
                         | BinaryOp::Gt
                         | BinaryOp::Ge
-                ) && (left_kind == Kind::String || right_kind == Kind::String)
+                ) && !matches!(left_kind, Kind::Text { .. })
+                    && !matches!(right_kind, Kind::Text { .. })
+                    && (left_kind == Kind::String || right_kind == Kind::String)
                 {
                     if left_kind != Kind::String || right_kind != Kind::String {
                         return Err(
@@ -2108,6 +2482,33 @@ impl Generator<'_> {
                         format!("(strcmp({left}, {right}) {comparison})"),
                         Kind::Bool,
                     ));
+                }
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+                    && (matches!(left_kind, Kind::Text { .. })
+                        || matches!(right_kind, Kind::Text { .. }))
+                {
+                    let equality =
+                        match (left_kind, right_kind) {
+                            (Kind::Text { .. }, Kind::Text { .. }) => {
+                                format!("z_text_equal_text(&{left}, &{right})")
+                            }
+                            (Kind::Text { .. }, Kind::String) => {
+                                format!("z_text_equal_string(&{left}, {right})")
+                            }
+                            (Kind::String, Kind::Text { .. }) => {
+                                format!("z_text_equal_string(&{right}, {left})")
+                            }
+                            _ => return Err(
+                                "native backend: TEXT comparison requires TEXT or CHARS operands"
+                                    .to_owned(),
+                            ),
+                        };
+                    let code = if *op == BinaryOp::Eq {
+                        equality
+                    } else {
+                        format!("!({equality})")
+                    };
+                    return Ok((code, Kind::Bool));
                 }
                 if matches!(op, BinaryOp::Eq | BinaryOp::Ne) && matches!(left_kind, Kind::Struct(_))
                 {
@@ -2239,6 +2640,16 @@ impl Generator<'_> {
                         return Err(format!("native backend: unknown array `{name}`"));
                     };
                     self.array_index_expr(&info, args, *span)
+                }
+                Some(ApplyResolution::TextIndex { get: true }) => {
+                    if args.len() != 1 {
+                        return Err("native backend: malformed GETTEXTINDEX call".to_owned());
+                    }
+                    let (target, _) = self.text_location(&args[0])?;
+                    Ok((format!("z_text_get_index({target})"), Kind::Int))
+                }
+                Some(ApplyResolution::TextIndex { get: false }) => {
+                    Err("native backend: SETTEXTINDEX cannot be used as a value".to_owned())
                 }
                 Some(ApplyResolution::Builtin(crate::builtins::Builtin::ReadLine)) => {
                     Ok(("z_readline()".to_owned(), Kind::String))
@@ -2410,6 +2821,24 @@ impl Generator<'_> {
     }
 }
 
+fn text_conversion_supported(conversion: &crate::builtins::Conversion) -> Result<(), String> {
+    if !matches!(conversion.code, ConversionCode::Default) {
+        return Err("native backend: only %C text conversions are supported yet".to_owned());
+    }
+    if !matches!(conversion.width, ClauseWidth::Fixed(0)) {
+        return Err("native backend: text conversion widths are not supported yet".to_owned());
+    }
+    if conversion.fractional_width.is_some()
+        || conversion.exponent_width.is_some()
+        || conversion.left
+        || conversion.overflow
+        || conversion.pad != ' '
+    {
+        return Err("native backend: text conversion modifiers are not supported yet".to_owned());
+    }
+    Ok(())
+}
+
 fn array_size_expression(kind: Kind) -> Result<String, String> {
     let Kind::Array { element, total, .. } = kind else {
         return Err("native backend: expected an array mode".to_owned());
@@ -2472,6 +2901,18 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
         Type::Set(_) => Ok(Kind::Int),
         Type::Struct(id) => Ok(Kind::Struct(id)),
         Type::PowerSet(set) => Ok(Kind::PowerSet(set.member)),
+        Type::Text {
+            length,
+            wide: false,
+            indexed: false,
+            ..
+        } => Ok(Kind::Text { length }),
+        Type::Text { wide, .. } if wide => {
+            Err("native backend: wide text modes are not supported yet".to_owned())
+        }
+        Type::Text { .. } => {
+            Err("native backend: indexed text modes are not supported yet".to_owned())
+        }
         Type::Char | Type::WChar => Ok(Kind::Char),
         Type::String | Type::BoundedString { .. } | Type::WString | Type::WBoundedString { .. } => {
             Ok(Kind::String)

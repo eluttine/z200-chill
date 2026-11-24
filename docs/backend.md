@@ -61,6 +61,12 @@ reference implementation for the complete supported language.
 - scalar and structure arrays of up to four dimensions with indexing, element
   assignment, nested initializers, array-literal assignment, same-mode array copying,
   and same-mode array equality/inequality,
+- narrow sequential `TEXT(n)` records, including assignment, equality, direct
+  procedure parameters, and structure fields,
+- `SETTEXTINDEX` / `GETTEXTINDEX`,
+- disconnected `WRITETEXT` / `READTEXT` with literal text and `%C` conversions for
+  `INT`, `BOOL`, `CHAR`, and character-string writes and `INT`/`BOOL`/`CHAR` reads,
+  including explicit text indices and `TEXTFAIL` length/index checks,
 - `WRITE` and `WRITELINE` with one value argument,
 - runtime checks for array bounds, division/modulo by zero, signed overflow in
   `+`/`-`/`*`/unary `-`, and `NULL` dereference,
@@ -82,12 +88,14 @@ Windows).
 - arrays of more complex composite element modes,
 - structure initializers and structure literals,
 - references to array slices, text, and buffers,
+- wide, indexed, or array-valued text modes; text associations and file transfer;
+  text formatting widths, editing clauses, and io-control clauses,
 - exception propagation across separate packages,
 - processes, regions, tasks, signals, and timing,
 - string and powerset memory reclamation (generated concatenations and powerset
   operations allocate and are not freed),
 - MSVC-specific compiler flags and discovery,
-- package dependencies and grant linking,
+- grant-file-only dependencies without available source,
 - integer width enforcement beyond the C integer representation.
 
 Exceptions use a generated `setjmp`/`longjmp` handler chain. Unhandled exceptions and

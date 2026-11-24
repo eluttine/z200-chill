@@ -2262,6 +2262,166 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_text_phase_one() {
+    let dir = TempDir::new("z200c-native-text");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativetext"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  NEWMODE Holder = STRUCT (name TEXT(10), n INT);
+  DCL t TEXT(10);
+  DCL b BOOL;
+  DCL c CHAR;
+  DCL n INT;
+  DCL h Holder;
+
+  Fill: PROC (x TEXT(10) OUT);
+    WRITETEXT(x, "abc");
+  END Fill;
+
+  Check: PROC (x TEXT(10)) EXCEPTIONS (ASSERTFAIL);
+    ASSERT x = "abc";
+  END Check;
+
+  SETTEXTINDEX(t, 2);
+  ASSERT GETTEXTINDEX(t) = 2;
+  WRITETEXT(t, "a");
+  ASSERT t = "  a";
+  ASSERT GETTEXTINDEX(t) = 0;
+
+  SETTEXTINDEX(t, 3);
+  WRITETEXT(t, "%C", 42);
+  ASSERT t = "  a42";
+
+  t := "";
+  WRITETEXT(t, "%C:%C:%C", TRUE, "Z", 7);
+  ASSERT t = "TRUE:Z:7";
+  READTEXT(t, "%C:%C:%C", b, c, n);
+  ASSERT b = TRUE;
+  ASSERT c = 'Z';
+  ASSERT n = 7;
+
+  t := "   42";
+  READTEXT(t, "%C", n);
+  ASSERT n = 42;
+
+  h.name := "hi";
+  ASSERT h.name = "hi";
+
+  t := "";
+  Fill(t);
+  ASSERT t = "abc";
+  Check(t);
+
+  BEGIN
+    DCL local TEXT(10) INIT := "hi";
+    ASSERT local = "hi";
+    local := "bye";
+    ASSERT local = "bye";
+  END;
+
+  BEGIN
+    READTEXT(t, "no");
+  END
+  ON (TEXTFAIL):
+    WRITELINE("textfail caught");
+  END;
+  WRITELINE("text ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativetext");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "textfail caught
+text ok
+"
+    );
+}
+
+#[test]
+fn native_text_failures_are_clean() {
+    let cases = [
+        (
+            "length",
+            r#"
+M: MODULE
+  DCL t TEXT(3);
+  WRITETEXT(t, "abcd");
+END M;
+"#,
+            "TEXTFAIL: text record exceeds the text length",
+        ),
+        (
+            "index",
+            r#"
+M: MODULE
+  DCL t TEXT(3);
+  SETTEXTINDEX(t, 4);
+END M;
+"#,
+            "TEXTFAIL: text index is outside the text length",
+        ),
+    ];
+    for (name, source, expected) in cases {
+        let dir = TempDir::new(&format!("z200c-native-text-{name}"));
+        let package = format!("nativetext{name}");
+        std::fs::write(
+            dir.join("Chill.toml"),
+            format!(
+                r#"
+[package]
+name = "{package}"
+
+[build]
+entry = "src/main.ch"
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/main.ch"), source).unwrap();
+        let output = z200c().arg("compile").arg(&dir).output().unwrap();
+        assert!(
+            output.status.success(),
+            "compile {name}: stdout: {}
+stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let binary = dir.join(format!("target/z200c/{package}"));
+        let run = std::process::Command::new(binary).output().unwrap();
+        assert!(!run.status.success());
+        assert!(
+            String::from_utf8_lossy(&run.stderr).contains(expected),
+            "stderr: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
