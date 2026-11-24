@@ -64,6 +64,9 @@ reference implementation for the complete supported language.
 - one-dimensional array slices with constant or runtime bounds, `UP` sizes, slice
   reads, slice assignment, slice arguments, and slice equality. Runtime slices carry a
   data pointer and element count and check length when converted to fixed array modes,
+- constant-bound multidimensional slices, including strided reads, slice assignment,
+  slice arguments, and slice equality. Materialized multidimensional slices use
+  row-major temporary arrays,
 - narrow sequential `TEXT(n)` records, including assignment, equality, direct
   procedure parameters, and structure fields,
 - `SETTEXTINDEX` / `GETTEXTINDEX`,
@@ -94,7 +97,7 @@ Windows).
 - arrays of more complex composite element modes,
 - structure initializers and structure literals,
 - references to array slices, text, and buffers,
-- multidimensional slices and slice-valued references,
+- dynamic multidimensional slice bounds and slice-valued references,
 - wide, indexed, or array-valued text modes; text associations and file transfer;
   text formatting widths, editing clauses, and io-control clauses,
 - exception propagation across separate packages,

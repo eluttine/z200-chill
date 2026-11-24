@@ -2015,6 +2015,108 @@ impl Generator<'_> {
         })
     }
 
+    fn emit_multislice_assignment(
+        &mut self,
+        out: &mut String,
+        name: &str,
+        span: crate::lexer::Span,
+        op: AssignOp,
+        value: &Expr,
+    ) -> Result<(), String> {
+        if op != AssignOp::Assign {
+            return Err(
+                "native backend: compound multidimensional slice assignment is not supported yet"
+                    .to_owned(),
+            );
+        }
+        let Some(ApplyResolution::MultiSlice { source: _, result }) =
+            self.check.resolutions.get(&span)
+        else {
+            return Err("native backend: multidimensional slice has no resolution".to_owned());
+        };
+        let result_dims = result.dimensions();
+        let Some(info) = self.vars.get(name).cloned() else {
+            return Err(format!("native backend: unknown array `{name}`"));
+        };
+        let Kind::Array {
+            element,
+            dims,
+            rank,
+            ..
+        } = info.kind
+        else {
+            return Err(format!("native backend: `{name}` is not an array"));
+        };
+        if rank != result_dims.len() {
+            return Err("native backend: multidimensional slice rank mismatch".to_owned());
+        }
+        let mut source_strides = [1i128; 4];
+        let mut result_strides = [1i128; 4];
+        for index in (0..rank).rev() {
+            if index + 1 < rank {
+                source_strides[index] = source_strides[index + 1] * dims[index + 1].length();
+                result_strides[index] = result_strides[index + 1] * result_dims[index + 1].length();
+            }
+        }
+        let total: i128 = (0..rank).map(|index| result_dims[index].length()).product();
+        let mut result_kind_dims = [Dim { low: 0, high: 0 }; 4];
+        for index in 0..rank {
+            result_kind_dims[index] = Dim {
+                low: result_dims[index].low,
+                high: result_dims[index].high,
+            };
+        }
+        let expected = Kind::Array {
+            element,
+            dims: result_kind_dims,
+            rank,
+            total: total.max(0) as usize,
+        };
+        let (value_code, value_kind) = if matches!(value, Expr::ArrayTuple { .. }) {
+            let code = self.emit_array_argument(value, expected)?;
+            (code, expected)
+        } else {
+            self.emit_array_value_expr(value, element)?
+        };
+        let Kind::Array {
+            total: value_total, ..
+        } = value_kind
+        else {
+            return Err(
+                "native backend: multidimensional slice assignment requires a fixed array value"
+                    .to_owned(),
+            );
+        };
+        if value_total != expected_total(expected) {
+            return Err("native backend: array slice length mismatch".to_owned());
+        }
+        let unique = self.temp_counter;
+        self.temp_counter += 1;
+        let copy = format!("__multi_value_{unique}");
+        self.line(
+            out,
+            &format!("{} {copy}[{}];", element.c_type(), total.max(0)),
+        );
+        self.line(
+            out,
+            &format!("memcpy({copy}, {value_code}, sizeof({copy}));"),
+        );
+        for flat in 0..total {
+            let mut offset = 0i128;
+            for index in 0..rank {
+                let local = if result_strides[index] == 0 {
+                    0
+                } else {
+                    (flat / result_strides[index]) % result_dims[index].length().max(1)
+                };
+                let source_index = result_dims[index].low + local;
+                offset += (source_index - dims[index].low) * source_strides[index];
+            }
+            self.line(out, &format!("{}[{offset}] = {copy}[{flat}];", info.c_name));
+        }
+        Ok(())
+    }
+
     fn emit_array_value_expr(
         &mut self,
         expression: &Expr,
@@ -2191,6 +2293,9 @@ impl Generator<'_> {
         } = target
         {
             return self.emit_slice_assignment(out, name, first, last, *up, *span, op, value);
+        }
+        if let Expr::MultiSlice { name, span, .. } = target {
+            return self.emit_multislice_assignment(out, name, *span, op, value);
         }
         let (target_code, target_kind) = match target {
             Expr::Name { name, .. } => {
@@ -2730,6 +2835,78 @@ impl Generator<'_> {
                 span,
                 ..
             } => self.deref_index_expr(base, indices, *span),
+            Expr::MultiSlice { name, span, .. } => {
+                let Some(ApplyResolution::MultiSlice { source: _, result }) =
+                    self.check.resolutions.get(span)
+                else {
+                    return Err(
+                        "native backend: multidimensional slice has no resolution".to_owned()
+                    );
+                };
+                let Some(info) = self.vars.get(name).cloned() else {
+                    return Err(format!("native backend: unknown array `{name}`"));
+                };
+                let Kind::Array {
+                    element,
+                    dims,
+                    rank,
+                    ..
+                } = info.kind
+                else {
+                    return Err(format!("native backend: `{name}` is not an array"));
+                };
+                let result_dims = result.dimensions();
+                if result_dims.len() != rank {
+                    return Err("native backend: multidimensional slice rank mismatch".to_owned());
+                }
+                let mut source_strides = [1i128; 4];
+                let mut result_strides = [1i128; 4];
+                for index in (0..rank).rev() {
+                    if index + 1 < rank {
+                        source_strides[index] =
+                            source_strides[index + 1] * dims[index + 1].length();
+                        result_strides[index] =
+                            result_strides[index + 1] * result_dims[index + 1].length();
+                    }
+                }
+                let total: i128 = (0..rank).map(|index| result_dims[index].length()).product();
+                let mut values = Vec::with_capacity(total.max(0) as usize);
+                for flat in 0..total {
+                    let mut offset = 0i128;
+                    for index in 0..rank {
+                        let local = if result_strides[index] == 0 {
+                            0
+                        } else {
+                            (flat / result_strides[index]) % result_dims[index].length().max(1)
+                        };
+                        let source_index = result_dims[index].low + local;
+                        offset += (source_index - dims[index].low) * source_strides[index];
+                    }
+                    values.push(format!("{}[{offset}]", info.c_name));
+                }
+                let mut result_kind_dims = [Dim { low: 0, high: 0 }; 4];
+                for index in 0..rank {
+                    result_kind_dims[index] = Dim {
+                        low: result_dims[index].low,
+                        high: result_dims[index].high,
+                    };
+                }
+                let element_name = element.c_type();
+                let code = if values.is_empty() {
+                    format!("({element_name}[]){{0}}")
+                } else {
+                    format!("({element_name}[]){{{}}}", values.join(", "))
+                };
+                Ok((
+                    code,
+                    Kind::Array {
+                        element,
+                        dims: result_kind_dims,
+                        rank,
+                        total: total.max(0) as usize,
+                    },
+                ))
+            }
             Expr::ArraySlice {
                 name,
                 first,
@@ -2935,23 +3112,29 @@ impl Generator<'_> {
                 op, left, right, ..
             } => {
                 if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
-                    && (matches!(left.as_ref(), Expr::ArraySlice { .. })
-                        || matches!(right.as_ref(), Expr::ArraySlice { .. }))
+                    && (matches!(
+                        left.as_ref(),
+                        Expr::ArraySlice { .. } | Expr::MultiSlice { .. }
+                    ) || matches!(
+                        right.as_ref(),
+                        Expr::ArraySlice { .. } | Expr::MultiSlice { .. }
+                    ))
                 {
-                    let (left_code, left_kind, right_code, right_kind) =
-                        if matches!(left.as_ref(), Expr::ArraySlice { .. }) {
-                            let (left_code, left_kind) = self.emit_expr(left)?;
-                            let element = Self::array_element_of(left_kind)?;
-                            let (right_code, right_kind) =
-                                self.emit_array_value_expr(right, element)?;
-                            (left_code, left_kind, right_code, right_kind)
-                        } else {
-                            let (right_code, right_kind) = self.emit_expr(right)?;
-                            let element = Self::array_element_of(right_kind)?;
-                            let (left_code, left_kind) =
-                                self.emit_array_value_expr(left, element)?;
-                            (left_code, left_kind, right_code, right_kind)
-                        };
+                    let (left_code, left_kind, right_code, right_kind) = if matches!(
+                        left.as_ref(),
+                        Expr::ArraySlice { .. } | Expr::MultiSlice { .. }
+                    ) {
+                        let (left_code, left_kind) = self.emit_expr(left)?;
+                        let element = Self::array_element_of(left_kind)?;
+                        let (right_code, right_kind) =
+                            self.emit_array_value_expr(right, element)?;
+                        (left_code, left_kind, right_code, right_kind)
+                    } else {
+                        let (right_code, right_kind) = self.emit_expr(right)?;
+                        let element = Self::array_element_of(right_kind)?;
+                        let (left_code, left_kind) = self.emit_array_value_expr(left, element)?;
+                        (left_code, left_kind, right_code, right_kind)
+                    };
                     let equality =
                         self.array_equality_code(&left_code, left_kind, &right_code, right_kind)?;
                     let code = if *op == BinaryOp::Eq {
@@ -3297,7 +3480,7 @@ impl Generator<'_> {
                 }
                 Ok(info.c_name)
             }
-            Expr::Apply { .. } | Expr::Deref { .. } => {
+            Expr::Apply { .. } | Expr::Deref { .. } | Expr::MultiSlice { .. } => {
                 let (code, kind) = self.emit_expr(argument)?;
                 if kind != expected {
                     return Err("native backend: array argument mode mismatch".to_owned());
@@ -3465,6 +3648,13 @@ fn text_conversion_supported(conversion: &crate::builtins::Conversion) -> Result
         return Err("native backend: text conversion modifiers are not supported yet".to_owned());
     }
     Ok(())
+}
+
+fn expected_total(kind: Kind) -> usize {
+    match kind {
+        Kind::Array { total, .. } => total,
+        _ => 0,
+    }
 }
 
 fn array_size_expression(kind: Kind) -> Result<String, String> {
