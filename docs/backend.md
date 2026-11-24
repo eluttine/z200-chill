@@ -54,7 +54,12 @@ reference implementation for the complete supported language.
 - `WRITE` and `WRITELINE` with one value argument.
 
 Generated code is C11 with `int64_t` integers, `int` booleans/characters, and
-`const char *` strings.
+`const char *` strings. Structure equality is generated field by field rather than with
+`memcmp`, avoiding dependence on C padding/layout.
+
+The C compiler is selected from `Z200C_CC`, then `CC`, and defaults to `cc` on Unix and
+`gcc` on Windows. The target executable uses the host executable suffix (`.exe` on
+Windows).
 
 ## Not supported yet
 
@@ -67,6 +72,7 @@ Generated code is C11 with `int64_t` integers, `int` booleans/characters, and
 - processes, regions, tasks, signals, and timing,
 - runtime range/overflow checks,
 - string memory reclamation (generated concatenations allocate and are not freed),
+- MSVC-specific compiler flags and discovery,
 - package dependencies and grant linking,
 - integer width enforcement beyond the C integer representation.
 

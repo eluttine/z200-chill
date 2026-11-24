@@ -127,8 +127,21 @@ fn compile_impl(target: &Path) -> Result<PathBuf, String> {
     let c_path = out_dir.join(format!("{}.c", package.manifest.package.name));
     std::fs::write(&c_path, c_source)
         .map_err(|error| format!("error[E0600]: cannot write {}: {error}", c_path.display()))?;
-    let binary = out_dir.join(&package.manifest.package.name);
-    let output = std::process::Command::new("cc")
+    let binary = out_dir.join(format!(
+        "{}{}",
+        package.manifest.package.name,
+        std::env::consts::EXE_SUFFIX
+    ));
+    let compiler = std::env::var("Z200C_CC")
+        .or_else(|_| std::env::var("CC"))
+        .unwrap_or_else(|_| {
+            if cfg!(windows) {
+                "gcc".to_owned()
+            } else {
+                "cc".to_owned()
+            }
+        });
+    let output = std::process::Command::new(&compiler)
         .arg("-std=c11")
         .arg("-O2")
         .arg("-Wall")
@@ -137,7 +150,7 @@ fn compile_impl(target: &Path) -> Result<PathBuf, String> {
         .arg(&binary)
         .arg(&c_path)
         .output()
-        .map_err(|error| format!("error[E0600]: cannot run C compiler: {error}"))?;
+        .map_err(|error| format!("error[E0600]: cannot run C compiler `{compiler}`: {error}"))?;
     if !output.status.success() {
         return Err(format!(
             "error[E0601]: C compilation failed:\n{}",
