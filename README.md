@@ -10,7 +10,7 @@ Early development. `z200c` currently provides:
 
 - **Packages and CLI** — `Chill.toml` loading, multi-file packages, package-directory and grant-file dependencies, and single-file `.ch` scripts without a manifest.
 - **Frontend** — lexer, parser, AST, and a typed expression/statement IR for the supported CHILL subset.
-- **Native backend** — `z200c compile` emits C for a small subset and builds a native executable; the interpreter remains the reference for unsupported features.
+- **Native backend** — `z200c compile` emits C for a small subset, including simple procedures and calls, and builds a native executable; the interpreter remains the reference for unsupported features.
 - **Modes and checks** — mode checking, static exception-flow checks, and stable diagnostic codes with multiple errors reported together; see [docs/diagnostics.md](docs/diagnostics.md).
 - **Modules and interfaces** — `GRANT`/`SEIZE`, qualified names, `GRANT ALL`/`SEIZE ALL`, `PREFIXED`, `TO` friends, structure-mode `FORBID`, `SPEC MODULE` body validation, and TOML grant files.
 - **Interpreter** — procedures, arrays, structures, sets, powersets, text, references, generics, multiple `CASE` selectors, `DO FOR`, labelled `EXIT`, and handlers.

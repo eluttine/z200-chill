@@ -337,18 +337,54 @@ END M;
 }
 
 #[test]
-fn native_backend_rejects_unsupported_procedures() {
+fn compiles_native_procedures_example() {
     let output = z200c()
         .arg("compile")
         .arg(example("procedures"))
         .output()
         .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = format!(
+        "{}/examples/procedures/target/z200c/procedures",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert!(run.stdout.is_empty());
+}
+
+#[test]
+fn native_backend_rejects_unsupported_arrays() {
+    let dir = TempDir::new("z200c-native-array");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativearray"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL values ARRAY(1:2) INT;
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("procedure definitions are not supported"),
-        "stderr: {stderr}"
-    );
+    assert!(stderr.contains("not supported"), "stderr: {stderr}");
 }
 
 #[test]
