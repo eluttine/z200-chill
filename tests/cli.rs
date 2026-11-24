@@ -1016,6 +1016,53 @@ END M;
 }
 
 #[test]
+fn compiles_native_set_modes() {
+    let dir = TempDir::new("z200c-native-set");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativeset"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  NEWMODE Color = SET(red, green, blue);
+  DCL c Color INIT := red;
+  DCL d Color;
+  DCL arr ARRAY(1:2) Color;
+  ASSERT c = red;
+  c := blue;
+  ASSERT c /= red;
+  d := c;
+  ASSERT d = blue;
+  arr(1) := green;
+  ASSERT arr(1) = green;
+  WRITELINE("set ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativeset");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "set ok\n");
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

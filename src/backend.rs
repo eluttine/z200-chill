@@ -119,6 +119,7 @@ impl Kind {
 
 struct Generator<'a> {
     check: &'a CheckResult,
+    module_modes: &'a [HashMap<String, Type>],
     module_index: usize,
     vars: HashMap<String, VarInfo>,
     indent: usize,
@@ -127,7 +128,12 @@ struct Generator<'a> {
     loop_depth: usize,
 }
 
-pub fn generate(program: &Program, check: &CheckResult, package: &str) -> Result<String, String> {
+pub fn generate(
+    program: &Program,
+    check: &CheckResult,
+    package: &str,
+    module_modes: &[HashMap<String, Type>],
+) -> Result<String, String> {
     let modules: Vec<&Module> = program
         .modules
         .iter()
@@ -147,7 +153,7 @@ pub fn generate(program: &Program, check: &CheckResult, package: &str) -> Result
                 continue;
             };
             for var in vars {
-                let kind = mode_kind(&var.mode)?;
+                let kind = mode_kind(&var.mode, module_modes, index)?;
                 out.push_str(&format!(
                     "static {};\n",
                     kind.c_declaration(&global_name(index, &var.name))
@@ -161,7 +167,7 @@ pub fn generate(program: &Program, check: &CheckResult, package: &str) -> Result
     for (index, module) in modules.iter().enumerate() {
         for declaration in &module.declarations {
             if let Declaration::Proc(proc_def) = declaration {
-                emit_proc_signature(&mut out, index, proc_def)?;
+                emit_proc_signature(&mut out, index, proc_def, module_modes)?;
                 out.push_str(";\n");
             }
         }
@@ -172,7 +178,7 @@ pub fn generate(program: &Program, check: &CheckResult, package: &str) -> Result
     for (index, module) in modules.iter().enumerate() {
         for declaration in &module.declarations {
             if let Declaration::Proc(proc_def) = declaration {
-                emit_proc(&mut out, check, index, module, proc_def)?;
+                emit_proc(&mut out, check, module_modes, index, module, proc_def)?;
             }
         }
     }
@@ -183,7 +189,8 @@ pub fn generate(program: &Program, check: &CheckResult, package: &str) -> Result
         let mut generator = Generator {
             check,
             module_index: index,
-            vars: module_vars(module, index),
+            module_modes,
+            vars: module_vars(module, index, module_modes),
             indent: 1,
             result: None,
             temp_counter: 0,
@@ -203,14 +210,18 @@ pub fn generate(program: &Program, check: &CheckResult, package: &str) -> Result
     Ok(out)
 }
 
-fn module_vars(module: &Module, index: usize) -> HashMap<String, VarInfo> {
+fn module_vars(
+    module: &Module,
+    index: usize,
+    module_modes: &[HashMap<String, Type>],
+) -> HashMap<String, VarInfo> {
     let mut vars = HashMap::new();
     for declaration in &module.declarations {
         let Declaration::Var(list) = declaration else {
             continue;
         };
         for var in list {
-            if let Ok(kind) = mode_kind(&var.mode) {
+            if let Ok(kind) = mode_kind(&var.mode, module_modes, index) {
                 vars.insert(
                     var.name.clone(),
                     VarInfo {
@@ -232,8 +243,17 @@ fn proc_name(module: usize, name: &str) -> String {
     format!("m{module}_p_{}", c_ident(name))
 }
 
-fn emit_proc_signature(out: &mut String, module: usize, proc_def: &ProcDef) -> Result<(), String> {
-    let result_kind = proc_def.result.as_ref().map(mode_kind).transpose()?;
+fn emit_proc_signature(
+    out: &mut String,
+    module: usize,
+    proc_def: &ProcDef,
+    module_modes: &[HashMap<String, Type>],
+) -> Result<(), String> {
+    let result_kind = proc_def
+        .result
+        .as_ref()
+        .map(|mode| mode_kind(mode, module_modes, module))
+        .transpose()?;
     if matches!(result_kind, Some(Kind::Array { .. })) {
         return Err("native backend: array procedure results are not supported yet".to_owned());
     }
@@ -247,7 +267,7 @@ fn emit_proc_signature(out: &mut String, module: usize, proc_def: &ProcDef) -> R
         if index > 0 {
             out.push_str(", ");
         }
-        let kind = mode_kind(&param.mode)?;
+        let kind = mode_kind(&param.mode, module_modes, module)?;
         if matches!(kind, Kind::Array { .. }) {
             return Err("native backend: array parameters are not supported yet".to_owned());
         }
@@ -269,22 +289,25 @@ fn emit_proc_signature(out: &mut String, module: usize, proc_def: &ProcDef) -> R
 fn emit_proc(
     out: &mut String,
     check: &CheckResult,
+    module_modes: &[HashMap<String, Type>],
     module: usize,
     owner: &Module,
     proc_def: &ProcDef,
 ) -> Result<(), String> {
-    emit_proc_signature(out, module, proc_def)?;
+    emit_proc_signature(out, module, proc_def, module_modes)?;
     out.push_str(" {\n");
     let mut generator = Generator {
         check,
         module_index: module,
-        vars: module_vars(owner, module),
+        module_modes,
+        vars: module_vars(owner, module, module_modes),
         indent: 1,
         result: proc_def
             .result
             .as_ref()
             .map(|mode| {
-                mode_kind(mode).map(|kind| (format!("__result_{}", c_ident(&proc_def.name)), kind))
+                mode_kind(mode, module_modes, module)
+                    .map(|kind| (format!("__result_{}", c_ident(&proc_def.name)), kind))
             })
             .transpose()?,
         temp_counter: 0,
@@ -297,7 +320,7 @@ fn emit_proc(
         );
     }
     for param in &proc_def.params {
-        let kind = mode_kind(&param.mode)?;
+        let kind = mode_kind(&param.mode, module_modes, module)?;
         let c_name = match param.passing {
             Passing::In => c_ident(&format!("p_{}", param.name)),
             Passing::Out | Passing::InOut | Passing::Loc => {
@@ -465,7 +488,7 @@ impl Generator<'_> {
             match declaration {
                 Declaration::Var(vars) => {
                     for var in vars {
-                        let kind = mode_kind(&var.mode)?;
+                        let kind = mode_kind(&var.mode, self.module_modes, self.module_index)?;
                         let c_name = c_ident(&format!("l_{}", var.name));
                         if matches!(kind, Kind::Array { .. }) {
                             self.line(out, &format!("{} = {{0}};", kind.c_declaration(&c_name)));
@@ -1025,7 +1048,12 @@ impl Generator<'_> {
                 };
                 Ok((format!("(*{code})"), element.kind()))
             }
-            Expr::Name { name, .. } => {
+            Expr::Name { name, span } => {
+                if let Some(ApplyResolution::SetElement { value, .. }) =
+                    self.check.resolutions.get(span)
+                {
+                    return Ok((value.to_string(), Kind::Int));
+                }
                 let info = self
                     .vars
                     .get(name)
@@ -1261,6 +1289,7 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
     match ty {
         Type::Int(_) | Type::IntLiteral => Ok(Kind::Int),
         Type::Bool => Ok(Kind::Bool),
+        Type::Set(_) => Ok(Kind::Int),
         Type::Char | Type::WChar => Ok(Kind::Char),
         Type::String | Type::BoundedString { .. } | Type::WString | Type::WBoundedString { .. } => {
             Ok(Kind::String)
@@ -1269,6 +1298,7 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
             let element = match array.element.ty() {
                 Type::Int(_) | Type::IntLiteral => ScalarKind::Int,
                 Type::Bool => ScalarKind::Bool,
+                Type::Set(_) => ScalarKind::Int,
                 Type::Char => ScalarKind::Char,
                 Type::String
                 | Type::BoundedString { .. }
@@ -1301,6 +1331,7 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
             let element = match array.element.ty() {
                 Type::Int(_) | Type::IntLiteral => ScalarKind::Int,
                 Type::Bool => ScalarKind::Bool,
+                Type::Set(_) => ScalarKind::Int,
                 Type::Char => ScalarKind::Char,
                 Type::String
                 | Type::BoundedString { .. }
@@ -1334,8 +1365,12 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
     }
 }
 
-fn mode_kind(mode: &ModeRef) -> Result<Kind, String> {
-    let mode_names = HashMap::new();
+fn mode_kind(
+    mode: &ModeRef,
+    module_modes: &[HashMap<String, Type>],
+    module: usize,
+) -> Result<Kind, String> {
+    let mode_names = module_modes.get(module).cloned().unwrap_or_default();
     let ty = types::resolve_mode_ref(mode, &mode_names)
         .ok_or_else(|| format!("native backend: unsupported mode `{}`", mode.name))?;
     kind_from_type(ty)

@@ -100,8 +100,22 @@ fn compile_impl(target: &Path) -> Result<PathBuf, String> {
     if !check.diagnostics.is_empty() {
         return Err(diagnostics::render(&package.source_map, &check.diagnostics));
     }
-    let c_source =
-        crate::backend::generate(&package.program, &check, &package.manifest.package.name)?;
+    let info = program::analyze(&package.program).map_err(|error| {
+        package
+            .source_map
+            .format_diagnostic(error.code, error.span, &error.message)
+    })?;
+    let module_modes: Vec<_> = info
+        .interfaces
+        .iter()
+        .map(|interface| interface.modes.clone())
+        .collect();
+    let c_source = crate::backend::generate(
+        &package.program,
+        &check,
+        &package.manifest.package.name,
+        &module_modes,
+    )?;
     let out_dir = package.package_dir.join("target").join("z200c");
     std::fs::create_dir_all(&out_dir).map_err(|error| {
         format!(
