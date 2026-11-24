@@ -68,7 +68,8 @@ all existing tests pass with no new special cases.
       Decision: interpreter-first educational compiler.
 - [x] Minimal C backend and `z200c compile`: basic variables, expressions,
       assignments, `ASSERT`, `IF`, `WRITE`/`WRITELINE`, procedures with `IN`
-      parameters, calls, `RETURN`, `RESULT`, and integer conversions.
+      parameters, calls, `RETURN`, `RESULT`, integer conversions, and one-dimensional
+      scalar arrays.
 - [ ] Extend native codegen to procedures, calls, arrays, text, references, exceptions,
       and a dedicated CHILL runtime ABI.
 - [-] Full native concurrency and moreta object lowering remain deferred.

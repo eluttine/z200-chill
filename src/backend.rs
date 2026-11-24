@@ -18,6 +18,39 @@ enum Kind {
     Bool,
     Char,
     String,
+    Array {
+        element: ScalarKind,
+        low: i128,
+        count: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScalarKind {
+    Int,
+    Bool,
+    Char,
+    String,
+}
+
+impl ScalarKind {
+    fn c_type(self) -> &'static str {
+        match self {
+            ScalarKind::Int => "int64_t",
+            ScalarKind::Bool => "int",
+            ScalarKind::Char => "int",
+            ScalarKind::String => "const char *",
+        }
+    }
+
+    fn kind(self) -> Kind {
+        match self {
+            ScalarKind::Int => Kind::Int,
+            ScalarKind::Bool => Kind::Bool,
+            ScalarKind::Char => Kind::Char,
+            ScalarKind::String => Kind::String,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +66,9 @@ impl Kind {
             Kind::Bool => "int",
             Kind::Char => "int",
             Kind::String => "const char *",
+            Kind::Array { .. } => {
+                unreachable!("array kinds are emitted through c_declaration")
+            }
         }
     }
 
@@ -40,6 +76,16 @@ impl Kind {
         match self {
             Kind::Int | Kind::Bool | Kind::Char => "0",
             Kind::String => "\"\"",
+            Kind::Array { .. } => "{0}",
+        }
+    }
+
+    fn c_declaration(self, name: &str) -> String {
+        match self {
+            Kind::Array { element, count, .. } => {
+                format!("{} {}[{}]", element.c_type(), name, count)
+            }
+            other => format!("{} {}", other.c_type(), name),
         }
     }
 }
@@ -74,9 +120,8 @@ pub fn generate(program: &Program, check: &CheckResult, package: &str) -> Result
             for var in vars {
                 let kind = mode_kind(&var.mode)?;
                 out.push_str(&format!(
-                    "static {} {};\n",
-                    kind.c_type(),
-                    global_name(index, &var.name)
+                    "static {};\n",
+                    kind.c_declaration(&global_name(index, &var.name))
                 ));
             }
         }
@@ -157,13 +202,11 @@ fn proc_name(module: usize, name: &str) -> String {
 }
 
 fn emit_proc_signature(out: &mut String, module: usize, proc_def: &ProcDef) -> Result<(), String> {
-    let result = proc_def
-        .result
-        .as_ref()
-        .map(mode_kind)
-        .transpose()?
-        .map(Kind::c_type)
-        .unwrap_or("void");
+    let result_kind = proc_def.result.as_ref().map(mode_kind).transpose()?;
+    if matches!(result_kind, Some(Kind::Array { .. })) {
+        return Err("native backend: array procedure results are not supported yet".to_owned());
+    }
+    let result = result_kind.map(Kind::c_type).unwrap_or("void");
     out.push_str(&format!(
         "static {result} {}",
         proc_name(module, &proc_def.name)
@@ -284,6 +327,17 @@ impl Generator<'_> {
                     for var in vars {
                         let kind = mode_kind(&var.mode)?;
                         let c_name = c_ident(&format!("l_{}", var.name));
+                        if matches!(kind, Kind::Array { .. }) {
+                            if var.init.is_some() {
+                                return Err(
+                                    "native backend: array initializers are not supported yet"
+                                        .to_owned(),
+                                );
+                            }
+                            self.line(out, &format!("{} = {{0}};", kind.c_declaration(&c_name)));
+                            self.vars.insert(var.name.clone(), VarInfo { c_name, kind });
+                            continue;
+                        }
                         let init = match &var.init {
                             Some(init) => {
                                 let (code, value_kind) = self.emit_expr(&init.value)?;
@@ -395,11 +449,47 @@ impl Generator<'_> {
         op: AssignOp,
         value: &Expr,
     ) -> Result<(), String> {
-        let Expr::Name { name, .. } = target else {
-            return Err("native backend: assignment targets must be simple variables".to_owned());
-        };
-        let Some(info) = self.vars.get(name).cloned() else {
-            return Err(format!("native backend: unknown variable `{name}`"));
+        let target_code = match target {
+            Expr::Name { name, .. } => {
+                let Some(info) = self.vars.get(name).cloned() else {
+                    return Err(format!("native backend: unknown variable `{name}`"));
+                };
+                if matches!(info.kind, Kind::Array { .. }) {
+                    return Err(
+                        "native backend: whole-array assignment is not supported yet".to_owned(),
+                    );
+                }
+                info.c_name
+            }
+            Expr::Apply {
+                name, args, span, ..
+            } => {
+                if args.len() != 1 {
+                    return Err(
+                        "native backend: multidimensional array targets are not supported yet"
+                            .to_owned(),
+                    );
+                }
+                let Some(info) = self.vars.get(name).cloned() else {
+                    return Err(format!("native backend: unknown array `{name}`"));
+                };
+                let Kind::Array { low, .. } = info.kind else {
+                    return Err(format!("native backend: `{name}` is not an array"));
+                };
+                let Some(ApplyResolution::ArrayIndex(Type::Array(_))) =
+                    self.check.resolutions.get(span)
+                else {
+                    return Err(format!("native backend: `{name}` is not an indexed array"));
+                };
+                let (index, _) = self.emit_expr(&args[0])?;
+                format!("{}[({index}) - ({low})]", info.c_name)
+            }
+            _ => {
+                return Err(
+                    "native backend: this assignment target is not supported in native code yet"
+                        .to_owned(),
+                )
+            }
         };
         let (code, _) = self.emit_expr(value)?;
         let operator = match op {
@@ -414,7 +504,7 @@ impl Generator<'_> {
                 )
             }
         };
-        self.line(out, &format!("{} {operator} {code};", info.c_name));
+        self.line(out, &format!("{target_code} {operator} {code};"));
         Ok(())
     }
 
@@ -432,36 +522,41 @@ impl Generator<'_> {
                 let newline = name == "WRITELINE";
                 if let Some(argument) = args.first() {
                     let (code, kind) = self.emit_expr(argument)?;
-                    let format = match kind {
-                        Kind::String => {
-                            if newline {
-                                format!("puts({code});")
-                            } else {
-                                format!("fputs({code}, stdout);")
+                    let format =
+                        match kind {
+                            Kind::String => {
+                                if newline {
+                                    format!("puts({code});")
+                                } else {
+                                    format!("fputs({code}, stdout);")
+                                }
                             }
-                        }
-                        Kind::Char => {
-                            if newline {
-                                format!("printf(\"%c\\n\", {code});")
-                            } else {
-                                format!("printf(\"%c\", {code});")
+                            Kind::Char => {
+                                if newline {
+                                    format!("printf(\"%c\\n\", {code});")
+                                } else {
+                                    format!("printf(\"%c\", {code});")
+                                }
                             }
-                        }
-                        Kind::Bool => {
-                            if newline {
-                                format!("printf(\"%d\\n\", {code});")
-                            } else {
-                                format!("printf(\"%d\", {code});")
+                            Kind::Bool => {
+                                if newline {
+                                    format!("printf(\"%d\\n\", {code});")
+                                } else {
+                                    format!("printf(\"%d\", {code});")
+                                }
                             }
-                        }
-                        Kind::Int => {
-                            if newline {
-                                format!("printf(\"%lld\\n\", (long long)({code}));")
-                            } else {
-                                format!("printf(\"%lld\", (long long)({code}));")
+                            Kind::Int => {
+                                if newline {
+                                    format!("printf(\"%lld\\n\", (long long)({code}));")
+                                } else {
+                                    format!("printf(\"%lld\", (long long)({code}));")
+                                }
                             }
-                        }
-                    };
+                            Kind::Array { .. } => return Err(
+                                "native backend: arrays cannot be passed to WRITE/WRITELINE yet"
+                                    .to_owned(),
+                            ),
+                        };
                     self.line(out, &format);
                 } else if newline {
                     self.line(out, "putchar('\\n');");
@@ -484,11 +579,19 @@ impl Generator<'_> {
             }
             Expr::Char { value, .. } => Ok(((*value as u32).to_string(), Kind::Char)),
             Expr::String { value, .. } => Ok((format!("\"{}\"", c_escape(value)), Kind::String)),
-            Expr::Name { name, .. } => self
-                .vars
-                .get(name)
-                .map(|info| (info.c_name.clone(), info.kind))
-                .ok_or_else(|| format!("native backend: unknown variable `{name}`")),
+            Expr::Name { name, .. } => {
+                let info = self
+                    .vars
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| format!("native backend: unknown variable `{name}`"))?;
+                if matches!(info.kind, Kind::Array { .. }) {
+                    return Err(format!(
+                        "native backend: array `{name}` cannot be used as a scalar value"
+                    ));
+                }
+                Ok((info.c_name, info.kind))
+            }
             Expr::Unary { op, operand, .. } => {
                 let (code, _) = self.emit_expr(operand)?;
                 Ok((
@@ -528,6 +631,25 @@ impl Generator<'_> {
                 Ok((format!("(({left}) {operator} ({right}))"), kind))
             }
             Expr::Apply { name, args, span } => match self.check.resolutions.get(span) {
+                Some(ApplyResolution::ArrayIndex(Type::Array(_))) => {
+                    if args.len() != 1 {
+                        return Err(
+                            "native backend: multidimensional array indexing is not supported yet"
+                                .to_owned(),
+                        );
+                    }
+                    let Some(info) = self.vars.get(name).cloned() else {
+                        return Err(format!("native backend: unknown array `{name}`"));
+                    };
+                    let Kind::Array { element, low, .. } = info.kind else {
+                        return Err(format!("native backend: `{name}` is not an array"));
+                    };
+                    let (index, _) = self.emit_expr(&args[0])?;
+                    Ok((
+                        format!("{}[({index}) - ({low})]", info.c_name),
+                        element.kind(),
+                    ))
+                }
                 Some(ApplyResolution::Procedure(_)) => {
                     let (code, kind) = self.emit_procedure_call(name, args, *span)?;
                     Ok((code, kind))
@@ -594,6 +716,28 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
         Type::Char | Type::WChar => Ok(Kind::Char),
         Type::String | Type::BoundedString { .. } | Type::WString | Type::WBoundedString { .. } => {
             Ok(Kind::String)
+        }
+        Type::Array(array) => {
+            let element = match array.element.ty() {
+                Type::Int(_) | Type::IntLiteral => ScalarKind::Int,
+                Type::Bool => ScalarKind::Bool,
+                Type::Char => ScalarKind::Char,
+                Type::String
+                | Type::BoundedString { .. }
+                | Type::WString
+                | Type::WBoundedString { .. } => ScalarKind::String,
+                other => {
+                    return Err(format!(
+                        "native backend: array element mode `{}` is not supported yet",
+                        other.describe()
+                    ))
+                }
+            };
+            Ok(Kind::Array {
+                element,
+                low: array.low,
+                count: (array.high - array.low + 1).max(0) as usize,
+            })
         }
         _ => Err(format!(
             "native backend: mode `{}` is not supported yet",
