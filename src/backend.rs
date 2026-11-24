@@ -5,8 +5,8 @@
 //! silently. The interpreter remains the reference implementation.
 
 use crate::ast::{
-    Action, AssignOp, BinaryOp, Declaration, Expr, ModeRef, Module, Passing, ProcDef, Program,
-    UnaryOp,
+    Action, AssignOp, BinaryOp, CaseLabel, Declaration, Expr, ModeRef, Module, Passing, ProcDef,
+    Program, UnaryOp,
 };
 use crate::sema::{ApplyResolution, CheckResult};
 use crate::types::{self, Type};
@@ -491,6 +491,12 @@ impl Generator<'_> {
                             .to_owned(),
                     )
                 }
+                Action::Case {
+                    selectors,
+                    alternatives,
+                    else_actions,
+                    ..
+                } => self.emit_case(out, selectors, alternatives, else_actions.as_deref())?,
                 Action::Empty { .. } => {}
                 _ => {
                     return Err(
@@ -501,6 +507,156 @@ impl Generator<'_> {
             }
         }
         Ok(())
+    }
+
+    fn emit_case(
+        &mut self,
+        out: &mut String,
+        selectors: &[Expr],
+        alternatives: &[crate::ast::CaseAlternative],
+        else_actions: Option<&[Action]>,
+    ) -> Result<(), String> {
+        if selectors.len() != 1 {
+            return Err("native backend: multiple CASE selectors are not supported yet".to_owned());
+        }
+        let unique = self.temp_counter;
+        self.temp_counter += 1;
+        let selector = format!("__case_{unique}");
+        let explicit = format!("__case_explicit_{unique}");
+        let (selector_code, _) = self.emit_expr(&selectors[0])?;
+        self.line(out, &format!("const int64_t {selector} = {selector_code};"));
+        let explicit_conditions = alternatives
+            .iter()
+            .map(|alternative| self.case_condition(&selector, alternative, true))
+            .collect::<Result<Vec<_>, _>>()?;
+        let explicit_conditions = explicit_conditions
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        if explicit_conditions.is_empty() {
+            self.line(out, &format!("const int {explicit} = 0;"));
+        } else {
+            self.line(
+                out,
+                &format!(
+                    "const int {explicit} = {};",
+                    explicit_conditions.join(" || ")
+                ),
+            );
+        }
+        let mut first = true;
+        for alternative in alternatives {
+            let Some(condition) =
+                self.case_condition_with_explicit(&selector, &explicit, alternative)?
+            else {
+                continue;
+            };
+            self.line(
+                out,
+                &format!("{} ({condition}) {{", if first { "if" } else { "else if" }),
+            );
+            first = false;
+            self.indent += 1;
+            self.emit_actions(out, &alternative.body)?;
+            self.indent -= 1;
+            self.line(out, "}");
+        }
+        if let Some(actions) = else_actions {
+            if first {
+                self.emit_actions(out, actions)?;
+            } else {
+                self.line(out, "else {");
+                self.indent += 1;
+                self.emit_actions(out, actions)?;
+                self.indent -= 1;
+                self.line(out, "}");
+            }
+        }
+        Ok(())
+    }
+
+    fn case_condition(
+        &mut self,
+        selector: &str,
+        alternative: &crate::ast::CaseAlternative,
+        explicit_only: bool,
+    ) -> Result<Option<String>, String> {
+        let Some(labels) = alternative.labels.first() else {
+            return Err("native backend: CASE alternative has no labels".to_owned());
+        };
+        if alternative.labels.len() != 1 {
+            return Err("native backend: multiple CASE selectors are not supported yet".to_owned());
+        }
+        let mut conditions = Vec::new();
+        for label in labels {
+            if explicit_only && matches!(label, CaseLabel::Else | CaseLabel::Any) {
+                continue;
+            }
+            let condition = match label {
+                CaseLabel::Value(value) => format!("{selector} == {value}"),
+                CaseLabel::Bool(value) => {
+                    format!("{selector} == {}", if *value { 1 } else { 0 })
+                }
+                CaseLabel::Char(value) => format!("{selector} == {}", *value as u32),
+                CaseLabel::Range { low, high } => {
+                    format!("({selector} >= {low} && {selector} <= {high})")
+                }
+                CaseLabel::CharRange { low, high } => {
+                    format!(
+                        "({selector} >= {} && {selector} <= {})",
+                        *low as u32, *high as u32
+                    )
+                }
+                CaseLabel::Else | CaseLabel::Any => continue,
+            };
+            conditions.push(condition);
+        }
+        if conditions.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(conditions.join(" || ")))
+        }
+    }
+
+    fn case_condition_with_explicit(
+        &mut self,
+        selector: &str,
+        explicit: &str,
+        alternative: &crate::ast::CaseAlternative,
+    ) -> Result<Option<String>, String> {
+        let Some(labels) = alternative.labels.first() else {
+            return Err("native backend: CASE alternative has no labels".to_owned());
+        };
+        if alternative.labels.len() != 1 {
+            return Err("native backend: multiple CASE selectors are not supported yet".to_owned());
+        }
+        let mut conditions = Vec::new();
+        for label in labels {
+            let condition = match label {
+                CaseLabel::Value(value) => format!("{selector} == {value}"),
+                CaseLabel::Bool(value) => {
+                    format!("{selector} == {}", if *value { 1 } else { 0 })
+                }
+                CaseLabel::Char(value) => format!("{selector} == {}", *value as u32),
+                CaseLabel::Range { low, high } => {
+                    format!("({selector} >= {low} && {selector} <= {high})")
+                }
+                CaseLabel::CharRange { low, high } => {
+                    format!(
+                        "({selector} >= {} && {selector} <= {})",
+                        *low as u32, *high as u32
+                    )
+                }
+                CaseLabel::Else => format!("!{explicit}"),
+                CaseLabel::Any => "1".to_owned(),
+            };
+            conditions.push(condition);
+        }
+        if conditions.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(conditions.join(" || ")))
+        }
     }
 
     fn emit_do(

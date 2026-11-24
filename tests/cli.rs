@@ -529,6 +529,56 @@ END M;
 }
 
 #[test]
+fn compiles_native_case_program() {
+    let dir = TempDir::new("z200c-native-case");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativecase"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL x INT INIT := 2;
+  DCL result INT INIT := 0;
+  CASE x OF
+    (1): result := 10;
+    (2, 3): result := 20;
+    (ELSE): result := 30;
+  ESAC;
+  ASSERT result = 20;
+  CASE x OF
+    (4): result := 40;
+    ELSE
+      result := 50;
+  ESAC;
+  ASSERT result = 50;
+  WRITELINE("case ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativecase");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "case ok\n");
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
