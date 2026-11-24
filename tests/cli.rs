@@ -1386,6 +1386,131 @@ END M;
 }
 
 #[test]
+fn compiles_native_exceptions_and_handlers() {
+    let dir = TempDir::new("z200c-native-exceptions");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativeexc"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL a ARRAY(1:2) INT;
+
+  P: PROC (n INT) RETURNS (INT) EXCEPTIONS (fail);
+    IF n < 0 THEN
+      CAUSE fail;
+    FI;
+    RETURN n;
+  END
+  ON (fail):
+    RESULT -1;
+  END P;
+
+  ASSERT P(-1) = -1;
+  ASSERT P(3) = 3;
+
+  BEGIN
+    a(3) := 1;
+  END
+  ON (RANGEFAIL):
+    WRITELINE("range caught");
+  END;
+
+  BEGIN
+    ASSERT FALSE;
+  END
+  ON (ASSERTFAIL):
+    WRITELINE("assert caught");
+  END;
+
+  BEGIN
+    DCL x LONG_INT INIT := 9223372036854775807;
+    x := x + 1;
+  END
+  ON (OVERFLOW):
+    WRITELINE("overflow caught");
+  END;
+
+  CAUSE boom;
+END
+ON (boom):
+  WRITELINE("boom caught");
+END;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativeexc");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "range caught
+assert caught
+overflow caught
+boom caught
+"
+    );
+}
+
+#[test]
+fn native_unhandled_exception_fails_cleanly() {
+    let dir = TempDir::new("z200c-native-unhandled");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativeunhandled"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  CAUSE boom;
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativeunhandled");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(!run.status.success());
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("UNHANDLED: boom"),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

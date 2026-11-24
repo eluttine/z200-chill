@@ -53,7 +53,9 @@ reference implementation for the complete supported language.
   and same-mode array equality/inequality,
 - `WRITE` and `WRITELINE` with one value argument,
 - runtime checks for array bounds, division/modulo by zero, signed overflow in
-  `+`/`-`/`*`/unary `-`, and `NULL` dereference.
+  `+`/`-`/`*`/unary `-`, and `NULL` dereference,
+- `CAUSE` and `ON` handlers on module, procedure, and action bodies, including
+  catching `ASSERTFAIL`, `RANGEFAIL`, and `OVERFLOW`.
 
 Generated code is C11 with `int64_t` integers, `int` booleans/characters, and
 `const char *` strings. Structure equality is generated field by field rather than with
@@ -70,15 +72,19 @@ Windows).
 - arrays of more complex composite element modes,
 - structure initializers and structure literals,
 - powersets, references to fields or composite locations, text, and buffers,
-- exceptions and handlers,
+- exception propagation across separate packages,
 - processes, regions, tasks, signals, and timing,
 - string memory reclamation (generated concatenations allocate and are not freed),
 - MSVC-specific compiler flags and discovery,
 - package dependencies and grant linking,
 - integer width enforcement beyond the C integer representation.
 
-Runtime failures print a CHILL-style code and message to stderr and abort. They are not
-yet catchable CHILL exceptions.
+Exceptions use a generated `setjmp`/`longjmp` handler chain. Unhandled exceptions and
+runtime failures print a CHILL-style code and message to stderr and abort. Handler
+support uses C `setjmp` semantics: reading an automatic local variable in a handler is
+only reliable if that variable was not modified after the protected action called
+`setjmp`. Module-level state and heap-backed values are safe. A future runtime frame or
+heap-allocated activation records will remove this C limitation.
 
 Unsupported constructs return an `E0601` diagnostic and do not produce a binary.
 
@@ -95,5 +101,6 @@ shared with the interpreter.
 ## Runtime ABI
 
 The first slice uses only the C standard library. There is no separate CHILL runtime
-archive yet. Runtime support will be added when native text, references, exceptions, and
-concurrency are implemented.
+archive yet. Exception handling is currently generated inline with `setjmp`/`longjmp`.
+Runtime support will be added when native text, references, and concurrency are
+implemented.
