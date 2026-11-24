@@ -51,6 +51,9 @@ asserts end-to-end delivery invariants.
   processes interleave with main-process actions.
 - Main-process `DELAY`/timed `DELAY` and `RECEIVE CASE` block by pumping the scheduler
   until a continuation, signal, buffer message, or timeout wakes the main process.
+- At program end the scheduler drains ready and timed processes, then static object
+  destructors run, task workers are stopped, and remaining scheduler state is cleared.
+  Pending region/object/buffer waits are reported as deadlock.
 - Full coroutine-based main-process termination semantics remain deferred.
 - Timeouts are enforced at blocking points (`DELAY`, `RECEIVE`, buffer waits), not
   during arbitrary long-running computation.

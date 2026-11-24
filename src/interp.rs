@@ -424,34 +424,39 @@ pub fn run_checked(
         resume_process(&scheduler, runnable)?;
     }
     CURRENT_YIELDER.with(|slot| slot.set(std::ptr::null()));
-    interpreter.destroy_all_module_objects()?;
-    drop(interpreter);
-    if scheduler
-        .borrow()
-        .event_waiters
-        .values()
-        .any(|waiting| waiting.iter().any(|waiter| waiter.slot.borrow().is_some()))
-        || scheduler
-            .borrow()
-            .receivers
+    let deadlocked = {
+        let scheduler = scheduler.borrow();
+        scheduler
+            .event_waiters
             .values()
-            .any(|receivers| receivers.iter().any(|(_, slot, _)| slot.borrow().is_some()))
-        || scheduler
-            .borrow()
-            .object_waiters
-            .values()
-            .any(|waiters| !waiters.is_empty())
-        || scheduler.borrow().buffers.values().any(|buffer| {
-            buffer
-                .senders
-                .iter()
-                .any(|sender| sender.slot.borrow().is_some())
-                || buffer
-                    .receivers
+            .any(|waiting| waiting.iter().any(|waiter| waiter.slot.borrow().is_some()))
+            || scheduler
+                .receivers
+                .values()
+                .any(|receivers| receivers.iter().any(|(_, slot, _)| slot.borrow().is_some()))
+            || scheduler
+                .region_waiters
+                .values()
+                .any(|waiters| !waiters.is_empty())
+            || scheduler
+                .object_waiters
+                .values()
+                .any(|waiters| !waiters.is_empty())
+            || scheduler.buffers.values().any(|buffer| {
+                buffer
+                    .senders
                     .iter()
-                    .any(|receiver| receiver.slot.borrow().is_some())
-        })
-    {
+                    .any(|sender| sender.slot.borrow().is_some())
+                    || buffer
+                        .receivers
+                        .iter()
+                        .any(|receiver| receiver.slot.borrow().is_some())
+            })
+    };
+    interpreter.destroy_all_module_objects()?;
+    shutdown_scheduler(&scheduler);
+    drop(interpreter);
+    if deadlocked {
         return Err(Error::coded(
             "E0500",
             error_span,
@@ -1034,6 +1039,28 @@ fn next_timed_deadline(scheduler: &Rc<RefCell<ScheduleState>>) -> Option<Instant
     .into_iter()
     .flatten()
     .min()
+}
+
+fn shutdown_scheduler(scheduler: &Rc<RefCell<ScheduleState>>) {
+    let mut scheduler = scheduler.borrow_mut();
+    scheduler.ready.clear();
+    scheduler.live_processes.clear();
+    scheduler.process_names.clear();
+    scheduler.event_waiters.clear();
+    scheduler.signals.clear();
+    scheduler.receivers.clear();
+    scheduler.buffers.clear();
+    scheduler.sleepers.clear();
+    scheduler.task_jobs.clear();
+    scheduler.task_waiters.clear();
+    scheduler.task_workers.clear();
+    scheduler.task_stopped.clear();
+    scheduler.region_owner.clear();
+    scheduler.region_waiters.clear();
+    scheduler.object_owner.clear();
+    scheduler.object_waiters.clear();
+    scheduler.main_wait = None;
+    scheduler.main_wake = None;
 }
 
 fn expire_timed_waiters(scheduler: &Rc<RefCell<ScheduleState>>) {

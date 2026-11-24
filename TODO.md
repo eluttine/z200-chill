@@ -205,6 +205,8 @@ deferred.
 - [x] Main-process interleaving at action boundaries via scheduler pumping.
 - [x] Main-process blocking `DELAY`, timed `DELAY`, and signal/buffer `RECEIVE CASE`
       through scheduler pumping.
+- [x] Deterministic program shutdown: drain processes, stop task workers, run static
+      destructors, clear scheduler state, and report residual region/object/buffer waits.
 - [ ] Full coroutine-based main-process termination semantics.
 - [x] Complete `Mode!Component` path preservation in mode symbols and grant files.
 - [x] First concurrency layer: `PROCESS`, `START`, `STOP`, a cooperative
