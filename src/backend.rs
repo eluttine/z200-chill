@@ -140,6 +140,7 @@ struct Generator<'a> {
     vars: HashMap<String, VarInfo>,
     indent: usize,
     result: Option<(String, Kind)>,
+    result_wrapper: Option<String>,
     temp_counter: usize,
     loop_depth: usize,
     labels: Vec<(String, String)>,
@@ -470,6 +471,8 @@ static int z_string_array_equal(const char **left, const char **right, size_t co
     );
 
     emit_struct_typedefs(&mut out, modes)?;
+    emit_array_result_typedefs(&mut out, &modules, module_modes)?;
+    out.push('\n');
 
     // Module globals.
     for (index, module) in modules.iter().enumerate() {
@@ -527,6 +530,7 @@ static int z_string_array_equal(const char **left, const char **right, size_t co
             vars: module_vars(module, index, module_modes),
             indent: 1,
             result: None,
+            result_wrapper: None,
             temp_counter: 0,
             loop_depth: 0,
             labels: Vec::new(),
@@ -628,6 +632,37 @@ fn proc_name(module: usize, name: &str) -> String {
     format!("m{module}_p_{}", c_ident(name))
 }
 
+fn array_result_wrapper(module: usize, name: &str) -> String {
+    format!("z_ret_{}", proc_name(module, name))
+}
+
+fn emit_array_result_typedefs(
+    out: &mut String,
+    modules: &[&Module],
+    module_modes: &[HashMap<String, Type>],
+) -> Result<(), String> {
+    for (index, module) in modules.iter().enumerate() {
+        for declaration in &module.declarations {
+            let Declaration::Proc(proc_def) = declaration else {
+                continue;
+            };
+            let Some(mode) = &proc_def.result else {
+                continue;
+            };
+            let kind = mode_kind(mode, module_modes, index)?;
+            if let Kind::Array { element, total, .. } = kind {
+                out.push_str(&format!(
+                    "typedef struct {{ {} items[{}]; }} {};\n",
+                    element.c_type(),
+                    total,
+                    array_result_wrapper(index, &proc_def.name)
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn emit_proc_signature(
     out: &mut String,
     module: usize,
@@ -639,12 +674,11 @@ fn emit_proc_signature(
         .as_ref()
         .map(|mode| mode_kind(mode, module_modes, module))
         .transpose()?;
-    if matches!(result_kind, Some(Kind::Array { .. })) {
-        return Err("native backend: array procedure results are not supported yet".to_owned());
-    }
-    let result = result_kind
-        .map(Kind::c_type)
-        .unwrap_or_else(|| "void".to_owned());
+    let result = match result_kind {
+        Some(Kind::Array { .. }) => array_result_wrapper(module, &proc_def.name),
+        Some(kind) => kind.c_type(),
+        None => "void".to_owned(),
+    };
     out.push_str(&format!(
         "static {result} {}",
         proc_name(module, &proc_def.name)
@@ -691,6 +725,15 @@ fn emit_proc(
 ) -> Result<(), String> {
     emit_proc_signature(out, module, proc_def, module_modes)?;
     out.push_str(" {\n");
+    let result_kind = proc_def
+        .result
+        .as_ref()
+        .map(|mode| mode_kind(mode, module_modes, module))
+        .transpose()?;
+    let result_wrapper = match result_kind {
+        Some(Kind::Array { .. }) => Some(array_result_wrapper(module, &proc_def.name)),
+        _ => None,
+    };
     let mut generator = Generator {
         check,
         module_index: module,
@@ -698,24 +741,25 @@ fn emit_proc(
         module_modes,
         vars: module_vars(owner, module, module_modes),
         indent: 1,
-        result: proc_def
-            .result
-            .as_ref()
-            .map(|mode| {
-                mode_kind(mode, module_modes, module)
-                    .map(|kind| (format!("__result_{}", c_ident(&proc_def.name)), kind))
-            })
-            .transpose()?,
+        result: result_kind.map(|kind| (format!("__result_{}", c_ident(&proc_def.name)), kind)),
+        result_wrapper,
         temp_counter: 0,
         loop_depth: 0,
         labels: Vec::new(),
     };
     generator.line(out, "ZHandler *__z_entry_handlers = z_handlers;");
     if let Some((name, kind)) = &generator.result {
-        generator.line(
-            out,
-            &format!("{} {} = {};", kind.c_type(), name, kind.default_value()),
-        );
+        if let Kind::Array { element, total, .. } = kind {
+            generator.line(
+                out,
+                &format!("{} {name}[{total}] = {{0}};", element.c_type()),
+            );
+        } else {
+            generator.line(
+                out,
+                &format!("{} {} = {};", kind.c_type(), name, kind.default_value()),
+            );
+        }
     }
     for param in &proc_def.params {
         let kind = mode_kind(&param.mode, module_modes, module)?;
@@ -749,9 +793,16 @@ fn emit_proc(
     } else {
         generator.emit_actions(out, &proc_def.actions)?;
     }
-    generator.line(out, "z_handlers = __z_entry_handlers;");
-    if let Some((name, _)) = generator.result.clone() {
-        generator.line(out, &format!("return {name};"));
+    if let Some(wrapper) = generator.result_wrapper.clone() {
+        let Some((name, _)) = generator.result.clone() else {
+            return Err("native backend: internal array result without storage".to_owned());
+        };
+        generator.emit_array_result_return(out, &name, &wrapper)?;
+    } else {
+        generator.line(out, "z_handlers = __z_entry_handlers;");
+        if let Some((name, _)) = generator.result.clone() {
+            generator.line(out, &format!("return {name};"));
+        }
     }
     out.push_str("}\n\n");
     Ok(())
@@ -981,27 +1032,50 @@ impl Generator<'_> {
                     );
                 }
                 Action::Call { callee, .. } => self.emit_call(out, callee)?,
-                Action::Return { value, .. } => match value {
-                    Some(value) => {
-                        let (code, _) = self.emit_expr(value)?;
-                        self.line(out, "z_handlers = __z_entry_handlers;");
-                        self.line(out, &format!("return {code};"));
-                    }
-                    None => {
-                        self.line(out, "z_handlers = __z_entry_handlers;");
-                        if let Some((name, _)) = &self.result {
-                            self.line(out, &format!("return {name};"));
-                        } else {
-                            self.line(out, "return;");
+                Action::Return { value, .. } => {
+                    if let Some(wrapper) = self.result_wrapper.clone() {
+                        let Some((name, kind)) = self.result.clone() else {
+                            return Err(
+                                "native backend: internal array result without storage".to_owned()
+                            );
+                        };
+                        if let Some(value) = value {
+                            let target = VarInfo {
+                                c_name: name.clone(),
+                                kind,
+                            };
+                            self.emit_array_value_into(out, &target, value)?;
+                        }
+                        self.emit_array_result_return(out, &name, &wrapper)?;
+                    } else {
+                        match value {
+                            Some(value) => {
+                                let (code, _) = self.emit_expr(value)?;
+                                self.line(out, "z_handlers = __z_entry_handlers;");
+                                self.line(out, &format!("return {code};"));
+                            }
+                            None => {
+                                self.line(out, "z_handlers = __z_entry_handlers;");
+                                if let Some((name, _)) = &self.result {
+                                    self.line(out, &format!("return {name};"));
+                                } else {
+                                    self.line(out, "return;");
+                                }
+                            }
                         }
                     }
-                },
+                }
                 Action::Result { value, .. } => {
-                    let Some((name, _)) = self.result.clone() else {
+                    let Some((name, kind)) = self.result.clone() else {
                         return Err("native backend: RESULT outside a value procedure".to_owned());
                     };
-                    let (code, _) = self.emit_expr(value)?;
-                    self.line(out, &format!("{name} = {code};"));
+                    if self.result_wrapper.is_some() {
+                        let target = VarInfo { c_name: name, kind };
+                        self.emit_array_value_into(out, &target, value)?;
+                    } else {
+                        let (code, _) = self.emit_expr(value)?;
+                        self.line(out, &format!("{name} = {code};"));
+                    }
                 }
                 Action::If {
                     branches,
@@ -1351,6 +1425,64 @@ impl Generator<'_> {
         Ok(())
     }
 
+    fn emit_array_value_into(
+        &mut self,
+        out: &mut String,
+        target: &VarInfo,
+        value: &Expr,
+    ) -> Result<(), String> {
+        if matches!(value, Expr::ArrayTuple { .. }) {
+            return self.emit_array_literal(out, target, value, value.span());
+        }
+        if let Expr::Name { name, .. } = value {
+            if let Some(info) = self.vars.get(name).cloned() {
+                if matches!(info.kind, Kind::Array { .. }) {
+                    if info.kind != target.kind {
+                        return Err(
+                            "native backend: array assignment requires matching modes".to_owned()
+                        );
+                    }
+                    let size = array_size_expression(target.kind)?;
+                    self.line(
+                        out,
+                        &format!("memcpy({}, {}, {size});", target.c_name, info.c_name),
+                    );
+                    return Ok(());
+                }
+            }
+        }
+        let (code, kind) = self.emit_expr(value)?;
+        if !matches!(kind, Kind::Array { .. }) {
+            return Err("native backend: array assignment requires an array value".to_owned());
+        }
+        let size = array_size_expression(target.kind)?;
+        self.line(
+            out,
+            &format!("memcpy({}, {}, {size});", target.c_name, code),
+        );
+        Ok(())
+    }
+
+    fn emit_array_result_return(
+        &mut self,
+        out: &mut String,
+        result_name: &str,
+        wrapper: &str,
+    ) -> Result<(), String> {
+        self.line(out, "z_handlers = __z_entry_handlers;");
+        self.line(out, "{");
+        self.indent += 1;
+        self.line(out, &format!("{wrapper} __out;"));
+        self.line(
+            out,
+            &format!("memcpy(__out.items, {result_name}, sizeof(__out.items));"),
+        );
+        self.line(out, "return __out;");
+        self.indent -= 1;
+        self.line(out, "}");
+        Ok(())
+    }
+
     fn emit_assignment(
         &mut self,
         out: &mut String,
@@ -1385,7 +1517,7 @@ impl Generator<'_> {
                         );
                         return Ok(());
                     }
-                    self.emit_array_literal(out, &info, value, target.span())?;
+                    self.emit_array_value_into(out, &info, value)?;
                     return Ok(());
                 }
                 (info.c_name, info.kind)
@@ -2019,19 +2151,31 @@ impl Generator<'_> {
     }
 
     fn emit_array_argument(&mut self, argument: &Expr) -> Result<String, String> {
-        let Expr::Name { name, .. } = argument else {
-            return Err(
-                "native backend: array arguments currently require a simple array variable"
+        match argument {
+            Expr::Name { name, .. } => {
+                let Some(info) = self.vars.get(name).cloned() else {
+                    return Err(format!("native backend: unknown array `{name}`"));
+                };
+                if !matches!(info.kind, Kind::Array { .. }) {
+                    return Err(format!("native backend: `{name}` is not an array"));
+                }
+                Ok(info.c_name)
+            }
+            Expr::Apply { .. } => {
+                let (code, kind) = self.emit_expr(argument)?;
+                if !matches!(kind, Kind::Array { .. }) {
+                    return Err(
+                        "native backend: array argument expression does not produce an array"
+                            .to_owned(),
+                    );
+                }
+                Ok(code)
+            }
+            _ => Err(
+                "native backend: array arguments currently require an array variable or array result"
                     .to_owned(),
-            );
-        };
-        let Some(info) = self.vars.get(name).cloned() else {
-            return Err(format!("native backend: unknown array `{name}`"));
-        };
-        if !matches!(info.kind, Kind::Array { .. }) {
-            return Err(format!("native backend: `{name}` is not an array"));
+            ),
         }
-        Ok(info.c_name)
     }
 
     fn emit_procedure_call(
@@ -2050,7 +2194,14 @@ impl Generator<'_> {
         let name = proc_name(self.module_index, name);
         let call = format!("{name}({})", lowered.join(", "));
         match signature.result {
-            Some(ty) => Ok((call, kind_from_type(ty)?)),
+            Some(ty) => {
+                let kind = kind_from_type(ty)?;
+                if matches!(kind, Kind::Array { .. }) {
+                    Ok((format!("{call}.items"), kind))
+                } else {
+                    Ok((call, kind))
+                }
+            }
             None => Err(format!(
                 "native backend: procedure `{name}` does not return a value but is used in an expression"
             )),

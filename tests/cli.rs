@@ -1771,6 +1771,100 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_array_results() {
+    let dir = TempDir::new("z200c-native-array-results");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativearrret"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL a ARRAY(1:2) INT;
+  DCL b ARRAY(1:2) INT;
+  NEWMODE Point = STRUCT (x INT, y INT);
+  DCL points ARRAY(1:2) Point;
+
+  Pair: PROC () RETURNS (ARRAY(1:2) INT);
+    RETURN [11, 12];
+  END Pair;
+
+  Copy: PROC (v ARRAY(1:2) INT) RETURNS (ARRAY(1:2) INT);
+    RETURN v;
+  END Copy;
+
+  Sum: PROC (v ARRAY(1:2) INT) RETURNS (INT);
+    RETURN v(1) + v(2);
+  END Sum;
+
+  MakePoints: PROC () RETURNS (ARRAY(1:2) Point);
+    DCL temp ARRAY(1:2) Point;
+    temp(1).x := 1;
+    temp(1).y := 2;
+    temp(2).x := 3;
+    temp(2).y := 4;
+    RETURN temp;
+  END MakePoints;
+
+  WithHandler: PROC () RETURNS (ARRAY(1:2) INT) EXCEPTIONS (fail);
+    CAUSE fail;
+  END
+  ON (fail):
+    RESULT [7, 8];
+  END WithHandler;
+
+  a := Pair();
+  ASSERT a(1) = 11;
+  ASSERT a(2) = 12;
+  ASSERT Sum(a) = 23;
+  ASSERT Sum(Pair()) = 23;
+
+  b := Copy(a);
+  ASSERT b(1) = 11;
+  b(2) := 20;
+  ASSERT a(2) = 12;
+
+  a := WithHandler();
+  ASSERT a(1) = 7;
+  ASSERT a(2) = 8;
+
+  points := MakePoints();
+  ASSERT points(1).x = 1;
+  ASSERT points(1).y = 2;
+  ASSERT points(2).x = 3;
+  ASSERT points(2).y = 4;
+  WRITELINE("array results ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativearrret");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "array results ok
+"
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
