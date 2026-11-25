@@ -8,7 +8,7 @@ use crate::ast::{
     Action, AssignOp, BinaryOp, CaseLabel, Declaration, Expr, Handler, ModeRef, Module, Passing,
     ProcDef, Program, UnaryOp,
 };
-use crate::builtins::{ClauseWidth, ConversionCode, FormatOp, TextIo};
+use crate::builtins::{ClauseWidth, ConversionCode, EditingCode, FormatOp, IoControl, TextIo};
 use crate::manifest::WidthProfile;
 use crate::modes::ModeTable;
 use crate::sema::{ApplyResolution, CheckResult, ImportedKind, ImportedSymbol};
@@ -785,7 +785,10 @@ static void z_text_write_padded(
     int overflow
 ) {
     size_t len = strlen(value);
-    if (width <= 0) {
+    if (width < 0) {
+        z_fail("TEXTFAIL", "negative variable width");
+    }
+    if (width == 0) {
         z_text_write(text, value, limit);
         return;
     }
@@ -960,6 +963,336 @@ static int z_text_read_bool(ZText *text, size_t limit) {
     }
     z_fail("TEXTFAIL", "invalid boolean text");
     return 0;
+}
+
+static void z_text_pad_to(ZText *text, int64_t width, size_t limit) {
+    if (width < 0) {
+        z_fail("TEXTFAIL", "negative variable width");
+    }
+    if ((size_t)width > limit) {
+        z_fail("TEXTFAIL", "text record exceeds the text length");
+    }
+    if (text->len < (size_t)width) {
+        char *copy = (char *)z_rc_alloc((size_t)width + 1);
+        memset(copy, ' ', (size_t)width);
+        if (text->record != NULL && text->len > 0) {
+            memcpy(copy, text->record, text->len);
+        }
+        copy[(size_t)width] = '\0';
+        z_rc_release(text->record);
+        text->record = copy;
+        text->len = (size_t)width;
+    }
+    text->index = width;
+}
+
+static void z_text_edit_write(ZText *text, int code, int64_t width, size_t limit) {
+    if (width < 0) {
+        z_fail("TEXTFAIL", "negative variable width");
+    }
+    switch (code) {
+        case 0: {
+            size_t count = (size_t)width;
+            char *spaces = (char *)malloc(count + 1);
+            if (spaces == NULL) { z_fail("STORAGE", "out of memory"); }
+            memset(spaces, ' ', count);
+            spaces[count] = '\0';
+            z_text_write(text, spaces, limit);
+            free(spaces);
+            break;
+        }
+        case 1: {
+            if (width > INT64_MAX - text->index) {
+                z_fail("TEXTFAIL", "text index overflow");
+            }
+            int64_t target = text->index + width;
+            if ((size_t)target > limit) {
+                z_fail("TEXTFAIL", "text record exceeds the text length");
+            }
+            if (text->len < (size_t)target) {
+                z_text_pad_to(text, target, limit);
+            } else {
+                text->index = target;
+            }
+            break;
+        }
+        case 2:
+            text->index -= width;
+            if (text->index < 0) {
+                z_fail("TEXTFAIL", "text index moved before the text");
+            }
+            break;
+        case 3:
+            z_text_pad_to(text, width, limit);
+            break;
+        default:
+            z_fail("TEXTFAIL", "unknown editing clause");
+    }
+}
+
+static void z_text_edit_read(ZText *text, int code, int64_t width, size_t limit) {
+    (void)limit;
+    if (width < 0) {
+        z_fail("TEXTFAIL", "negative variable width");
+    }
+    size_t start = (size_t)text->index;
+    size_t count = (size_t)width;
+    switch (code) {
+        case 0:
+            if (start + count > text->len) {
+                z_fail("TEXTFAIL", "text slice is out of bounds");
+            }
+            for (size_t index = start; index < start + count; index++) {
+                if (text->record[index] != ' ' && text->record[index] != '\t') {
+                    z_fail("TEXTFAIL", "expected space characters");
+                }
+            }
+            text->index = (int64_t)(start + count);
+            break;
+        case 1:
+            text->index += width;
+            if ((size_t)text->index > text->len) {
+                z_fail("TEXTFAIL", "text index moved past the text");
+            }
+            break;
+        case 2:
+            text->index -= width;
+            if (text->index < 0) {
+                z_fail("TEXTFAIL", "text index moved before the text");
+            }
+            break;
+        case 3:
+            if ((size_t)width > text->len) {
+                z_fail("TEXTFAIL", "text index moved past the text");
+            }
+            text->index = width;
+            break;
+        default:
+            z_fail("TEXTFAIL", "unknown editing clause");
+    }
+}
+
+static void z_text_io_write(ZText *text, int control, size_t limit) {
+    switch (control) {
+        case 0:
+        case 3:
+            z_text_write(text, "\n", limit);
+            break;
+        case 1:
+            z_text_write(text, "\f", limit);
+            break;
+        default:
+            break;
+    }
+}
+
+static void z_text_io_read(ZText *text, int control, size_t limit) {
+    (void)limit;
+    char expected = '\0';
+    switch (control) {
+        case 0:
+        case 3:
+            expected = '\n';
+            break;
+        case 1:
+            expected = '\f';
+            break;
+        default:
+            return;
+    }
+    if (text->index < 0 || (size_t)text->index >= text->len
+        || text->record[text->index] != expected) {
+        z_fail("TEXTFAIL", "expected a record separator");
+    }
+    text->index++;
+}
+
+static char z_text_upper(char value) {
+    return value >= 'a' && value <= 'z' ? (char)(value - 'a' + 'A') : value;
+}
+
+static int64_t z_text_read_int_format(
+    ZText *text,
+    size_t limit,
+    int base,
+    int64_t width,
+    int left,
+    char pad
+) {
+    (void)limit;
+    if (width < 0) {
+        z_fail("TEXTFAIL", "negative variable width");
+    }
+    const char *view = z_text_view(text);
+    size_t start = (size_t)text->index;
+    if (width == 0) {
+        size_t at = start;
+        while (at < text->len && (view[at] == ' ' || view[at] == '\t')) { at++; }
+        char *end = NULL;
+        long long value = strtoll(view + at, &end, base);
+        if (end == view + at) {
+            z_fail("TEXTFAIL", "invalid numeric text");
+        }
+        text->index = (int64_t)(end - view);
+        return (int64_t)value;
+    }
+    if (start + (size_t)width > text->len) {
+        z_fail("TEXTFAIL", "text slice is out of bounds");
+    }
+    size_t count = (size_t)width;
+    char *field = (char *)malloc(count + 1);
+    if (field == NULL) { z_fail("STORAGE", "out of memory"); }
+    memcpy(field, view + start, count);
+    field[count] = '\0';
+    char *begin = field;
+    char *finish = field + count;
+    if (left) {
+        while (finish > begin && finish[-1] == pad) { finish--; }
+    } else {
+        while (begin < finish && *begin == pad) { begin++; }
+    }
+    *finish = '\0';
+    char *end = NULL;
+    long long value = strtoll(begin, &end, base);
+    if (end == begin || *end != '\0') {
+        free(field);
+        z_fail("TEXTFAIL", "invalid integer in text");
+    }
+    free(field);
+    text->index = (int64_t)(start + count);
+    return (int64_t)value;
+}
+
+static int z_text_read_bool_format(
+    ZText *text,
+    size_t limit,
+    int64_t width,
+    int left,
+    char pad
+) {
+    (void)limit;
+    if (width < 0) {
+        z_fail("TEXTFAIL", "negative variable width");
+    }
+    const char *view = z_text_view(text);
+    size_t start = (size_t)text->index;
+    size_t count = width == 0 ? 0 : (size_t)width;
+    if (count > 0 && start + count > text->len) {
+        z_fail("TEXTFAIL", "text slice is out of bounds");
+    }
+    char *field = NULL;
+    const char *begin;
+    size_t length;
+    if (count == 0) {
+        begin = view + start;
+        length = text->len > start ? text->len - start : 0;
+    } else {
+        field = (char *)malloc(count + 1);
+        if (field == NULL) { z_fail("STORAGE", "out of memory"); }
+        memcpy(field, view + start, count);
+        field[count] = '\0';
+        begin = field;
+        length = count;
+        if (left) {
+            while (length > 0 && field[length - 1] == pad) { length--; }
+        } else {
+            size_t skip = 0;
+            while (skip < length && field[skip] == pad) { skip++; }
+            begin = field + skip;
+            length -= skip;
+        }
+    }
+    while (length > 0 && (*begin == ' ' || *begin == '\t')) {
+        begin++;
+        length--;
+    }
+    int result;
+    if (length >= 4 && z_text_upper(begin[0]) == 'T' && z_text_upper(begin[1]) == 'R'
+        && z_text_upper(begin[2]) == 'U' && z_text_upper(begin[3]) == 'E') {
+        result = 1;
+        if (count == 0) {
+            text->index = (int64_t)(start + (size_t)(begin - view) + 4);
+        } else {
+            text->index = (int64_t)(start + count);
+        }
+    } else if (length >= 5 && z_text_upper(begin[0]) == 'F' && z_text_upper(begin[1]) == 'A'
+        && z_text_upper(begin[2]) == 'L' && z_text_upper(begin[3]) == 'S'
+        && z_text_upper(begin[4]) == 'E') {
+        result = 0;
+        if (count == 0) {
+            text->index = (int64_t)(start + (size_t)(begin - view) + 5);
+        } else {
+            text->index = (int64_t)(start + count);
+        }
+    } else {
+        free(field);
+        z_fail("TEXTFAIL", "expected TRUE or FALSE");
+        result = 0;
+    }
+    if (field != NULL) { free(field); }
+    return result;
+}
+
+static int64_t z_text_read_char_format(
+    ZText *text,
+    size_t limit,
+    int64_t width,
+    int left,
+    char pad
+) {
+    (void)limit;
+    if (width < 0) {
+        z_fail("TEXTFAIL", "negative variable width");
+    }
+    const char *view = z_text_view(text);
+    size_t start = (size_t)text->index;
+    if (width == 0) {
+        if (start >= text->len) {
+            z_fail("TEXTFAIL", "expected a character");
+        }
+        text->index++;
+        return (unsigned char)view[start];
+    }
+    size_t count = (size_t)width;
+    if (start + count > text->len) {
+        z_fail("TEXTFAIL", "text slice is out of bounds");
+    }
+    size_t begin = start;
+    size_t finish = start + count;
+    if (left) {
+        while (finish > begin && view[finish - 1] == pad) { finish--; }
+    } else {
+        while (begin < finish && view[begin] == pad) { begin++; }
+    }
+    if (finish - begin != 1) {
+        z_fail("TEXTFAIL", "expected one character");
+    }
+    text->index = (int64_t)(start + count);
+    return (unsigned char)view[begin];
+}
+
+static const char *z_text_read_string_format(
+    ZText *text,
+    size_t limit,
+    int64_t width
+) {
+    (void)limit;
+    if (width < 0) {
+        z_fail("TEXTFAIL", "negative variable width");
+    }
+    const char *view = z_text_view(text);
+    size_t start = (size_t)text->index;
+    size_t count = width == 0
+        ? (text->len > start ? text->len - start : 0)
+        : (size_t)width;
+    if (start + count > text->len) {
+        z_fail("TEXTFAIL", "text slice is out of bounds");
+    }
+    char *result = (char *)z_rc_alloc(count + 1);
+    memcpy(result, view + start, count);
+    result[count] = ' ';
+    text->index = (int64_t)(start + count);
+    return result;
 }
 
 static void z_text_reset_index(ZText *text) {
@@ -3170,38 +3503,46 @@ impl Generator<'_> {
                 },
                 FormatOp::Convert(conversion) => {
                     text_conversion_supported(conversion, kind)?;
+                    let width_code = match conversion.width {
+                        ClauseWidth::Fixed(width) => width.to_string(),
+                        ClauseWidth::Variable => {
+                            let Some(width_arg) = args.get(io_index) else {
+                                return Err(
+                                    "native backend: text transfer is missing a variable width argument"
+                                        .to_owned(),
+                                );
+                            };
+                            io_index += 1;
+                            self.emit_expr(width_arg)?.0
+                        }
+                    };
                     let Some(argument) = args.get(io_index) else {
                         return Err(
                             "native backend: text transfer is missing an io argument".to_owned()
                         );
                     };
                     io_index += 1;
-                    let ClauseWidth::Fixed(width) = conversion.width else {
-                        unreachable!("validated above");
-                    };
                     let left = if conversion.left { 1 } else { 0 };
                     let overflow = if conversion.overflow { 1 } else { 0 };
                     let pad = conversion.pad as u32;
+                    let base = match conversion.code {
+                        ConversionCode::Binary => 2,
+                        ConversionCode::Octal => 8,
+                        ConversionCode::Hex => 16,
+                        ConversionCode::Default => 10,
+                        ConversionCode::Scientific => unreachable!(),
+                    };
                     match kind {
                         TextIo::Write => {
                             let (code, value_kind) = self.emit_expr(argument)?;
-                            let formats = format!("{width}, {left}, (char){pad}, {overflow}");
+                            let formats = format!("{width_code}, {left}, (char){pad}, {overflow}");
                             match value_kind {
-                                Kind::Int(_) => {
-                                    let base = match conversion.code {
-                                        ConversionCode::Binary => 2,
-                                        ConversionCode::Octal => 8,
-                                        ConversionCode::Hex => 16,
-                                        ConversionCode::Default => 10,
-                                        ConversionCode::Scientific => unreachable!(),
-                                    };
-                                    self.line(
-                                        out,
-                                        &format!(
-                                            "z_text_write_int_format(&{target}, {code}, {length}, {base}, {formats});"
-                                        ),
-                                    );
-                                }
+                                Kind::Int(_) => self.line(
+                                    out,
+                                    &format!(
+                                        "z_text_write_int_format(&{target}, {code}, {length}, {base}, {formats});"
+                                    ),
+                                ),
                                 Kind::Bool => self.line(
                                     out,
                                     &format!(
@@ -3238,10 +3579,31 @@ impl Generator<'_> {
                                     "native backend: unknown READTEXT target `{name}`"
                                 ));
                             };
-                            let call = match info.kind {
-                                Kind::Int(_) => "z_text_read_int",
-                                Kind::Char => "z_text_read_char",
-                                Kind::Bool => "z_text_read_bool",
+                            let read = match info.kind {
+                                Kind::Int(_) => format!(
+                                    "z_text_read_int_format(&{target}, {length}, {base}, {width_code}, {left}, (char){pad})"
+                                ),
+                                Kind::Char => format!(
+                                    "z_text_read_char_format(&{target}, {length}, {width_code}, {left}, (char){pad})"
+                                ),
+                                Kind::Bool => format!(
+                                    "z_text_read_bool_format(&{target}, {length}, {width_code}, {left}, (char){pad})"
+                                ),
+                                Kind::String => {
+                                    let value = self.temporary(
+                                        &format!(
+                                            "z_text_read_string_format(&{target}, {length}, {width_code})"
+                                        ),
+                                        Kind::String,
+                                    )?;
+                                    self.copy_kind(
+                                        out,
+                                        &info.c_name,
+                                        &value,
+                                        Kind::String,
+                                    )?;
+                                    continue;
+                                }
                                 _ => {
                                     return Err(
                                         "native backend: this READTEXT target mode is not supported yet"
@@ -3249,7 +3611,6 @@ impl Generator<'_> {
                                     )
                                 }
                             };
-                            let read = format!("{call}(&{target}, {length})");
                             let read = if let Kind::Int(kind) = info.kind {
                                 self.checked_int(&read, kind)?
                             } else {
@@ -3259,11 +3620,49 @@ impl Generator<'_> {
                         }
                     }
                 }
-                FormatOp::Edit(_) | FormatOp::Io(_) => {
-                    return Err(
-                        "native backend: text editing and io-control clauses are not supported yet"
-                            .to_owned(),
-                    )
+                FormatOp::Edit(editing) => {
+                    let width_code = match editing.width {
+                        ClauseWidth::Fixed(width) => width.to_string(),
+                        ClauseWidth::Variable => {
+                            let Some(width_arg) = args.get(io_index) else {
+                                return Err(
+                                    "native backend: text transfer is missing a variable width argument"
+                                        .to_owned(),
+                                );
+                            };
+                            io_index += 1;
+                            self.emit_expr(width_arg)?.0
+                        }
+                    };
+                    let code = match editing.code {
+                        EditingCode::Space => 0,
+                        EditingCode::SkipRight => 1,
+                        EditingCode::SkipLeft => 2,
+                        EditingCode::Tab => 3,
+                    };
+                    let function = match kind {
+                        TextIo::Write => "z_text_edit_write",
+                        TextIo::Read => "z_text_edit_read",
+                    };
+                    self.line(
+                        out,
+                        &format!("{function}(&{target}, {code}, {width_code}, {length});"),
+                    );
+                }
+                FormatOp::Io(control) => {
+                    let code = match control {
+                        IoControl::NextRecord => 0,
+                        IoControl::NextPage => 1,
+                        IoControl::CurrentLine => 2,
+                        IoControl::Prompt => 3,
+                        IoControl::Emit => 4,
+                        IoControl::EndPage => 5,
+                    };
+                    let function = match kind {
+                        TextIo::Write => "z_text_io_write",
+                        TextIo::Read => "z_text_io_read",
+                    };
+                    self.line(out, &format!("{function}(&{target}, {code}, {length});"));
                 }
             }
         }
@@ -4360,7 +4759,7 @@ impl Generator<'_> {
 
 fn text_conversion_supported(
     conversion: &crate::builtins::Conversion,
-    kind: TextIo,
+    _kind: TextIo,
 ) -> Result<(), String> {
     if !matches!(
         conversion.code,
@@ -4370,19 +4769,6 @@ fn text_conversion_supported(
             | ConversionCode::Hex
     ) {
         return Err("native backend: scientific text conversions are not supported yet".to_owned());
-    }
-    if !matches!(conversion.width, ClauseWidth::Fixed(_)) {
-        return Err(
-            "native backend: variable text conversion widths are not supported yet".to_owned(),
-        );
-    }
-    if matches!(kind, TextIo::Read) && !matches!(conversion.code, ConversionCode::Default) {
-        return Err(
-            "native backend: only %C reads are supported for TEXT locations yet".to_owned(),
-        );
-    }
-    if matches!(kind, TextIo::Read) && !matches!(conversion.width, ClauseWidth::Fixed(0)) {
-        return Err("native backend: READTEXT conversion widths are not supported yet".to_owned());
     }
     if conversion.fractional_width.is_some() || conversion.exponent_width.is_some() {
         return Err(
