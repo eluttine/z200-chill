@@ -61,9 +61,9 @@ reference implementation for the complete supported language.
   structures),
 - procedure calls, `RETURN`, and `RESULT`,
 - integer conversions in the generated C representation,
-- scalar and structure arrays of up to four dimensions with indexing, element
-  assignment, nested initializers, array-literal assignment, same-mode array copying,
-  and same-mode array equality/inequality,
+- scalar, structure, powerset, and association arrays of up to four dimensions with
+  indexing, element assignment, nested initializers, array-literal assignment,
+  same-mode array copying, and same-mode equality where the element mode supports it,
 - one-dimensional array slices with constant or runtime bounds, `UP` sizes, slice
   reads, slice assignment, slice arguments, and slice equality. Runtime slices carry a
   data pointer and element count and check length when converted to fixed array modes,

@@ -85,6 +85,12 @@ enum ScalarKind {
         low: i128,
         high: i128,
     },
+    Text {
+        length: usize,
+        indexed: bool,
+        low: i128,
+        high: i128,
+    },
 }
 
 impl ScalarKind {
@@ -99,6 +105,7 @@ impl ScalarKind {
             ScalarKind::PowerSet(_) => "ZPowerSet".to_owned(),
             ScalarKind::Association => "ZAssociation".to_owned(),
             ScalarKind::Access { .. } => "ZAccess".to_owned(),
+            ScalarKind::Text { .. } => "ZText".to_owned(),
         }
     }
 
@@ -113,6 +120,17 @@ impl ScalarKind {
             ScalarKind::PowerSet(member) => Kind::PowerSet(member),
             ScalarKind::Association => Kind::Association,
             ScalarKind::Access { indexed, low, high } => Kind::Access { indexed, low, high },
+            ScalarKind::Text {
+                length,
+                indexed,
+                low,
+                high,
+            } => Kind::Text {
+                length,
+                indexed,
+                low,
+                high,
+            },
         }
     }
 }
@@ -158,6 +176,7 @@ impl Kind {
                 ScalarKind::PowerSet(_) => "ZPowerSet *".to_owned(),
                 ScalarKind::Association => "ZAssociation *".to_owned(),
                 ScalarKind::Access { .. } => "ZAccess *".to_owned(),
+                ScalarKind::Text { .. } => "ZText *".to_owned(),
             },
             Kind::RefArray { element, .. } => format!("{} *", element.c_type()),
             Kind::Struct(id) => format!("z_struct_{}", id.0),
@@ -2133,6 +2152,19 @@ static int z_text_equal_string(const ZText *left, const char *right) {
     return strcmp(z_text_view(left), right) == 0;
 }
 
+static int z_slice_equal_text(
+    ZText *left,
+    int64_t left_len,
+    ZText *right,
+    int64_t right_len
+) {
+    if (left_len != right_len) { return 0; }
+    for (int64_t index = 0; index < left_len; index++) {
+        if (!z_text_equal_text(&left[index], &right[index])) { return 0; }
+    }
+    return 1;
+}
+
 "#,
     );
 
@@ -3909,6 +3941,9 @@ impl Generator<'_> {
             ),
             ScalarKind::PowerSet(_) => format!(
                 "z_slice_equal_powersets((ZPowerSet *)({left_data}), {left_len}, (ZPowerSet *)({right_data}), {right_len})"
+            ),
+            ScalarKind::Text { .. } => format!(
+                "z_slice_equal_text((ZText *)({left_data}), {left_len}, (ZText *)({right_data}), {right_len})"
             ),
             ScalarKind::Association | ScalarKind::Access { .. } => {
                 return Err(
@@ -6311,6 +6346,24 @@ fn array_scalar_kind(ty: Type) -> Result<ScalarKind, String> {
         }
         Type::Struct(id) => Ok(ScalarKind::Struct(id)),
         Type::PowerSet(set) => Ok(ScalarKind::PowerSet(set.member)),
+        Type::Association => Ok(ScalarKind::Association),
+        Type::Access(access) => Ok(ScalarKind::Access {
+            indexed: access.indexed,
+            low: access.index.as_ref().map(|index| index.low).unwrap_or(0),
+            high: access.index.as_ref().map(|index| index.high).unwrap_or(0),
+        }),
+        Type::Text {
+            length,
+            wide: false,
+            indexed,
+            index,
+            ..
+        } => Ok(ScalarKind::Text {
+            length,
+            indexed,
+            low: index.map(|index| index.low).unwrap_or(0),
+            high: index.map(|index| index.high).unwrap_or(0),
+        }),
         other => Err(format!(
             "native backend: array element mode `{}` is not supported yet",
             other.describe()
@@ -6402,6 +6455,24 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
                 Type::Set(_) => ScalarKind::Int(IntKind::Long),
                 Type::Struct(id) => ScalarKind::Struct(id),
                 Type::PowerSet(set) => ScalarKind::PowerSet(set.member),
+                Type::Association => ScalarKind::Association,
+                Type::Access(access) => ScalarKind::Access {
+                    indexed: access.indexed,
+                    low: access.index.as_ref().map(|index| index.low).unwrap_or(0),
+                    high: access.index.as_ref().map(|index| index.high).unwrap_or(0),
+                },
+                Type::Text {
+                    length,
+                    wide: false,
+                    indexed,
+                    index,
+                    ..
+                } => ScalarKind::Text {
+                    length,
+                    indexed,
+                    low: index.map(|index| index.low).unwrap_or(0),
+                    high: index.map(|index| index.high).unwrap_or(0),
+                },
                 Type::Char => ScalarKind::Char,
                 Type::String
                 | Type::BoundedString { .. }
@@ -6471,6 +6542,24 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
                 Type::Set(_) => ScalarKind::Int(IntKind::Long),
                 Type::Struct(id) => ScalarKind::Struct(id),
                 Type::PowerSet(set) => ScalarKind::PowerSet(set.member),
+                Type::Association => ScalarKind::Association,
+                Type::Access(access) => ScalarKind::Access {
+                    indexed: access.indexed,
+                    low: access.index.as_ref().map(|index| index.low).unwrap_or(0),
+                    high: access.index.as_ref().map(|index| index.high).unwrap_or(0),
+                },
+                Type::Text {
+                    length,
+                    wide: false,
+                    indexed,
+                    index,
+                    ..
+                } => ScalarKind::Text {
+                    length,
+                    indexed,
+                    low: index.map(|index| index.low).unwrap_or(0),
+                    high: index.map(|index| index.high).unwrap_or(0),
+                },
                 Type::Char => ScalarKind::Char,
                 Type::String
                 | Type::BoundedString { .. }

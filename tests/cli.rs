@@ -3324,6 +3324,54 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_association_arrays() {
+    let dir = TempDir::new("z200c-native-assoc-array");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativeassocarray"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL assocs ARRAY(1:2) ASSOCIATION;
+  DCL copy ARRAY(1:2) ASSOCIATION;
+
+  copy := assocs;
+  WRITELINE("association arrays ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativeassocarray");
+    let run = std::process::Command::new(binary)
+        .env("Z200C_RC_STATS", "1")
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        stdout.contains("association arrays ok") && stdout.contains("live-payloads: 0"),
+        "stdout: {stdout}"
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
@@ -3341,7 +3389,7 @@ entry = "src/main.ch"
         dir.join("src/main.ch"),
         r#"
 M: MODULE
-  DCL values ARRAY(1:2) ASSOCIATION;
+  DCL values ARRAY(1:2) REF INT;
 END M;
 "#,
     )

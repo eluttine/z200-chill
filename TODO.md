@@ -135,7 +135,7 @@ The following areas are implemented and no longer need backlog entries:
 - cooperative interpreter concurrency, moreta objects, generics, associations, and text,
 - C backend sequential/static coverage:
   - variables, control flow, procedures and parameters,
-  - arrays, multidimensional arrays, slices, structures,
+  - arrays, multidimensional arrays, slices, structures, association arrays,
   - strings, floats, powersets, references,
   - text/access sub-location references, aliased text record cells, and dereferenced
     transfer locations,
