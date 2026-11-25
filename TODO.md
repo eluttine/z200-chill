@@ -35,13 +35,14 @@ subset and exercise the same typed information the LLVM backend will need.
 - [ ] Add wide text/bit-string execution only if the C backend must pass broad
   interpreter fixtures. Otherwise leave `WCHAR`/`WTEXT` and `BOOLS` execution to LLVM.
 - [ ] Native module linking for grant-file-only dependencies without source metadata.
-- [ ] Extract the generated runtime into `runtime/`:
+- [x] Extract the generated runtime helpers into `runtime/z200rt.h`:
   - refcounted payload allocation,
   - string/powerset/text operations,
   - cleanup stack and exception frames,
   - association/access file records,
   - text formatting helpers.
-  This is the shared runtime ABI seed for LLVM.
+- [ ] Split `runtime/z200rt.h` into a public header plus runtime source/object, with
+  stable exported function signatures for LLVM reuse.
 
 ## 2. C backend stop line
 

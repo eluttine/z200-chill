@@ -153,8 +153,9 @@ shared with the interpreter.
 
 ## Runtime ABI
 
-The first slice uses only the C standard library. There is no separate CHILL runtime
-archive yet. Exception handling is generated inline with `setjmp`/`longjmp`, and
-reference-counted payload ownership is generated inline with a small allocation
-registry. A future runtime archive will expose these facilities as a stable ABI for
-the LLVM backend.
+The generated C includes `z200rt.h`, which is written alongside the generated source
+from `runtime/z200rt.h`. It contains the C standard-library helpers for refcounted
+payloads, cleanup frames, exceptions, text formatting, slices, associations, and
+access records. It is still a header-only runtime compiled into the same translation
+unit; a future runtime archive will expose the same facilities as a stable ABI for the
+LLVM backend.

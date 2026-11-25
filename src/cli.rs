@@ -128,6 +128,13 @@ fn compile_impl(target: &Path) -> Result<PathBuf, String> {
     let c_path = out_dir.join(format!("{}.c", package.manifest.package.name));
     std::fs::write(&c_path, c_source)
         .map_err(|error| format!("error[E0600]: cannot write {}: {error}", c_path.display()))?;
+    let runtime_path = out_dir.join("z200rt.h");
+    std::fs::write(&runtime_path, crate::backend::RUNTIME_HEADER).map_err(|error| {
+        format!(
+            "error[E0600]: cannot write {}: {error}",
+            runtime_path.display()
+        )
+    })?;
     let binary = out_dir.join(format!(
         "{}{}",
         package.manifest.package.name,
