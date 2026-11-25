@@ -92,6 +92,11 @@ impl ScalarKind {
     }
 }
 
+enum TextTarget {
+    Text { code: String, length: usize },
+    String { code: String, limit: String },
+}
+
 #[derive(Debug, Clone)]
 struct VarInfo {
     c_name: String,
@@ -683,6 +688,14 @@ typedef struct {
 
 static const char *z_text_view(const ZText *text) {
     return text->record == NULL ? "" : text->record;
+}
+
+static ZText z_text_from_string(const char *value) {
+    size_t len = strlen(value);
+    char *copy = (char *)z_rc_alloc(len + 1);
+    memcpy(copy, value, len + 1);
+    ZText text = { copy, len, 0 };
+    return text;
 }
 
 static void z_text_assign(ZText *text, const char *value, size_t limit) {
@@ -3044,6 +3057,48 @@ impl Generator<'_> {
         Ok(())
     }
 
+    fn text_io_target(&self, expression: &Expr) -> Result<TextTarget, String> {
+        let Expr::Name { name, span } = expression else {
+            return Err(
+                "native backend: text operations require a simple text variable".to_owned(),
+            );
+        };
+        let info = self
+            .vars
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("native backend: unknown text variable `{name}`"))?;
+        match info.kind {
+            Kind::Text { length } => Ok(TextTarget::Text {
+                code: info.c_name,
+                length,
+            }),
+            Kind::String => {
+                let limit = match self.check.types.get(span) {
+                    Some(Type::BoundedString {
+                        length,
+                        varying: true,
+                    }) => length.to_string(),
+                    Some(Type::String) => "((size_t)-1)".to_owned(),
+                    Some(Type::WString) | Some(Type::WBoundedString { .. }) => {
+                        return Err(
+                            "native backend: wide text transfer targets are not supported yet"
+                                .to_owned(),
+                        )
+                    }
+                    _ => "((size_t)-1)".to_owned(),
+                };
+                Ok(TextTarget::String {
+                    code: info.c_name,
+                    limit,
+                })
+            }
+            _ => Err(format!(
+                "native backend: `{name}` is not a supported text transfer target"
+            )),
+        }
+    }
+
     fn text_location(&self, expression: &Expr) -> Result<(String, usize), String> {
         let Expr::Name { name, .. } = expression else {
             return Err(
@@ -3074,7 +3129,17 @@ impl Generator<'_> {
         let Some(target_expr) = args.first() else {
             return Err("native backend: text transfer requires a target".to_owned());
         };
-        let (target, length) = self.text_location(target_expr)?;
+        let text_target = self.text_io_target(target_expr)?;
+        let (target, length, is_text, string_target) = match text_target {
+            TextTarget::Text { code, length } => (code, length.to_string(), true, None),
+            TextTarget::String { code, limit } => {
+                let unique = self.temp_counter;
+                self.temp_counter += 1;
+                let temp = format!("__text_string_{unique}");
+                self.line(out, &format!("ZText {temp} = z_text_from_string({code});"));
+                (temp, limit, false, Some(code))
+            }
+        };
         let mut offset = 1;
         if indexed {
             let Some(index) = args.get(1) else {
@@ -3205,7 +3270,19 @@ impl Generator<'_> {
         if io_index != args.len() {
             return Err("native backend: text io argument count mismatch".to_owned());
         }
-        self.line(out, &format!("z_text_reset_index(&{target});"));
+        if is_text {
+            self.line(out, &format!("z_text_reset_index(&{target});"));
+        } else {
+            if matches!(kind, TextIo::Write) {
+                if let Some(code) = &string_target {
+                    self.line(
+                        out,
+                        &format!("z_string_assign(&{code}, z_text_view(&{target}));"),
+                    );
+                }
+            }
+            self.line(out, &format!("z_text_drop(&{target});"));
+        }
         Ok(())
     }
 

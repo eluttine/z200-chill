@@ -2963,6 +2963,73 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_chars_text_transfer() {
+    let dir = TempDir::new("z200c-native-chars-text");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativetextchars"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL s CHARS INIT := "hello";
+  DCL v CHARS(10) VARYING;
+  DCL n INT;
+
+  WRITETEXT(s, 1, "i");
+  ASSERT s = "hillo";
+  READTEXT(s, 1, "i");
+
+  v := "abc";
+  WRITETEXT(v, 1, "X");
+  ASSERT v = "aXc";
+
+  WRITETEXT(v, "%C5", 42);
+  ASSERT v = "   42";
+  READTEXT(v, "%C", n);
+  ASSERT n = 42;
+
+  BEGIN
+    DCL small CHARS(3) VARYING;
+    small := "abc";
+    WRITETEXT(small, "%C", 1234);
+  END
+  ON (TEXTFAIL):
+    WRITELINE("chars textfail");
+  END;
+  WRITELINE("chars text ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativetextchars");
+    let run = std::process::Command::new(binary).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "chars textfail
+chars text ok
+"
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

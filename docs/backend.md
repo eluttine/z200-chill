@@ -70,10 +70,12 @@ reference implementation for the complete supported language.
 - narrow sequential `TEXT(n)` records, including assignment, equality, direct
   procedure parameters, and structure fields,
 - `SETTEXTINDEX` / `GETTEXTINDEX`,
-- disconnected `WRITETEXT` / `READTEXT` with literal text and conversions. Writes
-  support `%C`, `%B`, `%O`, and `%H` for `INT`, `BOOL`, `CHAR`, and strings, including
-  fixed widths, left alignment, padding, and overflow markers. Reads support `%C` for
-  `INT`, `BOOL`, and `CHAR`. Explicit text indices and `TEXTFAIL` checks are supported,
+- disconnected `WRITETEXT` / `READTEXT` on narrow sequential `TEXT(n)` and varying
+  `CHARS`/`CHARS(n)` locations, with literal text and conversions. Writes support
+  `%C`, `%B`, `%O`, and `%H` for `INT`, `BOOL`, `CHAR`, and strings, including fixed
+  widths, left alignment, padding, and overflow markers. Reads support `%C` for
+  `INT`, `BOOL`, and `CHAR`. Explicit text indices, bounded-string length checks, and
+  `TEXTFAIL` checks are supported,
 - `WRITE` and `WRITELINE` with one value argument,
 - runtime checks for array bounds, division/modulo by zero, signed overflow in
   `+`/`-`/`*`/unary `-`, and `NULL` dereference,
