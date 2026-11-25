@@ -3372,6 +3372,71 @@ stderr: {}",
 }
 
 #[test]
+fn native_run_ok_fixture_gate() {
+    let manifest = std::fs::read_to_string(format!(
+        "{}/tests/native_run_ok.txt",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    for line in manifest.lines() {
+        let name = line.trim();
+        if name.is_empty() || name.starts_with('#') {
+            continue;
+        }
+        let source_path = format!("{}/tests/run_ok/{name}.ch", env!("CARGO_MANIFEST_DIR"));
+        assert!(
+            std::path::Path::new(&source_path).exists(),
+            "missing native conformance fixture `{name}`"
+        );
+        let dir = TempDir::new(&format!("z200c-native-gate-{name}"));
+        let package = format!("nativegate{}", name.replace('_', ""));
+        std::fs::write(
+            dir.join("Chill.toml"),
+            format!(
+                r#"
+[package]
+name = "{package}"
+
+[build]
+entry = "src/main.ch"
+"#
+            ),
+        )
+        .unwrap();
+        let source = std::fs::read_to_string(source_path).unwrap();
+        std::fs::write(dir.join("src/main.ch"), source).unwrap();
+        let output = z200c().arg("compile").arg(&dir).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{name}: compile failed
+stdout: {}
+stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let binary = dir.join(format!("target/z200c/{package}"));
+        let run = std::process::Command::new(binary)
+            .env("Z200C_RC_STATS", "1")
+            .output()
+            .unwrap();
+        assert!(
+            run.status.success(),
+            "{name}: run failed
+stdout: {}
+stderr: {}",
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        assert!(
+            stdout.contains("live-payloads: 0"),
+            "{name}: expected zero live payloads, got:
+{stdout}"
+        );
+    }
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

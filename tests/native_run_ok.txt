@@ -1,0 +1,45 @@
+# Interpreters fixtures that must also pass through the native C backend.
+# Keep this list sequential/static. Add fixtures here only after they pass
+# unchanged through `z200c compile`.
+access_attributes
+access_reference_transfer
+array_slices
+array_slices_dynamic
+arrays
+arrays_of_structures
+association_indexed
+associations
+case_multiple_selectors
+case_non_integer
+context_visibility
+control_flow_continuation
+exceptions
+floats
+generic_modules
+generic_proc_param
+generic_region
+generic_syn
+generic_templates
+imported_modes
+loops
+multidimensional_arrays
+multidimensional_field_assignment
+multidimensional_literals
+multidimensional_slice_assignment
+multidimensional_slices
+powersets
+references_to_arrays
+references_to_fields_and_elements
+set_modes
+spec_region
+text_connection
+text_format_io
+text_indexed_access
+text_io
+text_sub_locations
+z200_action_handlers_simple
+z200_arrays
+z200_control
+z200_handlers
+z200_modes
+z200_procedures

@@ -5,7 +5,9 @@ executable in `target/z200c/<package>`.
 
 The interpreter remains the reference implementation. The native backend deliberately
 accepts only a small, deterministic subset and reports a clear diagnostic for anything
-else.
+else. `tests/native_run_ok.txt` is the native conformance gate: every listed
+interpreter fixture must compile, run, and report zero live payloads through the C
+backend.
 
 ## Backend strategy
 

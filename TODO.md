@@ -88,10 +88,10 @@ Start the LLVM backend when these are true, rather than waiting for every C feat
    - No active semantic changes are pending only in the C code generator.
 
 4. **Conformance gate**
-   - All `tests/run_ok` fixtures that do not require deferred LLVM-only features pass
-     natively.
+   - `tests/native_run_ok.txt` lists the sequential fixtures that must pass natively.
    - Native `run_fail` behavior is stable, including `live-payloads: 0` under
      `Z200C_RC_STATS=1`.
+   - New sequential fixtures are added to the native gate when implemented.
 
 5. **Diagnostics are stable**
    - Unsupported LLVM-first features are rejected with stable codes and clear messages.
