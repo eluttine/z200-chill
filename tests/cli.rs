@@ -3248,6 +3248,82 @@ stderr: {}",
 }
 
 #[test]
+fn native_dereferenced_text_sub_locations() {
+    let dir = TempDir::new("z200c-native-textsub-deref");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativetextsubderef"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL t1 TEXT(20);
+  DCL t2 TEXT(20);
+  DCL s CHARS(20) VARYING INIT := "hello";
+  DCL r REF CHARS(20) VARYING;
+  DCL aref REF ACCESS CHARS;
+  DCL assoc ASSOCIATION;
+
+  SETTEXTRECORD(t1, s);
+  ASSERT t1 = "hello";
+  s := "world";
+  ASSERT t1 = "world";
+
+  r := GETTEXTRECORD(t1);
+  SETTEXTRECORD(t2, r->);
+  ASSERT t2 = "world";
+  r-> := "ref!";
+  ASSERT t1 = "ref!";
+  ASSERT t2 = "ref!";
+  ASSERT s = "ref!";
+
+  ASSOCIATE(assoc, "/tmp/z200c-textsub-deref-test.txt");
+  IF EXISTING(assoc) THEN
+    DELETE(assoc);
+  FI;
+  CREATE(assoc);
+  aref := GETTEXTACCESS(t1);
+  CONNECT(aref->, assoc, WRITEONLY);
+  ASSERT GETUSAGE(aref->) = WRITEONLY;
+  WRITETEXT(t1, "file");
+  DISCONNECT(aref->);
+  DELETE(assoc);
+  DISSOCIATE(assoc);
+  WRITELINE("text sub deref ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativetextsubderef");
+    let run = std::process::Command::new(binary)
+        .env("Z200C_RC_STATS", "1")
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        stdout.contains("text sub deref ok") && stdout.contains("live-payloads: 0"),
+        "stdout: {stdout}"
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

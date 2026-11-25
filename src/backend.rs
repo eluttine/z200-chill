@@ -4437,9 +4437,21 @@ impl Generator<'_> {
         }
     }
 
-    fn transfer_target(&self, expression: &Expr) -> Result<(String, Kind), String> {
+    fn transfer_target(&mut self, expression: &Expr) -> Result<(String, Kind), String> {
+        if let Expr::Deref { .. } = expression {
+            let (code, kind) = self.emit_expr(expression)?;
+            if matches!(kind, Kind::Access { .. } | Kind::Text { .. }) {
+                return Ok((code, kind));
+            }
+            return Err(
+                "native backend: dereferenced transfer target must be ACCESS or TEXT".to_owned(),
+            );
+        }
         let Expr::Name { name, .. } = expression else {
-            return Err("native backend: transfer operations require simple variables".to_owned());
+            return Err(
+                "native backend: transfer operations require variables or dereferenced references"
+                    .to_owned(),
+            );
         };
         let info = self
             .vars
@@ -5144,24 +5156,13 @@ impl Generator<'_> {
                             op: crate::builtins::TextSubOp::SetRecord,
                         }) => {
                             let (text, _) = self.text_location(&args[0])?;
-                            let Expr::Name { name, .. } = &args[1] else {
-                                return Err(
-                                    "native backend: SETTEXTRECORD currently requires a simple string variable"
-                                        .to_owned(),
-                                );
-                            };
-                            let info = self.vars.get(name).cloned().ok_or_else(|| {
-                                format!("native backend: unknown string variable `{name}`")
-                            })?;
-                            if info.kind != Kind::String {
+                            let (source, kind) = self.emit_expr(&args[1])?;
+                            if kind != Kind::String {
                                 return Err(
                                     "native backend: SETTEXTRECORD source must be CHARS".to_owned()
                                 );
                             }
-                            self.line(
-                                out,
-                                &format!("z_text_set_record(&{text}, &{});", info.c_name),
-                            );
+                            self.line(out, &format!("z_text_set_record(&{text}, &({source}));"));
                             return Ok(());
                         }
                         Some(ApplyResolution::Association {

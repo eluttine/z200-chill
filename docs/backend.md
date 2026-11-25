@@ -89,7 +89,7 @@ reference implementation for the complete supported language.
   `WRITETEXT`/`READTEXT`, sequential and indexed records, and usage restrictions,
 - text sub-location references: `GETTEXTACCESS`, `SETTEXTACCESS`, `GETTEXTRECORD`,
   `SETTEXTRECORD`, and `GETASSOCIATION`, including aliased bounded varying string
-  record cells,
+  record cells and dereferenced text/access references as transfer locations,
 - `WRITE` and `WRITELINE` with one value argument,
 - runtime checks for array bounds, division/modulo by zero, signed overflow in
   `+`/`-`/`*`/unary `-`, and `NULL` dereference,
