@@ -3072,8 +3072,10 @@ fn compiles_native_association_fixtures() {
     for name in [
         "associations",
         "association_indexed",
+        "access_attributes",
         "text_connection",
         "text_indexed_access",
+        "text_sub_locations",
     ] {
         let dir = TempDir::new(&format!("z200c-native-{name}"));
         let package = format!("native{}", name.replace('_', ""));

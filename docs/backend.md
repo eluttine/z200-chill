@@ -87,6 +87,9 @@ reference implementation for the complete supported language.
   `EXISTING`/`READABLE`/`WRITEABLE`/`INDEXABLE`/`SEQUENCIBLE`/`VARIABLE` attributes,
 - connected narrow `TEXT(n)` locations, including indexed text modes, file-backed
   `WRITETEXT`/`READTEXT`, sequential and indexed records, and usage restrictions,
+- text sub-location references: `GETTEXTACCESS`, `SETTEXTACCESS`, `GETTEXTRECORD`,
+  `SETTEXTRECORD`, and `GETASSOCIATION`, including aliased bounded varying string
+  record cells,
 - `WRITE` and `WRITELINE` with one value argument,
 - runtime checks for array bounds, division/modulo by zero, signed overflow in
   `+`/`-`/`*`/unary `-`, and `NULL` dereference,

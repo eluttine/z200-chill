@@ -29,12 +29,9 @@ cargo test --all
 These items are worth doing in the C backend because they complete the sequential/static
 subset and exercise the same typed information the LLVM backend will need.
 
-- [ ] Complete text sub-location references:
-  - `GETTEXTACCESS`, `SETTEXTACCESS`,
-  - `GETTEXTRECORD`, `SETTEXTRECORD`,
-  - `GETASSOCIATION` reference results,
+- [ ] Finish remaining text sub-location cases:
   - dereferenced text/access references as transfer locations,
-  - aliasing between text record cells and bounded varying string locations.
+  - `SETTEXTRECORD` through dereferenced string references.
 - [ ] Add dynamic multidimensional slice bounds.
   Start in the checker/interpreter type model; the C backend should follow the shared
   representation rather than invent a native-only shape.
@@ -143,6 +140,7 @@ The following areas are implemented and no longer need backlog entries:
   - variables, control flow, procedures and parameters,
   - arrays, multidimensional arrays, slices, structures,
   - strings, floats, powersets, references,
+  - text/access sub-location references and aliased text record cells,
   - text formatting, text files, associations, and access records,
   - exceptions, runtime checks, and integer width enforcement,
   - cross-module grants and seized modes,
