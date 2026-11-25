@@ -134,10 +134,19 @@ every semantic entry point),
 top-level regions, and spec regions. Region concurrency/mutual exclusion and nested
 regions remain. See [piecewise.md](piecewise.md).
 
-## 10.9 Code generation (open)
+## 10.9 Code generation (C bootstrap + LLVM handoff)
 
-A native or C code-generation backend remains future work; the typed IR is the intended
-input. Declarations/procedure structure and `BEGIN` declaration lists remain AST-level.
+The C backend (`z200c compile`) is the portable bootstrap/fallback target for the
+sequential/static subset: procedures, aggregates, arrays/slices, structures, powersets,
+strings, text, associations/access records, references, exceptions, runtime checks,
+cross-module grants, and refcounted ownership. It intentionally does not target
+concurrency, moreta execution, generics, or optimization.
+
+The LLVM backend is the full-native target. It should start once the typed IR covers the
+sequential/static subset and the runtime ABI is documented: value layout, payload
+copy/drop/refcount operations, cleanup/exception frames, parameter passing, and module
+symbol/visibility conventions. Moreta, generics, and concurrency are LLVM-track work,
+not C-backend requirements. The interpreter remains the reference implementation.
 
 ## 10.10 Contexts and nested modulions (partially resolved)
 

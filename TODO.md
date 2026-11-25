@@ -1,276 +1,157 @@
 # TODO
 
-Prioritized work after the reach/context/piecewise work. Items are ordered; each should
-land as a small, green change.
+This file tracks remaining work and the boundary between the portable C backend and the
+future LLVM backend. Keep items small, testable, and ordered by risk.
 
-## 1. Unify the reach model
+## Status snapshot
 
-- [x] Introduce a shared export/reach representation (`src/reach.rs`) used by `sema`
-      and `interp` (selection rules, not yet the full reach tree).
-- [x] Move prefix matching, `TO` friend checks, and ambiguity rules into shared helpers.
-- [x] Replace the duplicated `ReachExport` types in `sema.rs` and `interp.rs` with the
-      shared metadata plus checker/interpreter-specific payloads.
-- [x] Keep one `SEIZE`/`SEIZE ALL` selection path so checker and interpreter cannot
-      diverge.
-- [x] Add focused tests for prefix/friend/ambiguity cases.
-- [x] Shared static `ReachTree` for module declarations and modes, consumed by
-      `program`, `sema`, and `interp`.
-- [x] Shared child/hoisting plan (`children`, `hoisted`), used by the interpreter's
-      module-body hoisting.
-- [x] Shared module-reach exports (`exports` with owner, kind, prefix/friend metadata),
-      used to seed checker and interpreter module scopes.
-- [x] Top-level `GRANT` child-export collection now uses the tree; removed the separate
-      `collect_child_grants`/`collect_module_exports` path.
-- [x] Block-level reach exports (`BEGIN`/`IF`/`DO`/`CASE`) are tree nodes keyed by
-      block/branch/alternative spans and seed both checker and interpreter scopes.
-- [x] Nested `GRANT` validation (duplicate/unknown names, unsupported old prefixes) and
-      `FORBID` application moved into reach-tree construction; removed the checker's
-      `collect_module_grants` and the interpreter's runtime grant registration.
-- [x] Interpreter hoisting uses one tree-driven path for module bodies and block reaches;
-      removed IR statement scanning for module declarations.
+- The interpreter is the reference implementation for the supported subset.
+- `z200c compile` provides a portable C11 backend for a broad sequential/static subset.
+- Native tests cover language structure, runtime failures, text/files, grants, and
+  reference-count cleanup.
+- Native ownership is reference-counted and unwind-safe for normal scopes, loops,
+  labelled exits, and caught exceptions.
+- Full native concurrency, generics, moreta, and optimized code generation are not C
+  backend goals.
 
-Acceptance for completion: no duplicate reach-matching or reach-building logic remains;
-all existing tests pass with no new special cases.
+Verification gate before any commit:
 
-## 2. Move virtual grants into analysis
+```sh
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+cargo test --all
+```
 
-- [x] Replace the loader-side `apply_virtual_grants` mutation with a normalization step
-      (`program::normalize`) used by semantic entry points.
-- [x] Ensure `run_source`/direct `check`/`grant` see the same virtual grants as the CLI
-      loader path.
-- [x] Add regression tests for direct entry points and normalization idempotence.
-- [x] Remove the loader-side mutation.
+## 1. Finish the C backend's meaningful language scope
 
-## 3. Conformance and negative fixtures
+These items are worth doing in the C backend because they complete the sequential/static
+subset and exercise the same typed information the LLVM backend will need.
 
-- [x] Build a starter fixture set for the implemented subset (units, contexts,
-      nested specs, remote syntax, nested/block reaches, spec regions, virtual grants).
-- [x] Add negative fixtures for region actions, first-context visibility, unnamed
-      nested specs, nested grant ambiguity, nested `FORBID`, `TO` restrictions, and
-      nested/region interface mismatches.
-- [x] Add CLI structural assertions for grant-file output (`schema = 4`, no
-      `int_widths`/`edition`) and existing diagnostic-code assertions.
-- [x] Encode named set modes, reference/pointer/row modes, buffer element modes, and
-      module-mode types at grant-interface boundaries.
-- [x] Expand fixtures with direct Z.200 examples (expressions, control flow,
-      procedures, modes/structures, visibility, arrays, handlers) and a `run_fail`
-      suite for runtime checks (`ASSERTFAIL`, `OVERFLOW`, array bounds, undefined
-      values, `TEXTFAIL`, unhandled exceptions). Full stdout snapshots were not added;
-      the interpreter writes directly to stdout, and the `ASSERT`-based fixtures already
-      assert observable behavior.
-- [x] Extend regression coverage for newer features: generic actual-kind mismatch,
-      powerset member mismatch, float division by zero, negative variable widths, and
-      a golden stdout snapshot for `WRITE`/`WRITELINE` through the CLI.
+- [ ] Complete text sub-location references:
+  - `GETTEXTACCESS`, `SETTEXTACCESS`,
+  - `GETTEXTRECORD`, `SETTEXTRECORD`,
+  - `GETASSOCIATION` reference results,
+  - dereferenced text/access references as transfer locations,
+  - aliasing between text record cells and bounded varying string locations.
+- [ ] Add dynamic multidimensional slice bounds.
+  Start in the checker/interpreter type model; the C backend should follow the shared
+  representation rather than invent a native-only shape.
+- [ ] Decide whether the portable C backend needs native `FLOAT`:
+  - scalar `FLOAT`, arithmetic/comparisons, arrays, parameters/results,
+  - `%F` text formatting and scientific notation.
+  If not required, keep `FLOAT` interpreter-only and make it an LLVM-first feature.
+- [ ] Add wide text/bit-string execution only if the C backend must pass broad
+  interpreter fixtures. Otherwise leave `WCHAR`/`WTEXT` and `BOOLS` execution to LLVM.
+- [ ] Native module linking for grant-file-only dependencies without source metadata.
+- [ ] Cross-platform driver support:
+  - MSVC toolchain discovery and flags,
+  - Windows path/executable handling,
+  - non-Linux CI matrix.
+- [ ] Extract the generated runtime into `runtime/`:
+  - refcounted payload allocation,
+  - string/powerset/text operations,
+  - cleanup stack and exception frames,
+  - association/access file records,
+  - text formatting helpers.
+  This is the shared runtime ABI seed for LLVM.
 
-## 4. Decide product direction (resolved: interpreter-first)
+## 2. C backend stop line
 
-- [x] Choose interpreter-first educational compiler vs native/C backend.
-      Decision: interpreter-first educational compiler.
-- [x] Minimal C backend and `z200c compile`: basic variables, expressions,
-      assignments, `ASSERT`, `IF`, `WRITE`/`WRITELINE`, procedures with `IN`
-      parameters (including `OUT`/`INOUT`/`LOC`), calls, `RETURN`, `RESULT`, integer
-      conversions, one-dimensional
-      scalar arrays (including multidimensional), array initializers/literals,
-      same-mode array copying and comparison, string comparisons and concatenation,
-      named set and structure modes (including field-wise structure comparison and
-      field references), scalar references and `NULL`, CRLF-safe `READLINE`, loop and
-      labelled-control actions, and configurable C compiler selection.
-      multi-selector `CASE`, and scoped `BEGIN` blocks.
-- [ ] Extend native codegen to procedures, calls, arrays, text, references, exceptions,
-      and a dedicated CHILL runtime ABI.
-- [-] Full native concurrency and moreta object lowering remain deferred.
-- [x] Direction: prioritize language coverage/conformance; start with strings, then
-      arrays, exceptions/handlers, and I/O.
+The C backend should **not** grow into the following. These belong to the LLVM/full-native
+track:
 
-## 5. CI
+- processes, signals, timers, buffers, regions, tasks, and schedulers,
+- task/region moreta object execution,
+- moreta lifecycle, inheritance, and component dispatch,
+- generic procedure/module/region/process lowering,
+- preemptive or coroutine-based concurrency,
+- sophisticated optimization, debug info, and source maps,
+- full cross-package ABI and piecewise linking,
+- a second full implementation of dynamic-shape or sub-location semantics just for C.
 
-- [x] CI workflow runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-      and `cargo test --all` on stable Linux.
-- [x] `rust-toolchain.toml` pins the stable channel with rustfmt/clippy.
-- [ ] Decide whether to declare and test an MSRV; current policy is stable-only.
-- [ ] Optionally add a stable/nightly matrix once there is a reason.
+The C backend remains a bootstrap/fallback target for the sequential/static subset. The
+interpreter remains authoritative for semantics not implemented natively.
 
-## 6. Concurrency (post-first-release)
+## 3. LLVM handoff criteria
 
-First release policy: **language coverage, not faithful concurrency**. Regions and
-processes are single-threaded/non-preemptive for now; faithful CHILL concurrency is
-deferred.
+Start the LLVM backend when these are true, rather than waiting for every C feature:
 
-- [x] Decide first-release policy: keep execution single-threaded.
-- [x] Design and implement cooperative region mutual exclusion and per-object
-      serialization for region methods.
-- [x] Implement cooperative process scheduling, signals, buffers, timers, and
-      task-object workers.
-- [x] Support nested regions inside module bodies.
+1. **Typed IR is the lowering input**
+   - Sequential declarations, expressions, calls, aggregates, text, references,
+     exceptions, and module symbols are represented in typed IR.
+   - The LLVM backend does not duplicate the C backend's AST-walking logic.
 
-## 7. Core language coverage
+2. **Runtime ABI is defined**
+   - Value layout for scalars, strings, text records, powersets, structures, arrays,
+     references, associations, and access locations.
+   - Parameter passing (`IN`, `OUT`, `INOUT`, `LOC`) and array/result wrappers.
+   - Refcount retain/release/copy/drop and unwind cleanup entry points.
+   - Exception raise/handler ABI and handler cleanup markers.
+   - Module symbol/visibility conventions for `GRANT`/`SEIZE`.
 
-- [x] One-dimensional scalar arrays (`ARRAY (low:high) mode`) with indexing, bounds
-      checks, and whole-array assignment.
-- [x] Arrays of structures, including field selection and field assignment through
-      array elements.
-- [x] Unlabelled array literals/tuples (`(: v, ... :)` and `[v, ...]`) in contexts
-      with a known array mode.
-- [x] Array slices (`a(lower:upper)` and `a(first UP size)`), usable as array values
-      and assignment targets, with constant or runtime bounds.
-- [x] Multidimensional arrays up to four dimensions, with multi-index access,
-      whole-array assignment/equality, and scalar or structure elements.
-- [x] Labelled array tuples with literal/range/`ELSE`/`(*)` labels, completeness and
-      overlap checking.
-- [x] `CHAR`, unbounded `CHARS`, fixed `CHARS(n)`, and bounded
-      `CHARS(n) VARYING` modes.
-- [x] `WCHAR` and `WCHARS` scalar/string modes, wide character and string literals,
-      bounded `WCHARS(n)` modes, wide-string concatenation/comparison, wide powersets,
-      and grant-interface encoding.
-- [x] Bit strings: `BOOLS`, bounded `BOOLS(n)` modes, binary/octal/hexadecimal bit
-      literals, elementwise logic, concatenation, comparison, and grant encoding.
-- [x] References and rows: `REF M`, `PTR`, `ROW M`, `NULL`, referencing/dereferencing,
-      `ALLOCATE`/`GETSTACK`/`TERMINATE`, `EMPTY`, self-referential structure modes, and
-      grant encoding for reference/pointer/row modes. Arrays of references, nested
-      references, and references to fields/indexes remain deferred.
-- [x] `TEXT(n)` and `WTEXT(n)` text location modes with empty-string initialization,
-      text I/O, bounded length checks, optional index-mode/DYNAMIC surface syntax,
-      grant encoding, actual text index, and `GETTEXTINDEX`/`SETTEXTINDEX`. Text
-      sub-location reference built-ins remain deferred.
-- [x] `CAUSE` and module/procedure handlers, including catching `ASSERTFAIL`/`OVERFLOW`.
-- [x] Action-level handlers, including handlers on bracketed actions, assignment,
-      assert, and call actions.
-- [x] Exception-set flow checking for `CAUSE`, `ASSERT`, and called procedures;
-      `EXCEPTIONS` lists are enforced and compared across spec/body signatures.
-      Implicit runtime checks such as `OVERFLOW`, range, and text failures are not
-      statically inferred yet.
-- [x] Multiple `CASE` selectors with per-selector label lists, including `BOOL` and
-      `CHAR` selectors, labels, and character ranges.
-- [x] Implementation-defined text I/O (`WRITE`, `WRITELINE`, `READLINE`).
-- [x] `READTEXT`/`WRITETEXT` for `CHARS` locations with literal format text.
-- [x] Bounded text modes (`CHARS(n)` and `CHARS(n) VARYING`), including arrays of
-      bounded strings.
-- [x] `READTEXT`/`WRITETEXT` format conversion and editing codes with io lists
-      (`%B`, `%O`, `%H`, `%C`, widths, `L`/`E`/`P` qualifiers, repetition, `X`, `>`,
-      `<`, `T`, and `%%`).
-- [x] Basic `ASSOCIATION` and `ACCESS CHARS` modes with `ASSOCIATE`, `DISSOCIATE`,
-      `ISASSOCIATED`, `CREATE`, `DELETE`, `CONNECT`, `DISCONNECT`, `READRECORD`, and
-      `WRITERECORD` over sequential line records.
-- [x] Parenthesized text-format clauses with repetition.
-- [x] Variable format widths (`V`) for conversions and editing clauses.
-- [x] Association attributes `EXISTING`, `READABLE`, `WRITEABLE`, `INDEXABLE`,
-      `SEQUENCIBLE`, and `VARIABLE`.
-- [x] Floating-point mode `FLOAT`, literals, arithmetic/comparisons, `FLOAT(...)`
-      conversion, float arrays, fractional/exponent format widths, and `%F`.
-- [x] I/O control format clauses (`%/`, `%+`, `%-`, `%?`, `%!`, `%=`).
-- [x] Association `MODIFY` (no parameters) and indexed `ACCESS (range) CHARS`,
-      indexed `CONNECT`/`READRECORD`/`WRITERECORD`, record-range checks, and
-      `INDEXABLE` reporting.
-- [x] Predefined `USAGE`/`WHERE` values, `CONNECT` usage/where/index forms,
-      `GETUSAGE`, `OUTOFFILE`, `GETASSOCIATION`, usage enforcement, and EOF reporting.
-- [x] Text-location access sub-locations: `CONNECT`/`DISCONNECT` on `TEXT`/`WTEXT`,
-      file-backed sequential `READTEXT`/`WRITETEXT`, and access attributes for text.
-- [x] Reference-backed text record/access sub-locations:
-      `GETTEXTRECORD`/`SETTEXTRECORD`, `GETTEXTACCESS`/`SETTEXTACCESS`, and
-      dereferenced access references as transfer locations.
-- [x] Indexed text access: retained text index modes, indexed text `CONNECT`, indexed
-      `READTEXT`/`WRITETEXT`, range checking, and grant encoding.
-- [x] Bounded text record cells, length-safe record references, and dereferenced
-      `SETTEXTRECORD` sources.
-- [x] Processes, signals, buffers, timers, and event selection under the cooperative
-      single-threaded scheduler. Faithful preemptive concurrency and main-process
-      interleaving remain deferred.
-- [x] `POWERSET` of `INT` / `BOOL` / `CHAR` with literals, ranges, union,
-      intersection, difference, equality/ordering, and `IN`.
-- [x] Named `SET (...)` modes with unnumbered and numbered elements.
-- [x] Generic procedure templates parameterized by `MODE`, with
-      `name: PROC = NEW template (modes) END;` instantiation.
-- [x] Generic module templates parameterized by `MODE`, with
-      `name: MODULE = NEW template (modes) END;` instantiation.
-- [x] Moreta module-body objects with variable/procedure components, value-returning
-      methods, non-value method actions, component `INIT` evaluation (including base
-      initializers), `BASED_ON` inheritance/override, paired `MODULE SPEC`
-      interfaces, and invariants.
-- [x] Consolidate the moreta subset: document semantics/limits, reject object
-      assignment, reject abstract-mode instantiation, check invariants after
-      initialization, merge spec/body invariants, and key moreta metadata by stable
-      mode ID.
-- [x] Generic `SYN` value parameters and generic `PROC` parameters in procedure and
-      module templates.
-- [x] `OUT`, `INOUT`, and `LOC` parameter passing for procedures and moreta
-      methods, including copy-back and grant-interface encoding.
-- [x] Moreta `SELF`, constructors/destructors, constructor arguments, nested mode
-      components, and moreta grant-mode encoding. Task/region object modes and generic
-      region/process templates remain deferred.
-- [x] Static-object destructors at reach/lifetime end, including block, procedure,
-      process, nested-module, and program-end cleanup.
-- [x] Base constructors/destructors are excluded from `BASED_ON` inheritance.
-- [x] Assignment through fields of multidimensional array elements.
-- [x] Wide `ACCESS WCHARS` records, including grant encoding and indexed forms.
-- [x] Array elements for sets, powersets, associations, access modes, module-mode
-      objects, `REF`, `ROW`, and `PTR`, plus arrays of powerset modes.
-- [x] References to fields and array elements, including multidimensional elements.
-- [x] Forward-declared, mutually recursive structure modes through `REF`/`ROW`, with
-      direct value-cycle rejection.
-- [x] References to whole array targets with indexed dereference (`ref->(i)`).
-- [x] Nested multidimensional array literals.
-- [x] Integration showcase example spanning objects, references, arrays, slices, and
-      control flow.
-- [x] Full-dimensional constant-bound multidimensional slices, including `UP` size
-      and rectangular slice assignment.
-- [x] Main-process interleaving at action boundaries via scheduler pumping.
-- [x] Main-process blocking `DELAY`, timed `DELAY`, and signal/buffer `RECEIVE CASE`
-      through scheduler pumping.
-- [x] Deterministic program shutdown: drain processes, stop task workers, run static
-      destructors, clear scheduler state, and report residual region/object/buffer waits.
+3. **C backend scope is frozen**
+   - Text sub-locations and dynamic slices are either implemented or explicitly
+     declared unsupported in both native backends.
+   - No active semantic changes are pending only in the C code generator.
+
+4. **Conformance gate**
+   - All `tests/run_ok` fixtures that do not require deferred LLVM-only features pass
+     natively.
+   - Native `run_fail` behavior is stable, including `live-payloads: 0` under
+     `Z200C_RC_STATS=1`.
+
+5. **Diagnostics are stable**
+   - Unsupported LLVM-first features are rejected with stable codes and clear messages.
+   - The interpreter and native backends agree on mode errors and runtime checks.
+
+## 4. LLVM roadmap after handoff
+
+- [ ] LLVM target skeleton and C ABI shim.
+- [ ] Scalar modes, variables, expressions, calls, `IF`/`DO`/`CASE`.
+- [ ] Arrays, slices, structures, strings, powersets, references, text.
+- [ ] Module linking, grants, and package ABI.
+- [ ] Exception frames and runtime range/overflow checks.
+- [ ] Moreta object layout, constructors/destructors, methods, and visibility.
+- [ ] Generic instantiation/lowering.
+- [ ] Cooperative processes, signals, buffers, timers, regions, and tasks.
+- [ ] Optimization, debug info, source maps, and cross-platform codegen.
+
+## 5. Interpreter and conformance backlog
+
+The interpreter remains the reference while native work proceeds.
+
 - [ ] Full coroutine-based main-process termination semantics.
-- [x] Complete `Mode!Component` path preservation in mode symbols and grant files.
-- [x] First concurrency layer: `PROCESS`, `START`, `STOP`, a cooperative
-      action-boundary scheduler, shared module locations, and process-local state.
-- [x] `EVENT`/`EVENT(n)` modes, `DELAY`, `CONTINUE`, priority wake-up, event-length
-      `DELAYFAIL`, and delayed-process deadlock detection.
-- [x] `SIGNAL` declarations, `SEND`, `RECEIVE CASE`, pending signal queues, parked
-      receivers, receive bindings, and `ELSE` receive alternatives.
-- [x] Region-call mutual exclusion for procedures defined inside `REGION` units,
-      including queued callers and per-process reentrancy.
-- [x] Fixed control-flow continuation so actions after `IF`, `DO`, `CASE`, `BEGIN`,
-      labelled actions, and handled actions are executed.
-- [x] `DURATION` values, duration built-ins, relative `AFTER ... [DELAY] IN ...
-      TIMEOUT ... END` timing actions, scheduler deadlines, and timeout cancellation of
-      blocking `DELAY`/`RECEIVE` waits.
-- [x] `DELAY CASE` with multiple event alternatives, priority selection, and timeout
-      cancellation inside relative timing actions.
-- [x] `BUFFER [(length)] element-mode` locations, buffered send/receive, capacity
-      blocking, delayed senders, buffer receive timeouts, and grant encoding for
-      referable buffer element modes.
-- [x] `INSTANCE` values, `THIS`, `START` as an expression, and targeted
-      `SEND ... TO instance` delivery with pending targeted signals.
-- [x] `RECEIVE CASE SET instance;` for signal and buffer receives, carrying sender
-      instance values through queued and direct handoffs.
-- [x] Signal `SEND` priority selection and prioritized buffer messages/delayed
-      senders.
-- [x] Process `ON` handlers for process-local exceptions and `CAUSE`.
-- [x] `SIGNAL ... TO process-name` restrictions, enforced for targeted sends and
-      receiver matching.
-- [x] Process `LOC` parameters, with process actual locations lowered through the
-      shared call-argument path; `OUT`/`INOUT` process parameters are rejected.
-- [x] Absolute timing actions (`AT`), cyclic timing actions (`CYCLE`), `TIME`, and
-      `ABSTIME` construction.
-- [x] Region object modes with Moreta components and per-object method-call mutual
-      exclusion; region/task object grant-kind preservation.
-- [x] `examples/pipeline`: end-to-end concurrent pipeline exercising bounded buffers,
-      processes, region objects, signals, targeted sends, receive `SET`, timing, and
-      FIFO/priority message ordering.
-- [x] Task object modes with per-object task workers, asynchronous queued component
-      calls, task-only `IN` procedure validation, and grant-kind preservation.
-- [x] Mutually exclusive direct task-object field access and `TERMINATE`-based task
-      worker termination.
-- [x] Scheduler yield-interval testing and pipeline runs across multiple
-      interleavings.
+- [ ] Arrays of references, nested references, and remaining reference-to-sub-location
+      cases that are still deferred.
+- [ ] Moreta task/region object modes and generic region/process templates.
+- [ ] Keep `tests/run_ok`, `tests/run_fail`, and `tests/sema_fail` growing with every
+      language change.
+- [ ] Add native fixture mirrors for new sequential features where practical.
 
-- [x] Single-file script mode: `z200c check <file>.ch` and `z200c run <file>.ch`
-      without a manifest, loading only the named script.
+## 6. Tooling and documentation
 
-## 8. Cleanup
+- [ ] Update `docs/decisions.md` §10.9: code generation is no longer future work; record
+      the C bootstrap scope and LLVM handoff policy.
+- [ ] Keep `docs/backend.md` as the current C-backend contract and limitation list.
+- [ ] Document the runtime payload/cleanup/exception ABI before LLVM lowering starts.
+- [ ] Decide and test an MSRV, or document stable-only policy.
+- [ ] Add stable/nightly and cross-platform CI when there is a concrete reason.
+- [ ] Add native runtime allocation/ownership stress tests to CI.
 
-- [x] Replace message-based error classification with explicit codes at checker and
-      interpreter error-construction sites.
-- [x] Reduce repeated temp-dir setup in CLI tests with a `TempDir` fixture that
-      creates sources and cleans up on drop.
-- [x] Reconcile docs status matrices with the implementation (subset scope,
-      grant/contexts/piecewise notes, text I/O and exception decisions).
+## 7. Completed milestones (summary)
+
+The following areas are implemented and no longer need backlog entries:
+
+- shared reach/grant model and virtual-grant normalization,
+- conformance fixtures and diagnostic-code assertions,
+- cooperative interpreter concurrency, moreta objects, generics, associations, and text,
+- C backend sequential/static coverage:
+  - variables, control flow, procedures and parameters,
+  - arrays, multidimensional arrays, slices, structures,
+  - strings, powersets, references,
+  - text formatting, text files, associations, and access records,
+  - exceptions, runtime checks, and integer width enforcement,
+  - cross-module grants and seized modes,
+  - reference-counted string/powerset/text payloads,
+  - unwind-safe cleanup for scopes, loops, labelled exits, and caught exceptions,
+  - configurable C compiler selection and CRLF-safe `READLINE`.
