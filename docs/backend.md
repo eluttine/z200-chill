@@ -153,9 +153,9 @@ shared with the interpreter.
 
 ## Runtime ABI
 
-The generated C includes `z200rt.h`, and is linked with the separately compiled
-`z200rt.c`; both are written alongside the generated source from `runtime/`. The
-runtime contains the C standard-library helpers for refcounted payloads, cleanup
+The generated C includes `z200rt.h`. The runtime is compiled from the separately
+written `z200rt.c` into `z200rt.o`, archived as `libz200rt.a`, and linked into the
+program. The archiver is selected from `Z200C_AR`, then `AR`, and defaults to `ar`.
+The runtime contains the C standard-library helpers for refcounted payloads, cleanup
 frames, exceptions, text formatting, slices, associations, and access records. It is
-compiled as a separate translation unit and is the stable ABI seed for the LLVM
-backend.
+the stable ABI seed for the LLVM backend.

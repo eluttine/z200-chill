@@ -156,6 +156,42 @@ fn compile_impl(target: &Path) -> Result<PathBuf, String> {
                 "cc".to_owned()
             }
         });
+    let runtime_object_path = out_dir.join("z200rt.o");
+    let runtime_lib_path = out_dir.join("libz200rt.a");
+    let output = std::process::Command::new(&compiler)
+        .arg("-std=c11")
+        .arg("-O2")
+        .arg("-Wall")
+        .arg("-Wextra")
+        .arg("-c")
+        .arg("-o")
+        .arg(&runtime_object_path)
+        .arg(&runtime_source_path)
+        .output()
+        .map_err(|error| format!("error[E0600]: cannot run C compiler `{compiler}`: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "error[E0601]: runtime compilation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let archiver = std::env::var("Z200C_AR")
+        .or_else(|_| std::env::var("AR"))
+        .unwrap_or_else(|_| "ar".to_owned());
+    let output = std::process::Command::new(&archiver)
+        .arg("rcs")
+        .arg(&runtime_lib_path)
+        .arg(&runtime_object_path)
+        .output()
+        .map_err(|error| format!("error[E0600]: cannot run archiver `{archiver}`: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "error[E0601]: runtime archive creation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
     let output = std::process::Command::new(&compiler)
         .arg("-std=c11")
         .arg("-O2")
@@ -164,7 +200,7 @@ fn compile_impl(target: &Path) -> Result<PathBuf, String> {
         .arg("-o")
         .arg(&binary)
         .arg(&c_path)
-        .arg(&runtime_source_path)
+        .arg(&runtime_lib_path)
         .output()
         .map_err(|error| format!("error[E0600]: cannot run C compiler `{compiler}`: {error}"))?;
     if !output.status.success() {

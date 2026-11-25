@@ -43,7 +43,8 @@ subset and exercise the same typed information the LLVM backend will need.
   - text formatting helpers.
 - [x] Split `runtime/z200rt.h` into a public header plus `runtime/z200rt.c`, compiled
       as a separate translation unit with exported signatures for LLVM reuse.
-- [ ] Package the runtime as a static/shared archive once the exported ABI is final.
+- [x] Package the native runtime as a static archive (`libz200rt.a`).
+- [ ] Finalize exported runtime ABI and optionally add a shared-library form.
 
 ## 2. C backend stop line
 
