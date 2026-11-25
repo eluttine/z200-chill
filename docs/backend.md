@@ -157,5 +157,8 @@ The generated C includes `z200rt.h`. The runtime is compiled from the separately
 written `z200rt.c` into `z200rt.o`, archived as `libz200rt.a`, and linked into the
 program. The archiver is selected from `Z200C_AR`, then `AR`, and defaults to `ar`.
 The runtime contains the C standard-library helpers for refcounted payloads, cleanup
-frames, exceptions, text formatting, slices, associations, and access records. It is
-the stable ABI seed for the LLVM backend.
+frames, exceptions, text formatting, slices, associations, and access records. Only
+the operations used by generated code are exported; implementation helpers and global
+state are private to `z200rt.c`. Exception and allocation state is exposed through
+`z_handler_current`, `z_handler_set`, `z_exception_current`, and `z_rc_live_count`.
+This is the ABI seed for the LLVM backend.

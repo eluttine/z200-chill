@@ -207,11 +207,6 @@ typedef struct {
 
 
 
-void z_rc_register(void *pointer);
-void *z_rc_alloc(size_t size);
-void *z_rc_realloc(void *pointer, size_t size);
-void z_rc_retain(void *pointer);
-void z_rc_release(void *pointer);
 void z_string_assign(const char **target, const char *value);
 void z_string_drop(const char *value);
 const char *z_concat(const char *a, const char *b);
@@ -234,12 +229,9 @@ void *z_check_ref(const void *pointer);
 ZPowerSet z_ps_empty(void);
 void z_ps_assign(ZPowerSet *target, ZPowerSet value);
 void z_ps_drop(ZPowerSet *value);
-int z_ps_int_compare(const void *left, const void *right);
 ZPowerSet z_ps_literal(size_t count, const ZPSRange *ranges);
 int z_ps_equal(ZPowerSet left, ZPowerSet right);
 int z_ps_contains(ZPowerSet set, int64_t value);
-int z_ps_subset(ZPowerSet left, ZPowerSet right);
-void z_ps_require_ordered(ZPowerSet left, ZPowerSet right);
 int z_ps_le(ZPowerSet left, ZPowerSet right);
 int z_ps_ge(ZPowerSet left, ZPowerSet right);
 int z_ps_lt(ZPowerSet left, ZPowerSet right);
@@ -282,14 +274,6 @@ void z_association_assign(ZAssociation *target, ZAssociation value);
 void z_association_drop(ZAssociation *value);
 void z_access_assign(ZAccess *target, ZAccess value);
 void z_access_drop(ZAccess *value);
-int z_file_exists(const char *path);
-char *z_file_contents(const char *path, size_t *length);
-void z_lines_push(ZLines *lines, const char *start, size_t length);
-ZLines z_lines_load(const char *path, int missing_ok);
-void z_lines_free(ZLines *lines);
-size_t z_file_line_count(const char *path);
-const char *z_file_read_line(const char *path, int64_t position);
-void z_file_write_line(const char *path, int64_t position, const char *record);
 void z_associate(ZAssociation *association, const char *path);
 void z_create_association(ZAssociation *association);
 void z_delete_association(ZAssociation *association);
@@ -367,19 +351,6 @@ void z_text_assign(ZText *text, const char *value, size_t limit);
 void z_text_assign_value(ZText *target, ZText value);
 void z_text_drop(ZText *value);
 void z_text_write(ZText *text, const char *value, size_t limit);
-void z_text_write_int(ZText *text, int64_t value, size_t limit);
-void z_text_write_bool(ZText *text, int value, size_t limit);
-void z_text_write_char(ZText *text, int value, size_t limit);
-void z_text_write_string(ZText *text, const char *value, size_t limit);
-void z_text_write_padded(
-    ZText *text,
-    const char *value,
-    size_t limit,
-    int64_t width,
-    int left,
-    char pad,
-    int overflow
-);
 void z_text_write_int_format(
     ZText *text,
     int64_t value,
@@ -437,15 +408,10 @@ double z_text_read_float_format(
     char pad
 );
 void z_text_read_literal(ZText *text, const char *expected, size_t limit);
-int64_t z_text_read_int(ZText *text, size_t limit);
-int64_t z_text_read_char(ZText *text, size_t limit);
-int z_text_read_bool(ZText *text, size_t limit);
-void z_text_pad_to(ZText *text, int64_t width, size_t limit);
 void z_text_edit_write(ZText *text, int code, int64_t width, size_t limit);
 void z_text_edit_read(ZText *text, int code, int64_t width, size_t limit);
 void z_text_io_write(ZText *text, int control, size_t limit);
 void z_text_io_read(ZText *text, int control, size_t limit);
-char z_text_upper(char value);
 int64_t z_text_read_int_format(
     ZText *text,
     size_t limit,
@@ -485,8 +451,9 @@ int z_slice_equal_text(
     int64_t right_len
 );
 
-extern const char *z_exception_name;
-extern ZHandler *z_handlers;
-extern size_t z_rc_live;
+const char *z_exception_current(void);
+ZHandler *z_handler_current(void);
+void z_handler_set(ZHandler *handler);
+size_t z_rc_live_count(void);
 
 #endif

@@ -355,7 +355,10 @@ pub fn generate(
             cleanup_defs: cleanup_defs.clone(),
             cleanup_counter: cleanup_counter.clone(),
         };
-        generator.line(&mut out, "ZHandler *__z_entry_handlers = z_handlers;");
+        generator.line(
+            &mut out,
+            "ZHandler *__z_entry_handlers = z_handler_current();",
+        );
         let function_mark = generator.push_scope_marker(&mut out)?;
         generator.function_mark = Some(function_mark);
         generator.emit_initializers(&mut out, &module.declarations)?;
@@ -412,7 +415,7 @@ pub fn generate(
     }
     out.push_str(&format!("    (void)\"{}\";\n", c_escape(package)));
     out.push_str("    if (getenv(\"Z200C_RC_STATS\") != NULL) {\n");
-    out.push_str("        printf(\"live-payloads: %zu\\n\", z_rc_live);\n");
+    out.push_str("        printf(\"live-payloads: %zu\\n\", z_rc_live_count());\n");
     out.push_str("    }\n");
     out.push_str("    return 0;\n}\n");
     let definitions = cleanup_defs.borrow().clone();
@@ -643,7 +646,7 @@ fn emit_proc(
         cleanup_defs,
         cleanup_counter,
     };
-    generator.line(out, "ZHandler *__z_entry_handlers = z_handlers;");
+    generator.line(out, "ZHandler *__z_entry_handlers = z_handler_current();");
     let function_mark = generator.push_scope_marker(out)?;
     generator.function_mark = Some(function_mark);
     if let Some((name, kind)) = &generator.result {
@@ -717,7 +720,7 @@ fn emit_proc(
         };
         generator.emit_array_result_return(out, &name, &wrapper)?;
     } else {
-        generator.line(out, "z_handlers = __z_entry_handlers;");
+        generator.line(out, "z_handler_set(__z_entry_handlers);");
         if let Some((name, _)) = generator.result.clone() {
             generator.line(out, &format!("return {name};"));
         }
@@ -1427,12 +1430,12 @@ impl Generator<'_> {
                         }
                         self.drop_temporaries(out)?;
                         self.drop_live_scopes(out)?;
-                        self.line(out, "z_handlers = __z_entry_handlers;");
+                        self.line(out, "z_handler_set(__z_entry_handlers);");
                         self.line(out, &format!("return {name};"));
                     } else {
                         self.drop_temporaries(out)?;
                         self.drop_live_scopes(out)?;
-                        self.line(out, "z_handlers = __z_entry_handlers;");
+                        self.line(out, "z_handler_set(__z_entry_handlers);");
                         self.line(out, "return;");
                     }
                 }
@@ -1589,16 +1592,19 @@ impl Generator<'_> {
         self.indent += 1;
         self.line(out, &format!("ZHandler {state};"));
         self.line(out, &format!("{state}.cleanup = z_cleanup_mark();"));
-        self.line(out, &format!("{state}.prev = z_handlers;"));
-        self.line(out, &format!("z_handlers = &{state};"));
+        self.line(out, &format!("{state}.prev = z_handler_current();"));
+        self.line(out, &format!("z_handler_set(&{state});"));
         self.line(out, &format!("if (setjmp({state}.env) == 0) {{"));
         self.indent += 1;
         self.emit_actions(out, body)?;
         self.indent -= 1;
         self.line(out, "} else {");
         self.indent += 1;
-        self.line(out, &format!("const char *{exception} = z_exception_name;"));
-        self.line(out, &format!("z_handlers = {state}.prev;"));
+        self.line(
+            out,
+            &format!("const char *{exception} = z_exception_current();"),
+        );
+        self.line(out, &format!("z_handler_set({state}.prev);"));
         let catch_all = handler
             .alternatives
             .iter()
@@ -1651,7 +1657,7 @@ impl Generator<'_> {
         }
         self.indent -= 1;
         self.line(out, "}");
-        self.line(out, &format!("z_handlers = {state}.prev;"));
+        self.line(out, &format!("z_handler_set({state}.prev);"));
         self.indent -= 1;
         self.line(out, "}");
         Ok(())
@@ -1959,7 +1965,7 @@ impl Generator<'_> {
         result_name: &str,
         wrapper: &str,
     ) -> Result<(), String> {
-        self.line(out, "z_handlers = __z_entry_handlers;");
+        self.line(out, "z_handler_set(__z_entry_handlers);");
         self.line(out, "{");
         self.indent += 1;
         self.line(out, &format!("{wrapper} __out;"));

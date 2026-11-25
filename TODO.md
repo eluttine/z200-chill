@@ -44,7 +44,9 @@ subset and exercise the same typed information the LLVM backend will need.
 - [x] Split `runtime/z200rt.h` into a public header plus `runtime/z200rt.c`, compiled
       as a separate translation unit with exported signatures for LLVM reuse.
 - [x] Package the native runtime as a static archive (`libz200rt.a`).
-- [ ] Finalize exported runtime ABI and optionally add a shared-library form.
+- [x] Reduce the exported runtime ABI to generated-code operations and replace direct
+      global-state access with accessor functions.
+- [ ] Freeze the exported runtime ABI and optionally add a shared-library form.
 
 ## 2. C backend stop line
 

@@ -2,9 +2,13 @@
 
 static ZRcEntry *z_rc_entries = NULL;
 
-size_t z_rc_live = 0;
+static size_t z_rc_live = 0;
 
-void z_rc_register(void *pointer) {
+size_t z_rc_live_count(void) {
+    return z_rc_live;
+}
+
+static void z_rc_register(void *pointer) {
     if (pointer == NULL) { return; }
     ZRcEntry *entry = (ZRcEntry *)malloc(sizeof(ZRcEntry));
     if (entry == NULL) { abort(); }
@@ -15,14 +19,14 @@ void z_rc_register(void *pointer) {
     z_rc_live++;
 }
 
-void *z_rc_alloc(size_t size) {
+static void *z_rc_alloc(size_t size) {
     void *pointer = malloc(size);
     if (pointer == NULL) { abort(); }
     z_rc_register(pointer);
     return pointer;
 }
 
-void *z_rc_realloc(void *pointer, size_t size) {
+static void *z_rc_realloc(void *pointer, size_t size) {
     void *resized = realloc(pointer, size);
     if (resized == NULL) { abort(); }
     if (resized != pointer) {
@@ -36,7 +40,7 @@ void *z_rc_realloc(void *pointer, size_t size) {
     return resized;
 }
 
-void z_rc_retain(void *pointer) {
+static void z_rc_retain(void *pointer) {
     if (pointer == NULL) { return; }
     for (ZRcEntry *entry = z_rc_entries; entry != NULL; entry = entry->next) {
         if (entry->pointer == pointer) {
@@ -46,7 +50,7 @@ void z_rc_retain(void *pointer) {
     }
 }
 
-void z_rc_release(void *pointer) {
+static void z_rc_release(void *pointer) {
     if (pointer == NULL) { return; }
     ZRcEntry **link = &z_rc_entries;
     while (*link != NULL) {
@@ -102,7 +106,11 @@ const char *z_readline(void) {
     return buffer;
 }
 
-const char *z_exception_name = "";
+static const char *z_exception_name = "";
+
+const char *z_exception_current(void) {
+    return z_exception_name;
+}
 
 static ZCleanup *z_cleanups = NULL;
 
@@ -128,7 +136,15 @@ void z_cleanup_run(ZCleanup *mark) {
     }
 }
 
-ZHandler *z_handlers = NULL;
+static ZHandler *z_handlers = NULL;
+
+ZHandler *z_handler_current(void) {
+    return z_handlers;
+}
+
+void z_handler_set(ZHandler *handler) {
+    z_handlers = handler;
+}
 
 void z_throw(const char *name) {
     z_exception_name = name;
@@ -225,7 +241,7 @@ void z_ps_drop(ZPowerSet *value) {
     value->len = 0;
 }
 
-int z_ps_int_compare(const void *left, const void *right) {
+static int z_ps_int_compare(const void *left, const void *right) {
     int64_t a = *(const int64_t *)left;
     int64_t b = *(const int64_t *)right;
     return (a > b) - (a < b);
@@ -280,7 +296,7 @@ int z_ps_contains(ZPowerSet set, int64_t value) {
     return 0;
 }
 
-int z_ps_subset(ZPowerSet left, ZPowerSet right) {
+static int z_ps_subset(ZPowerSet left, ZPowerSet right) {
     size_t i = 0;
     size_t j = 0;
     while (i < left.len && j < right.len) {
@@ -296,7 +312,7 @@ int z_ps_subset(ZPowerSet left, ZPowerSet right) {
     return i == left.len;
 }
 
-void z_ps_require_ordered(ZPowerSet left, ZPowerSet right) {
+static void z_ps_require_ordered(ZPowerSet left, ZPowerSet right) {
     if (!z_ps_subset(left, right) && !z_ps_subset(right, left)) {
         z_fail("E0500", "powersets are not ordered");
     }
@@ -508,14 +524,14 @@ void z_access_drop(ZAccess *value) {
     value->association = NULL;
 }
 
-int z_file_exists(const char *path) {
+static int z_file_exists(const char *path) {
     FILE *file = fopen(path, "rb");
     if (file == NULL) { return 0; }
     fclose(file);
     return 1;
 }
 
-char *z_file_contents(const char *path, size_t *length) {
+static char *z_file_contents(const char *path, size_t *length) {
     FILE *file = fopen(path, "rb");
     if (file == NULL) {
         z_fail("READFAIL", "cannot open file");
@@ -533,7 +549,7 @@ char *z_file_contents(const char *path, size_t *length) {
     return contents;
 }
 
-void z_lines_push(ZLines *lines, const char *start, size_t length) {
+static void z_lines_push(ZLines *lines, const char *start, size_t length) {
     if (length > 0 && start[length - 1] == '\r') { length--; }
     char *line = (char *)malloc(length + 1);
     if (line == NULL) { z_fail("STORAGE", "out of memory"); }
@@ -547,7 +563,7 @@ void z_lines_push(ZLines *lines, const char *start, size_t length) {
     lines->items[lines->count++] = line;
 }
 
-ZLines z_lines_load(const char *path, int missing_ok) {
+static ZLines z_lines_load(const char *path, int missing_ok) {
     ZLines lines = { NULL, 0, 0 };
     if (!z_file_exists(path)) {
         if (missing_ok) { return lines; }
@@ -569,7 +585,7 @@ ZLines z_lines_load(const char *path, int missing_ok) {
     return lines;
 }
 
-void z_lines_free(ZLines *lines) {
+static void z_lines_free(ZLines *lines) {
     for (size_t index = 0; index < lines->count; index++) {
         free(lines->items[index]);
     }
@@ -579,14 +595,14 @@ void z_lines_free(ZLines *lines) {
     lines->cap = 0;
 }
 
-size_t z_file_line_count(const char *path) {
+static size_t z_file_line_count(const char *path) {
     ZLines lines = z_lines_load(path, 0);
     size_t count = lines.count;
     z_lines_free(&lines);
     return count;
 }
 
-const char *z_file_read_line(const char *path, int64_t position) {
+static const char *z_file_read_line(const char *path, int64_t position) {
     if (position < 0) {
         z_fail("RANGEFAIL", "negative record index");
     }
@@ -602,7 +618,7 @@ const char *z_file_read_line(const char *path, int64_t position) {
     return record;
 }
 
-void z_file_write_line(const char *path, int64_t position, const char *record) {
+static void z_file_write_line(const char *path, int64_t position, const char *record) {
     if (position < 0) {
         z_fail("RANGEFAIL", "negative record index");
     }
@@ -1088,28 +1104,28 @@ void z_text_write(ZText *text, const char *value, size_t limit) {
     text->index = (int64_t)end;
 }
 
-void z_text_write_int(ZText *text, int64_t value, size_t limit) {
+static void z_text_write_int(ZText *text, int64_t value, size_t limit) {
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
     z_text_write(text, buffer, limit);
 }
 
-void z_text_write_bool(ZText *text, int value, size_t limit) {
+static void z_text_write_bool(ZText *text, int value, size_t limit) {
     z_text_write(text, value ? "TRUE" : "FALSE", limit);
 }
 
-void z_text_write_char(ZText *text, int value, size_t limit) {
+static void z_text_write_char(ZText *text, int value, size_t limit) {
     char buffer[2];
     buffer[0] = (char)value;
     buffer[1] = '\0';
     z_text_write(text, buffer, limit);
 }
 
-void z_text_write_string(ZText *text, const char *value, size_t limit) {
+static void z_text_write_string(ZText *text, const char *value, size_t limit) {
     z_text_write(text, value, limit);
 }
 
-void z_text_write_padded(
+static void z_text_write_padded(
     ZText *text,
     const char *value,
     size_t limit,
@@ -1395,7 +1411,7 @@ void z_text_read_literal(ZText *text, const char *expected, size_t limit) {
     text->index = (int64_t)(at + len);
 }
 
-int64_t z_text_read_int(ZText *text, size_t limit) {
+static int64_t z_text_read_int(ZText *text, size_t limit) {
     (void)limit;
     if (text->index < 0) {
         z_fail("TEXTFAIL", "negative text index");
@@ -1417,7 +1433,7 @@ int64_t z_text_read_int(ZText *text, size_t limit) {
     return (int64_t)value;
 }
 
-int64_t z_text_read_char(ZText *text, size_t limit) {
+static int64_t z_text_read_char(ZText *text, size_t limit) {
     (void)limit;
     if (text->index < 0 || (size_t)text->index >= text->len) {
         z_fail("TEXTFAIL", "text index is out of bounds");
@@ -1427,7 +1443,7 @@ int64_t z_text_read_char(ZText *text, size_t limit) {
     return (int64_t)value;
 }
 
-int z_text_read_bool(ZText *text, size_t limit) {
+static int z_text_read_bool(ZText *text, size_t limit) {
     (void)limit;
     if (text->index < 0) {
         z_fail("TEXTFAIL", "negative text index");
@@ -1445,7 +1461,7 @@ int z_text_read_bool(ZText *text, size_t limit) {
     return 0;
 }
 
-void z_text_pad_to(ZText *text, int64_t width, size_t limit) {
+static void z_text_pad_to(ZText *text, int64_t width, size_t limit) {
     if (width < 0) {
         z_fail("TEXTFAIL", "negative variable width");
     }
@@ -1588,7 +1604,7 @@ void z_text_io_read(ZText *text, int control, size_t limit) {
     text->index++;
 }
 
-char z_text_upper(char value) {
+static char z_text_upper(char value) {
     return value >= 'a' && value <= 'z' ? (char)(value - 'a' + 'A') : value;
 }
 
