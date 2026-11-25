@@ -41,8 +41,9 @@ subset and exercise the same typed information the LLVM backend will need.
   - cleanup stack and exception frames,
   - association/access file records,
   - text formatting helpers.
-- [ ] Split `runtime/z200rt.h` into a public header plus runtime source/object, with
-  stable exported function signatures for LLVM reuse.
+- [x] Split `runtime/z200rt.h` into a public header plus `runtime/z200rt.c`, compiled
+      as a separate translation unit with exported signatures for LLVM reuse.
+- [ ] Package the runtime as a static/shared archive once the exported ABI is final.
 
 ## 2. C backend stop line
 

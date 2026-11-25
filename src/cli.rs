@@ -135,6 +135,13 @@ fn compile_impl(target: &Path) -> Result<PathBuf, String> {
             runtime_path.display()
         )
     })?;
+    let runtime_source_path = out_dir.join("z200rt.c");
+    std::fs::write(&runtime_source_path, crate::backend::RUNTIME_SOURCE).map_err(|error| {
+        format!(
+            "error[E0600]: cannot write {}: {error}",
+            runtime_source_path.display()
+        )
+    })?;
     let binary = out_dir.join(format!(
         "{}{}",
         package.manifest.package.name,
@@ -157,6 +164,7 @@ fn compile_impl(target: &Path) -> Result<PathBuf, String> {
         .arg("-o")
         .arg(&binary)
         .arg(&c_path)
+        .arg(&runtime_source_path)
         .output()
         .map_err(|error| format!("error[E0600]: cannot run C compiler `{compiler}`: {error}"))?;
     if !output.status.success() {

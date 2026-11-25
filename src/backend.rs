@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 pub const RUNTIME_HEADER: &str = include_str!("../runtime/z200rt.h");
+pub const RUNTIME_SOURCE: &str = include_str!("../runtime/z200rt.c");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
