@@ -42,6 +42,15 @@ enum Kind {
     PowerSet(types::PowerSetMember),
     Text {
         length: usize,
+        indexed: bool,
+        low: i128,
+        high: i128,
+    },
+    Association,
+    Access {
+        indexed: bool,
+        low: i128,
+        high: i128,
     },
     Null,
 }
@@ -93,8 +102,17 @@ impl ScalarKind {
 }
 
 enum TextTarget {
-    Text { code: String, length: usize },
-    String { code: String, limit: String },
+    Text {
+        code: String,
+        length: usize,
+        indexed: bool,
+        low: i128,
+        high: i128,
+    },
+    String {
+        code: String,
+        limit: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +143,8 @@ impl Kind {
             Kind::Struct(id) => format!("z_struct_{}", id.0),
             Kind::PowerSet(_) => "ZPowerSet".to_owned(),
             Kind::Text { .. } => "ZText".to_owned(),
+            Kind::Association => "ZAssociation".to_owned(),
+            Kind::Access { .. } => "ZAccess".to_owned(),
             Kind::DynamicArray { .. } => "ZSlice".to_owned(),
             Kind::Null => {
                 unreachable!("NULL is never used as a declared variable type")
@@ -139,6 +159,7 @@ impl Kind {
             Kind::Array { .. } => "{0}",
             Kind::Ref(_) | Kind::RefArray { .. } | Kind::Null => "NULL",
             Kind::Struct(_) | Kind::PowerSet(_) | Kind::Text { .. } => "{0}",
+            Kind::Association | Kind::Access { .. } => "{0}",
             Kind::DynamicArray { .. } => "{0}",
         }
     }
@@ -681,9 +702,403 @@ static int z_slice_equal_powersets(
 }
 
 typedef struct {
+    const char *path;
+    int associated;
+    int existing;
+    int indexable;
+} ZAssociation;
+
+typedef struct {
+    const char *path;
+    int connected;
+    int usage;
+    int indexed;
+    int64_t position;
+    int out_of_file;
+} ZAccess;
+
+static void z_association_assign(ZAssociation *target, ZAssociation value) {
+    z_string_assign(&target->path, value.path);
+    target->associated = value.associated;
+    target->existing = value.existing;
+    target->indexable = value.indexable;
+}
+
+static void z_association_drop(ZAssociation *value) {
+    z_string_drop(value->path);
+    value->path = NULL;
+    value->associated = 0;
+    value->existing = 0;
+    value->indexable = 0;
+}
+
+static void z_access_assign(ZAccess *target, ZAccess value) {
+    z_string_assign(&target->path, value.path);
+    target->connected = value.connected;
+    target->usage = value.usage;
+    target->indexed = value.indexed;
+    target->position = value.position;
+    target->out_of_file = value.out_of_file;
+}
+
+static void z_access_drop(ZAccess *value) {
+    z_string_drop(value->path);
+    value->path = NULL;
+    value->connected = 0;
+    value->usage = 0;
+    value->indexed = 0;
+    value->position = 0;
+    value->out_of_file = 0;
+}
+
+static int z_file_exists(const char *path) {
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) { return 0; }
+    fclose(file);
+    return 1;
+}
+
+static char *z_file_contents(const char *path, size_t *length) {
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        z_fail("READFAIL", "cannot open file");
+    }
+    if (fseek(file, 0, SEEK_END) != 0) { fclose(file); z_fail("READFAIL", "cannot seek file"); }
+    long size = ftell(file);
+    if (size < 0) { fclose(file); z_fail("READFAIL", "cannot size file"); }
+    rewind(file);
+    char *contents = (char *)malloc((size_t)size + 1);
+    if (contents == NULL) { fclose(file); z_fail("STORAGE", "out of memory"); }
+    size_t read = fread(contents, 1, (size_t)size, file);
+    fclose(file);
+    contents[read] = '\0';
+    *length = read;
+    return contents;
+}
+
+typedef struct {
+    char **items;
+    size_t count;
+    size_t cap;
+} ZLines;
+
+static void z_lines_push(ZLines *lines, const char *start, size_t length) {
+    if (length > 0 && start[length - 1] == '\r') { length--; }
+    char *line = (char *)malloc(length + 1);
+    if (line == NULL) { z_fail("STORAGE", "out of memory"); }
+    memcpy(line, start, length);
+    line[length] = '\0';
+    if (lines->count == lines->cap) {
+        lines->cap = lines->cap == 0 ? 8 : lines->cap * 2;
+        lines->items = (char **)realloc(lines->items, lines->cap * sizeof(char *));
+        if (lines->items == NULL) { z_fail("STORAGE", "out of memory"); }
+    }
+    lines->items[lines->count++] = line;
+}
+
+static ZLines z_lines_load(const char *path, int missing_ok) {
+    ZLines lines = { NULL, 0, 0 };
+    if (!z_file_exists(path)) {
+        if (missing_ok) { return lines; }
+        z_fail("READFAIL", "cannot open file");
+    }
+    size_t length = 0;
+    char *contents = z_file_contents(path, &length);
+    size_t start = 0;
+    for (size_t index = 0; index < length; index++) {
+        if (contents[index] == '\n') {
+            z_lines_push(&lines, contents + start, index - start);
+            start = index + 1;
+        }
+    }
+    if (start < length) {
+        z_lines_push(&lines, contents + start, length - start);
+    }
+    free(contents);
+    return lines;
+}
+
+static void z_lines_free(ZLines *lines) {
+    for (size_t index = 0; index < lines->count; index++) {
+        free(lines->items[index]);
+    }
+    free(lines->items);
+    lines->items = NULL;
+    lines->count = 0;
+    lines->cap = 0;
+}
+
+static size_t z_file_line_count(const char *path) {
+    ZLines lines = z_lines_load(path, 0);
+    size_t count = lines.count;
+    z_lines_free(&lines);
+    return count;
+}
+
+static const char *z_file_read_line(const char *path, int64_t position) {
+    if (position < 0) {
+        z_fail("RANGEFAIL", "negative record index");
+    }
+    ZLines lines = z_lines_load(path, 0);
+    if ((size_t)position >= lines.count) {
+        z_lines_free(&lines);
+        return NULL;
+    }
+    size_t length = strlen(lines.items[position]);
+    char *record = (char *)z_rc_alloc(length + 1);
+    memcpy(record, lines.items[position], length + 1);
+    z_lines_free(&lines);
+    return record;
+}
+
+static void z_file_write_line(const char *path, int64_t position, const char *record) {
+    if (position < 0) {
+        z_fail("RANGEFAIL", "negative record index");
+    }
+    ZLines lines = z_lines_load(path, 1);
+    while (lines.count <= (size_t)position) {
+        z_lines_push(&lines, "", 0);
+    }
+    free(lines.items[position]);
+    size_t length = strlen(record);
+    lines.items[position] = (char *)malloc(length + 1);
+    if (lines.items[position] == NULL) { z_fail("STORAGE", "out of memory"); }
+    memcpy(lines.items[position], record, length + 1);
+    FILE *file = fopen(path, "wb");
+    if (file == NULL) { z_lines_free(&lines); z_fail("WRITEFAIL", "cannot open file"); }
+    for (size_t index = 0; index < lines.count; index++) {
+        fputs(lines.items[index], file);
+        fputc('\n', file);
+    }
+    fclose(file);
+    z_lines_free(&lines);
+}
+
+static void z_associate(ZAssociation *association, const char *path) {
+    if (association->associated) {
+        z_fail("ASSOCIATEFAIL", "association already exists");
+    }
+    z_string_assign(&association->path, path);
+    association->associated = 1;
+    association->existing = z_file_exists(path);
+    association->indexable = 0;
+}
+
+static void z_create_association(ZAssociation *association) {
+    if (!association->associated) {
+        z_fail("NOTASSOCIATED", "empty association");
+    }
+    if (association->existing) {
+        z_fail("CREATEFAIL", "file already exists");
+    }
+    FILE *file = fopen(association->path, "wb");
+    if (file == NULL) { z_fail("CREATEFAIL", "cannot create file"); }
+    fclose(file);
+    association->existing = 1;
+}
+
+static void z_delete_association(ZAssociation *association) {
+    if (!association->associated) {
+        z_fail("NOTASSOCIATED", "empty association");
+    }
+    if (!association->existing) {
+        z_fail("DELETEFAIL", "file does not exist");
+    }
+    if (remove(association->path) != 0) {
+        z_fail("DELETEFAIL", "cannot delete file");
+    }
+    association->existing = 0;
+}
+
+static void z_dissociate(ZAssociation *association) {
+    if (!association->associated) {
+        z_fail("NOTASSOCIATED", "empty association");
+    }
+    z_string_drop(association->path);
+    association->path = NULL;
+    association->associated = 0;
+    association->existing = 0;
+    association->indexable = 0;
+}
+
+static int z_association_is_associated(const ZAssociation *association) {
+    return association->associated;
+}
+
+static int64_t z_access_usage(const ZAccess *access) {
+    if (!access->connected) {
+        z_fail("NOTCONNECTED", "access location is not connected");
+    }
+    return access->usage;
+}
+
+static int z_access_out_of_file(const ZAccess *access) {
+    if (!access->connected) {
+        z_fail("NOTCONNECTED", "access location is not connected");
+    }
+    return access->out_of_file;
+}
+
+static int z_association_attribute(const ZAssociation *association, int attribute) {
+    if (!association->associated) {
+        z_fail("NOTASSOCIATED", "empty association");
+    }
+    switch (attribute) {
+        case 0: return association->existing;
+        case 1: return association->existing;
+        case 2: return association->existing;
+        case 3: return association->indexable;
+        case 4: return 1;
+        case 5: return 0;
+        default: return 0;
+    }
+}
+
+static void z_connect_access(
+    ZAccess *access,
+    ZAssociation *association,
+    int usage,
+    int where,
+    int indexed,
+    int has_index,
+    int64_t index,
+    int64_t low,
+    int64_t high
+) {
+    if (!association->associated) {
+        z_fail("NOTASSOCIATED", "empty association");
+    }
+    if (!association->existing) {
+        z_fail("CONNECTFAIL", "association has no existing file");
+    }
+    size_t count = z_file_line_count(association->path);
+    int64_t base;
+    if (where == 0) {
+        base = 0;
+    } else if (where == 1) {
+        if (!access->connected) {
+            z_fail("CONNECTFAIL", "SAME requires an existing connection");
+        }
+        base = access->position;
+    } else if (where == 2) {
+        base = (int64_t)count;
+    } else {
+        z_fail("CONNECTFAIL", "invalid WHERE value");
+        base = 0;
+    }
+    int64_t position = base;
+    if (has_index) {
+        if (indexed && (index < low || index > high)) {
+            z_fail("RANGEFAIL", "record index is out of range");
+        }
+        position = base + index - low;
+    }
+    z_string_assign(&access->path, association->path);
+    access->connected = 1;
+    access->usage = usage;
+    access->indexed = indexed;
+    access->position = position;
+    access->out_of_file = 0;
+    association->indexable = indexed;
+}
+
+static void z_disconnect_access(ZAccess *access) {
+    if (!access->connected) {
+        z_fail("NOTCONNECTED", "access location is not connected");
+    }
+    z_string_drop(access->path);
+    access->path = NULL;
+    access->connected = 0;
+    access->out_of_file = 0;
+}
+
+static const char *z_read_record(
+    ZAccess *access,
+    int has_index,
+    int64_t index,
+    int64_t low,
+    int64_t high
+) {
+    if (!access->connected) {
+        z_fail("NOTCONNECTED", "access location is not connected");
+    }
+    if (access->usage == 1) {
+        z_fail("READFAIL", "access location is write-only");
+    }
+    if (!access->indexed && access->out_of_file) {
+        z_fail("READFAIL", "access location is at end of file");
+    }
+    int64_t position = has_index ? index : access->position;
+    if (access->indexed && (position < low || position > high)) {
+        z_fail("RANGEFAIL", "record index is out of range");
+    }
+    if (position < 0) {
+        z_fail("RANGEFAIL", "negative record index");
+    }
+    const char *record = z_file_read_line(access->path, position);
+    if (record == NULL) {
+        access->out_of_file = 1;
+        char *empty = (char *)z_rc_alloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
+    access->position = position + 1;
+    access->out_of_file = 0;
+    return record;
+}
+
+static void z_write_record(
+    ZAccess *access,
+    int has_index,
+    int64_t index,
+    const char *record,
+    int64_t low,
+    int64_t high
+) {
+    if (!access->connected) {
+        z_fail("NOTCONNECTED", "access location is not connected");
+    }
+    if (access->usage == 0) {
+        z_fail("WRITEFAIL", "access location is read-only");
+    }
+    int64_t position = has_index ? index : access->position;
+    if (access->indexed || has_index) {
+        if (position < low || position > high) {
+            z_fail("RANGEFAIL", "record index is out of range");
+        }
+        if (position < 0) {
+            z_fail("RANGEFAIL", "negative record index");
+        }
+        z_file_write_line(access->path, position, record);
+        access->position = position + 1;
+    } else {
+        ZLines lines = z_lines_load(access->path, 1);
+        size_t length = strlen(record);
+        char *copy = (char *)malloc(length + 1);
+        if (copy == NULL) { z_fail("STORAGE", "out of memory"); }
+        memcpy(copy, record, length + 1);
+        z_lines_push(&lines, copy, length);
+        free(copy);
+        FILE *file = fopen(access->path, "ab");
+        if (file == NULL) { z_lines_free(&lines); z_fail("WRITEFAIL", "cannot open file"); }
+        fputs(record, file);
+        fputc('\n', file);
+        fclose(file);
+        z_lines_free(&lines);
+        access->position++;
+    }
+}
+
+typedef struct {
     char *record;
     size_t len;
     int64_t index;
+    const char *path;
+    int connected;
+    int usage;
+    int indexed;
+    int64_t position;
+    int out_of_file;
 } ZText;
 
 static const char *z_text_view(const ZText *text) {
@@ -694,8 +1109,162 @@ static ZText z_text_from_string(const char *value) {
     size_t len = strlen(value);
     char *copy = (char *)z_rc_alloc(len + 1);
     memcpy(copy, value, len + 1);
-    ZText text = { copy, len, 0 };
+    ZText text = { copy, len, 0, NULL, 0, 0, 0, 0, 0 };
     return text;
+}
+
+static void z_text_assign(ZText *text, const char *value, size_t limit);
+
+static int64_t z_text_usage(const ZText *text) {
+    if (!text->connected) {
+        z_fail("NOTCONNECTED", "text location is not connected");
+    }
+    return text->usage;
+}
+
+static int z_text_out_of_file(const ZText *text) {
+    if (!text->connected) {
+        z_fail("NOTCONNECTED", "text location is not connected");
+    }
+    return text->out_of_file;
+}
+
+static void z_connect_text(
+    ZText *text,
+    ZAssociation *association,
+    int usage,
+    int where,
+    int indexed,
+    int has_index,
+    int64_t index,
+    int64_t low,
+    int64_t high
+) {
+    if (!association->associated) {
+        z_fail("NOTASSOCIATED", "empty association");
+    }
+    if (!association->existing) {
+        z_fail("CONNECTFAIL", "association has no existing file");
+    }
+    size_t count = z_file_line_count(association->path);
+    int64_t base;
+    if (where == 0) {
+        base = 0;
+    } else if (where == 1) {
+        if (!text->connected) {
+            z_fail("CONNECTFAIL", "SAME requires an existing connection");
+        }
+        base = text->position;
+    } else if (where == 2) {
+        base = (int64_t)count;
+    } else {
+        z_fail("CONNECTFAIL", "invalid WHERE value");
+        base = 0;
+    }
+    int64_t position = base;
+    if (has_index) {
+        if (indexed && (index < low || index > high)) {
+            z_fail("RANGEFAIL", "record index is out of range");
+        }
+        position = base + index - low;
+    }
+    z_string_assign(&text->path, association->path);
+    text->connected = 1;
+    text->usage = usage;
+    text->indexed = indexed;
+    text->position = position;
+    text->out_of_file = 0;
+    association->indexable = indexed;
+}
+
+static void z_disconnect_text(ZText *text) {
+    if (!text->connected) {
+        z_fail("NOTCONNECTED", "text location is not connected");
+    }
+    z_string_drop(text->path);
+    text->path = NULL;
+    text->connected = 0;
+    text->out_of_file = 0;
+}
+
+static int z_text_begin_read(
+    ZText *text,
+    int has_index,
+    int64_t index,
+    int64_t low,
+    int64_t high,
+    size_t limit
+) {
+    if (!text->connected) {
+        if (has_index) {
+            if (index < 0 || (size_t)index > limit) {
+                z_fail("TEXTFAIL", "text index is outside the text length");
+            }
+            text->index = index;
+        }
+        return -1;
+    }
+    if (text->usage == 1) {
+        z_fail("READFAIL", "access location is write-only");
+    }
+    if (!text->indexed && text->out_of_file) {
+        return 0;
+    }
+    int64_t position = has_index ? index : text->position;
+    if (text->indexed && (position < low || position > high)) {
+        z_fail("RANGEFAIL", "record index is out of range");
+    }
+    if (position < 0) {
+        z_fail("RANGEFAIL", "negative record index");
+    }
+    const char *record = z_file_read_line(text->path, position);
+    if (record == NULL) {
+        text->out_of_file = 1;
+        return 0;
+    }
+    z_text_assign(text, record, limit);
+    z_rc_release((void *)record);
+    text->position = position + 1;
+    text->out_of_file = 0;
+    text->index = 0;
+    return 1;
+}
+
+static void z_text_begin_write(
+    ZText *text,
+    int has_index,
+    int64_t index,
+    int64_t low,
+    int64_t high,
+    size_t limit
+) {
+    if (!text->connected) {
+        if (has_index) {
+            if (index < 0 || (size_t)index > limit) {
+                z_fail("TEXTFAIL", "text index is outside the text length");
+            }
+            text->index = index;
+        }
+        return;
+    }
+    if (text->usage == 0) {
+        z_fail("WRITEFAIL", "access location is read-only");
+    }
+    int64_t position = has_index ? index : text->position;
+    if (text->indexed && (position < low || position > high)) {
+        z_fail("RANGEFAIL", "record index is out of range");
+    }
+    if (position < 0) {
+        z_fail("RANGEFAIL", "negative record index");
+    }
+    text->position = position;
+    text->index = 0;
+}
+
+static void z_text_end_write(ZText *text) {
+    if (!text->connected) { return; }
+    z_file_write_line(text->path, text->position, z_text_view(text));
+    text->position++;
 }
 
 static void z_text_assign(ZText *text, const char *value, size_t limit) {
@@ -711,20 +1280,31 @@ static void z_text_assign(ZText *text, const char *value, size_t limit) {
 }
 
 static void z_text_assign_value(ZText *target, ZText value) {
-    if (target->record == value.record) {
-        target->index = value.index;
-        return;
-    }
     z_rc_retain(value.record);
     z_rc_release(target->record);
-    *target = value;
+    z_string_assign(&target->path, value.path);
+    target->record = value.record;
+    target->len = value.len;
+    target->index = value.index;
+    target->connected = value.connected;
+    target->usage = value.usage;
+    target->indexed = value.indexed;
+    target->position = value.position;
+    target->out_of_file = value.out_of_file;
 }
 
 static void z_text_drop(ZText *value) {
     z_rc_release(value->record);
+    z_string_drop(value->path);
     value->record = NULL;
     value->len = 0;
     value->index = 0;
+    value->path = NULL;
+    value->connected = 0;
+    value->usage = 0;
+    value->indexed = 0;
+    value->position = 0;
+    value->out_of_file = 0;
 }
 
 static void z_text_write(ZText *text, const char *value, size_t limit) {
@@ -1768,7 +2348,11 @@ impl Generator<'_> {
 
     fn kind_owns(&self, kind: Kind) -> bool {
         match kind {
-            Kind::String | Kind::PowerSet(_) | Kind::Text { .. } => true,
+            Kind::String
+            | Kind::PowerSet(_)
+            | Kind::Text { .. }
+            | Kind::Association
+            | Kind::Access { .. } => true,
             Kind::Array { element, .. } => self.kind_owns(element.kind()),
             Kind::Struct(id) => self
                 .modes
@@ -1785,6 +2369,8 @@ impl Generator<'_> {
             Kind::String => self.line(out, &format!("z_string_drop({value});")),
             Kind::PowerSet(_) => self.line(out, &format!("z_ps_drop(&{value});")),
             Kind::Text { .. } => self.line(out, &format!("z_text_drop(&{value});")),
+            Kind::Association => self.line(out, &format!("z_association_drop(&{value});")),
+            Kind::Access { .. } => self.line(out, &format!("z_access_drop(&{value});")),
             Kind::Struct(id) => {
                 let fields = self
                     .modes
@@ -1840,6 +2426,12 @@ impl Generator<'_> {
             Kind::PowerSet(_) => self.line(out, &format!("z_ps_assign(&{target}, {source});")),
             Kind::Text { .. } => {
                 self.line(out, &format!("z_text_assign_value(&{target}, {source});"))
+            }
+            Kind::Association => {
+                self.line(out, &format!("z_association_assign(&{target}, {source});"))
+            }
+            Kind::Access { .. } => {
+                self.line(out, &format!("z_access_assign(&{target}, {source});"))
             }
             Kind::Struct(id) => {
                 let fields = self
@@ -1958,7 +2550,7 @@ impl Generator<'_> {
                 if let Kind::Int(kind) = info.kind {
                     let code = self.checked_int(&code, kind)?;
                     self.line(out, &format!("{} = {code};", info.c_name));
-                } else if let Kind::Text { length } = info.kind {
+                } else if let Kind::Text { length, .. } = info.kind {
                     self.emit_text_store(out, &info.c_name, length, &code, value_kind)?;
                 } else if self.kind_owns(info.kind) {
                     self.copy_kind(out, &info.c_name, &code, info.kind)?;
@@ -2167,7 +2759,7 @@ impl Generator<'_> {
                             self.vars.insert(var.name.clone(), info);
                             continue;
                         }
-                        if let Kind::Text { length } = kind {
+                        if let Kind::Text { length, .. } = kind {
                             self.line(out, &format!("{} = {{0}};", kind.c_declaration(&c_name)));
                             if let Some(init) = &var.init {
                                 let (code, value_kind) = self.emit_expr(&init.value)?;
@@ -2288,7 +2880,7 @@ impl Generator<'_> {
                             if let Kind::Int(int_kind) = kind {
                                 let code = self.checked_int(&code, int_kind)?;
                                 self.line(out, &format!("{name} = {code};"));
-                            } else if let Kind::Text { length } = kind {
+                            } else if let Kind::Text { length, .. } = kind {
                                 self.emit_text_store(out, &name, length, &code, value_kind)?;
                             } else if self.kind_owns(kind) {
                                 self.copy_kind(out, &name, &code, kind)?;
@@ -2319,7 +2911,7 @@ impl Generator<'_> {
                         if let Kind::Int(int_kind) = kind {
                             let code = self.checked_int(&code, int_kind)?;
                             self.line(out, &format!("{name} = {code};"));
-                        } else if let Kind::Text { length } = kind {
+                        } else if let Kind::Text { length, .. } = kind {
                             self.emit_text_store(out, &name, length, &code, value_kind)?;
                         } else if self.kind_owns(kind) {
                             self.copy_kind(out, &name, &code, kind)?;
@@ -3292,7 +3884,7 @@ impl Generator<'_> {
             self.line(out, &format!("{target_code} = {result};"));
             return Ok(());
         }
-        if let Kind::Text { length } = target_kind {
+        if let Kind::Text { length, .. } = target_kind {
             if op != AssignOp::Assign {
                 return Err(
                     "native backend: compound text assignment is not supported yet".to_owned(),
@@ -3390,6 +3982,272 @@ impl Generator<'_> {
         Ok(())
     }
 
+    fn association_target(&self, expression: &Expr) -> Result<(String, Kind), String> {
+        let Expr::Name { name, .. } = expression else {
+            return Err(
+                "native backend: association/access operations require simple variables".to_owned(),
+            );
+        };
+        let info = self
+            .vars
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("native backend: unknown variable `{name}`"))?;
+        if matches!(info.kind, Kind::Association | Kind::Access { .. }) {
+            Ok((info.c_name, info.kind))
+        } else {
+            Err(format!(
+                "native backend: `{name}` is not an ASSOCIATION or ACCESS variable"
+            ))
+        }
+    }
+
+    fn transfer_target(&self, expression: &Expr) -> Result<(String, Kind), String> {
+        let Expr::Name { name, .. } = expression else {
+            return Err("native backend: transfer operations require simple variables".to_owned());
+        };
+        let info = self
+            .vars
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("native backend: unknown variable `{name}`"))?;
+        if matches!(info.kind, Kind::Access { .. } | Kind::Text { .. }) {
+            Ok((info.c_name, info.kind))
+        } else {
+            Err(format!(
+                "native backend: `{name}` is not an ACCESS or TEXT location"
+            ))
+        }
+    }
+
+    fn emit_association_expr(
+        &mut self,
+        op: crate::builtins::AssociationOp,
+        has_index: bool,
+        args: &[Expr],
+    ) -> Result<(String, Kind), String> {
+        use crate::builtins::AssociationOp;
+        match op {
+            AssociationOp::IsAssociated => {
+                let (target, _) = self.association_target(&args[0])?;
+                Ok((
+                    format!("z_association_is_associated(&{target})"),
+                    Kind::Bool,
+                ))
+            }
+            AssociationOp::Existing
+            | AssociationOp::Readable
+            | AssociationOp::Writeable
+            | AssociationOp::Indexable
+            | AssociationOp::Sequencible
+            | AssociationOp::Variable => {
+                let (target, _) = self.association_target(&args[0])?;
+                let attribute = match op {
+                    AssociationOp::Existing => 0,
+                    AssociationOp::Readable => 1,
+                    AssociationOp::Writeable => 2,
+                    AssociationOp::Indexable => 3,
+                    AssociationOp::Sequencible => 4,
+                    AssociationOp::Variable => 5,
+                    _ => unreachable!(),
+                };
+                Ok((
+                    format!("z_association_attribute(&{target}, {attribute})"),
+                    Kind::Bool,
+                ))
+            }
+            AssociationOp::GetUsage => {
+                let (target, kind) = self.transfer_target(&args[0])?;
+                let call = if matches!(kind, Kind::Text { .. }) {
+                    format!("z_text_usage(&{target})")
+                } else {
+                    format!("z_access_usage(&{target})")
+                };
+                Ok((call, Kind::Int(IntKind::Int)))
+            }
+            AssociationOp::OutOfFile => {
+                let (target, kind) = self.transfer_target(&args[0])?;
+                let call = if matches!(kind, Kind::Text { .. }) {
+                    format!("z_text_out_of_file(&{target})")
+                } else {
+                    format!("z_access_out_of_file(&{target})")
+                };
+                Ok((call, Kind::Bool))
+            }
+            AssociationOp::ReadRecord => {
+                let (target, kind) = self.association_target(&args[0])?;
+                let Kind::Access { low, high, .. } = kind else {
+                    return Err("native backend: READRECORD requires an ACCESS location".to_owned());
+                };
+                let index_code = if has_index {
+                    let Some(index) = args.get(1) else {
+                        return Err("native backend: READRECORD is missing its index".to_owned());
+                    };
+                    self.emit_expr(index)?.0
+                } else {
+                    "0".to_owned()
+                };
+                let value = self.temporary(
+                    &format!(
+                        "z_read_record(&{target}, {}, {index_code}, {low}, {high})",
+                        if has_index { 1 } else { 0 }
+                    ),
+                    Kind::String,
+                )?;
+                Ok((value, Kind::String))
+            }
+            _ => Err(
+                "native backend: this association operation is not supported as a value".to_owned(),
+            ),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_association_call(
+        &mut self,
+        out: &mut String,
+        op: crate::builtins::AssociationOp,
+        has_index: bool,
+        has_target: bool,
+        has_usage: bool,
+        has_where: bool,
+        args: &[Expr],
+    ) -> Result<(), String> {
+        use crate::builtins::AssociationOp;
+        match op {
+            AssociationOp::Associate => {
+                let (target, _) = self.association_target(&args[0])?;
+                let (path, _) = self.emit_expr(&args[1])?;
+                self.line(out, &format!("z_associate(&{target}, {path});"));
+            }
+            AssociationOp::Dissociate => {
+                let (target, _) = self.association_target(&args[0])?;
+                self.line(out, &format!("z_dissociate(&{target});"));
+            }
+            AssociationOp::Create => {
+                let (target, _) = self.association_target(&args[0])?;
+                self.line(out, &format!("z_create_association(&{target});"));
+            }
+            AssociationOp::Delete => {
+                let (target, _) = self.association_target(&args[0])?;
+                self.line(out, &format!("z_delete_association(&{target});"));
+            }
+            AssociationOp::Modify => {}
+            AssociationOp::Connect => {
+                let (target, kind) = self.transfer_target(&args[0])?;
+                let (association, _) = self.association_target(&args[1])?;
+                let (indexed, low, high, is_text) = match kind {
+                    Kind::Access { indexed, low, high } => (indexed, low, high, false),
+                    Kind::Text {
+                        indexed, low, high, ..
+                    } => (indexed, low, high, true),
+                    _ => unreachable!(),
+                };
+                let mut offset = 2;
+                let usage = if has_usage {
+                    let code = self.emit_expr(&args[offset])?.0;
+                    offset += 1;
+                    code
+                } else {
+                    "2".to_owned()
+                };
+                let where_value = if has_where {
+                    let code = self.emit_expr(&args[offset])?.0;
+                    offset += 1;
+                    code
+                } else {
+                    "0".to_owned()
+                };
+                let index = if has_index {
+                    self.emit_expr(&args[offset])?.0
+                } else {
+                    "0".to_owned()
+                };
+                let function = if is_text {
+                    "z_connect_text"
+                } else {
+                    "z_connect_access"
+                };
+                self.line(
+                    out,
+                    &format!(
+                        "{function}(&{target}, &{association}, {usage}, {where_value}, {}, {}, {index}, {low}, {high});",
+                        if indexed { 1 } else { 0 },
+                        if has_index { 1 } else { 0 }
+                    ),
+                );
+            }
+            AssociationOp::Disconnect => {
+                let (target, kind) = self.transfer_target(&args[0])?;
+                if matches!(kind, Kind::Access { .. }) {
+                    self.line(out, &format!("z_disconnect_access(&{target});"));
+                } else {
+                    self.line(out, &format!("z_disconnect_text(&{target});"));
+                }
+            }
+            AssociationOp::ReadRecord => {
+                let (target, kind) = self.association_target(&args[0])?;
+                let Kind::Access { low, high, .. } = kind else {
+                    return Err("native backend: READRECORD requires an ACCESS location".to_owned());
+                };
+                let index_code = if has_index {
+                    self.emit_expr(&args[1])?.0
+                } else {
+                    "0".to_owned()
+                };
+                let value = self.temporary(
+                    &format!(
+                        "z_read_record(&{target}, {}, {index_code}, {low}, {high})",
+                        if has_index { 1 } else { 0 }
+                    ),
+                    Kind::String,
+                )?;
+                if has_target {
+                    let target_index = if has_index { 2 } else { 1 };
+                    let target_expr = &args[target_index];
+                    let (code, kind) = self.association_target(target_expr).or_else(|_| {
+                        let Expr::Name { name, .. } = target_expr else {
+                            return Err(
+                                "native backend: READRECORD target must be a variable".to_owned()
+                            );
+                        };
+                        let info = self.vars.get(name).cloned().ok_or_else(|| {
+                            format!("native backend: unknown READRECORD target `{name}`")
+                        })?;
+                        Ok((info.c_name, info.kind))
+                    })?;
+                    self.copy_kind(out, &code, &value, kind)?;
+                }
+            }
+            AssociationOp::WriteRecord => {
+                let (target, kind) = self.association_target(&args[0])?;
+                let Kind::Access { low, high, .. } = kind else {
+                    return Err(
+                        "native backend: WRITERECORD requires an ACCESS location".to_owned()
+                    );
+                };
+                let (index_code, value_index) = if has_index {
+                    (self.emit_expr(&args[1])?.0, 2)
+                } else {
+                    ("0".to_owned(), 1)
+                };
+                let (value, _) = self.emit_expr(&args[value_index])?;
+                self.line(
+                    out,
+                    &format!(
+                        "z_write_record(&{target}, {}, {index_code}, {value}, {low}, {high});",
+                        if has_index { 1 } else { 0 }
+                    ),
+                );
+            }
+            _ => return Err(
+                "native backend: this association operation is not supported in native code yet"
+                    .to_owned(),
+            ),
+        }
+        Ok(())
+    }
+
     fn text_io_target(&self, expression: &Expr) -> Result<TextTarget, String> {
         let Expr::Name { name, span } = expression else {
             return Err(
@@ -3402,9 +4260,17 @@ impl Generator<'_> {
             .cloned()
             .ok_or_else(|| format!("native backend: unknown text variable `{name}`"))?;
         match info.kind {
-            Kind::Text { length } => Ok(TextTarget::Text {
+            Kind::Text {
+                length,
+                indexed,
+                low,
+                high,
+            } => Ok(TextTarget::Text {
                 code: info.c_name,
                 length,
+                indexed,
+                low,
+                high,
             }),
             Kind::String => {
                 let limit = match self.check.types.get(span) {
@@ -3443,7 +4309,7 @@ impl Generator<'_> {
             .get(name)
             .cloned()
             .ok_or_else(|| format!("native backend: unknown text variable `{name}`"))?;
-        let Kind::Text { length } = info.kind else {
+        let Kind::Text { length, .. } = info.kind else {
             return Err(format!(
                 "native backend: `{name}` is not a narrow sequential TEXT location"
             ));
@@ -3463,28 +4329,67 @@ impl Generator<'_> {
             return Err("native backend: text transfer requires a target".to_owned());
         };
         let text_target = self.text_io_target(target_expr)?;
-        let (target, length, is_text, string_target) = match text_target {
-            TextTarget::Text { code, length } => (code, length.to_string(), true, None),
-            TextTarget::String { code, limit } => {
-                let unique = self.temp_counter;
-                self.temp_counter += 1;
-                let temp = format!("__text_string_{unique}");
-                self.line(out, &format!("ZText {temp} = z_text_from_string({code});"));
-                (temp, limit, false, Some(code))
-            }
-        };
+        let (target, length, is_text, string_target, text_indexed, text_low, text_high) =
+            match text_target {
+                TextTarget::Text {
+                    code,
+                    length,
+                    indexed,
+                    low,
+                    high,
+                } => (code, length.to_string(), true, None, indexed, low, high),
+                TextTarget::String { code, limit } => {
+                    let unique = self.temp_counter;
+                    self.temp_counter += 1;
+                    let temp = format!("__text_string_{unique}");
+                    self.line(out, &format!("ZText {temp} = z_text_from_string({code});"));
+                    (temp, limit, false, Some(code), false, 0, 0)
+                }
+            };
         let mut offset = 1;
-        if indexed {
+        let index_code = if indexed {
             let Some(index) = args.get(1) else {
                 return Err("native backend: text transfer is missing its index".to_owned());
             };
             let (value, _) = self.emit_expr(index)?;
+            offset = 2;
+            Some(value)
+        } else {
+            None
+        };
+        let has_index = if indexed { 1 } else { 0 };
+        let index_value = index_code.as_deref().unwrap_or("0");
+        let mut read_guard = None;
+        if is_text {
+            match kind {
+                TextIo::Write => self.line(
+                    out,
+                    &format!(
+                        "z_text_begin_write(&{target}, {has_index}, {index_value}, {text_low}, {text_high}, {length});"
+                    ),
+                ),
+                TextIo::Read => {
+                    let unique = self.temp_counter;
+                    self.temp_counter += 1;
+                    let guard = format!("__text_connected_{unique}");
+                    self.line(
+                        out,
+                        &format!(
+                            "int {guard} = z_text_begin_read(&{target}, {has_index}, {index_value}, {text_low}, {text_high}, {length});"
+                        ),
+                    );
+                    self.line(out, &format!("if ({guard} != 0) {{"));
+                    self.indent += 1;
+                    read_guard = Some(guard);
+                }
+            }
+        } else if let Some(index) = &index_code {
             self.line(
                 out,
-                &format!("z_text_set_index(&{target}, {value}, {length});"),
+                &format!("z_text_set_index(&{target}, {index}, {length});"),
             );
-            offset = 2;
         }
+        let _ = text_indexed;
         let mut io_index = offset + 1;
         for operation in format {
             match operation {
@@ -3669,7 +4574,15 @@ impl Generator<'_> {
         if io_index != args.len() {
             return Err("native backend: text io argument count mismatch".to_owned());
         }
+        if let Some(_guard) = read_guard {
+            self.drop_temporaries(out)?;
+            self.indent -= 1;
+            self.line(out, "}");
+        }
         if is_text {
+            if matches!(kind, TextIo::Write) {
+                self.line(out, &format!("z_text_end_write(&{target});"));
+            }
             self.line(out, &format!("z_text_reset_index(&{target});"));
         } else {
             if matches!(kind, TextIo::Write) {
@@ -3735,6 +4648,8 @@ impl Generator<'_> {
                             | Kind::Struct(_)
                             | Kind::PowerSet(_)
                             | Kind::Text { .. }
+                            | Kind::Association
+                            | Kind::Access { .. }
                             | Kind::DynamicArray { .. }
                             | Kind::Null => return Err(
                                 "native backend: arrays, references, structures, powersets, and NULL cannot be passed to WRITE/WRITELINE yet"
@@ -3753,6 +4668,23 @@ impl Generator<'_> {
                 } = callee
                 {
                     match self.check.resolutions.get(span) {
+                        Some(ApplyResolution::Association {
+                            op,
+                            index,
+                            target,
+                            usage,
+                            where_expr,
+                        }) => {
+                            let op = *op;
+                            let has_index = *index;
+                            let has_target = *target;
+                            let has_usage = *usage;
+                            let has_where = *where_expr;
+                            self.emit_association_call(
+                                out, op, has_index, has_target, has_usage, has_where, args,
+                            )?;
+                            return Ok(());
+                        }
                         Some(ApplyResolution::TextIndex { get: false }) => {
                             if args.len() != 2 {
                                 return Err(
@@ -3827,6 +4759,12 @@ impl Generator<'_> {
                 Kind::Text { .. } => comparisons.push(format!(
                     "(z_text_equal_text(&{left_field}, &{right_field}))"
                 )),
+                Kind::Association | Kind::Access { .. } => {
+                    return Err(
+                        "native backend: association/access fields cannot be compared yet"
+                            .to_owned(),
+                    )
+                }
                 Kind::DynamicArray { .. } => {
                     return Err(
                         "native backend: dynamic slices cannot be structure fields".to_owned()
@@ -4516,6 +5454,19 @@ impl Generator<'_> {
                     };
                     self.array_index_expr(&info, args, *span)
                 }
+                Some(ApplyResolution::Association {
+                    op, index, target, ..
+                }) => {
+                    let op = *op;
+                    let has_index = *index;
+                    if *target {
+                        return Err(
+                            "native backend: this association operation produces no value"
+                                .to_owned(),
+                        );
+                    }
+                    self.emit_association_expr(op, has_index, args)
+                }
                 Some(ApplyResolution::TextIndex { get: true }) => {
                     if args.len() != 1 {
                         return Err("native backend: malformed GETTEXTINDEX call".to_owned());
@@ -4849,17 +5800,26 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
         Type::Set(_) => Ok(Kind::Int(IntKind::Long)),
         Type::Struct(id) => Ok(Kind::Struct(id)),
         Type::PowerSet(set) => Ok(Kind::PowerSet(set.member)),
+        Type::Association => Ok(Kind::Association),
+        Type::Access(access) => Ok(Kind::Access {
+            indexed: access.indexed,
+            low: access.index.as_ref().map(|index| index.low).unwrap_or(0),
+            high: access.index.as_ref().map(|index| index.high).unwrap_or(0),
+        }),
         Type::Text {
             length,
             wide: false,
-            indexed: false,
+            indexed,
+            index,
             ..
-        } => Ok(Kind::Text { length }),
-        Type::Text { wide, .. } if wide => {
+        } => Ok(Kind::Text {
+            length,
+            indexed,
+            low: index.map(|index| index.low).unwrap_or(0),
+            high: index.map(|index| index.high).unwrap_or(0),
+        }),
+        Type::Text { wide: true, .. } => {
             Err("native backend: wide text modes are not supported yet".to_owned())
-        }
-        Type::Text { .. } => {
-            Err("native backend: indexed text modes are not supported yet".to_owned())
         }
         Type::Char | Type::WChar => Ok(Kind::Char),
         Type::String | Type::BoundedString { .. } | Type::WString | Type::WBoundedString { .. } => {

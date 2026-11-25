@@ -78,6 +78,12 @@ reference implementation for the complete supported language.
   `%C`, `%B`, `%O`, and `%H` for `INT`, `BOOL`, `CHAR`, and strings, including widths
   and variable widths. Explicit text indices, bounded-string length checks, and
   `TEXTFAIL` checks are supported,
+- `ASSOCIATION` values and narrow `ACCESS` locations over line-record files, including
+  `ASSOCIATE`, `DISSOCIATE`, `ISASSOCIATED`, `CREATE`, `DELETE`, `MODIFY`, `CONNECT`,
+  `DISCONNECT`, `GETUSAGE`, `OUTOFFILE`, `READRECORD`, `WRITERECORD`, and the
+  `EXISTING`/`READABLE`/`WRITEABLE`/`INDEXABLE`/`SEQUENCIBLE`/`VARIABLE` attributes,
+- connected narrow `TEXT(n)` locations, including indexed text modes, file-backed
+  `WRITETEXT`/`READTEXT`, sequential and indexed records, and usage restrictions,
 - `WRITE` and `WRITELINE` with one value argument,
 - runtime checks for array bounds, division/modulo by zero, signed overflow in
   `+`/`-`/`*`/unary `-`, and `NULL` dereference,
@@ -103,8 +109,9 @@ Windows).
 - structure initializers and structure literals,
 - references to array slices, text, and buffers,
 - dynamic multidimensional slice bounds and slice-valued references,
-- wide, indexed, or array-valued text modes; text associations and file transfer;
-  scientific floating-point text conversions,
+- wide or array-valued text modes; `GETASSOCIATION` reference results; text
+  sub-location references (`GETTEXTACCESS`, `SETTEXTACCESS`, `GETTEXTRECORD`,
+  `SETTEXTRECORD`); scientific floating-point text conversions,
 - exception propagation across separate packages,
 - processes, regions, tasks, signals, and timing,
 - MSVC-specific compiler flags and discovery,

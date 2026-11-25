@@ -3068,6 +3068,60 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_association_fixtures() {
+    for name in [
+        "associations",
+        "association_indexed",
+        "text_connection",
+        "text_indexed_access",
+    ] {
+        let dir = TempDir::new(&format!("z200c-native-{name}"));
+        let package = format!("native{}", name.replace('_', ""));
+        std::fs::write(
+            dir.join("Chill.toml"),
+            format!(
+                r#"
+[package]
+name = "{package}"
+
+[build]
+entry = "src/main.ch"
+"#
+            ),
+        )
+        .unwrap();
+        let source = std::fs::read_to_string(format!(
+            "{}/tests/run_ok/{name}.ch",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        std::fs::write(dir.join("src/main.ch"), source).unwrap();
+        let output = z200c().arg("compile").arg(&dir).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{name}: stdout: {}
+stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let binary = dir.join(format!("target/z200c/{package}"));
+        let run = std::process::Command::new(binary)
+            .env("Z200C_RC_STATS", "1")
+            .output()
+            .unwrap();
+        assert!(
+            run.status.success(),
+            "{name}: stdout: {}
+stderr: {}",
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        assert!(stdout.contains("live-payloads: 0"), "{name}: {stdout}");
+    }
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
