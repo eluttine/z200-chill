@@ -13,6 +13,8 @@ future LLVM backend. Keep items small, testable, and ordered by risk.
   labelled exits, and caught exceptions.
 - Full native concurrency, generics, moreta, and optimized code generation are not C
   backend goals.
+- The current platform target is Linux only. Windows and macOS support are out of scope
+  until explicitly revisited.
 
 Verification gate before any commit:
 
@@ -43,10 +45,6 @@ subset and exercise the same typed information the LLVM backend will need.
 - [ ] Add wide text/bit-string execution only if the C backend must pass broad
   interpreter fixtures. Otherwise leave `WCHAR`/`WTEXT` and `BOOLS` execution to LLVM.
 - [ ] Native module linking for grant-file-only dependencies without source metadata.
-- [ ] Cross-platform driver support:
-  - MSVC toolchain discovery and flags,
-  - Windows path/executable handling,
-  - non-Linux CI matrix.
 - [ ] Extract the generated runtime into `runtime/`:
   - refcounted payload allocation,
   - string/powerset/text operations,
@@ -114,7 +112,7 @@ Start the LLVM backend when these are true, rather than waiting for every C feat
 - [ ] Moreta object layout, constructors/destructors, methods, and visibility.
 - [ ] Generic instantiation/lowering.
 - [ ] Cooperative processes, signals, buffers, timers, regions, and tasks.
-- [ ] Optimization, debug info, source maps, and cross-platform codegen.
+- [ ] Optimization, debug info, and source maps.
 
 ## 5. Interpreter and conformance backlog
 
@@ -135,7 +133,7 @@ The interpreter remains the reference while native work proceeds.
 - [ ] Keep `docs/backend.md` as the current C-backend contract and limitation list.
 - [ ] Document the runtime payload/cleanup/exception ABI before LLVM lowering starts.
 - [ ] Decide and test an MSRV, or document stable-only policy.
-- [ ] Add stable/nightly and cross-platform CI when there is a concrete reason.
+- [ ] Add a stable/nightly CI matrix when there is a concrete reason.
 - [ ] Add native runtime allocation/ownership stress tests to CI.
 
 ## 7. Completed milestones (summary)

@@ -97,9 +97,8 @@ Generated code is C11 with `int64_t` integers, `int` booleans/characters, and
 `const char *` strings. Structure equality is generated field by field rather than with
 `memcmp`, avoiding dependence on C padding/layout.
 
-The C compiler is selected from `Z200C_CC`, then `CC`, and defaults to `cc` on Unix and
-`gcc` on Windows. The target executable uses the host executable suffix (`.exe` on
-Windows).
+The current target platform is Linux. The C compiler is selected from `Z200C_CC`, then
+`CC`, and defaults to `cc`. Windows and macOS support are out of scope for now.
 
 ## Not supported yet
 
@@ -114,7 +113,6 @@ Windows).
   `SETTEXTRECORD`); scientific floating-point text conversions,
 - exception propagation across separate packages,
 - processes, regions, tasks, signals, and timing,
-- MSVC-specific compiler flags and discovery,
 - grant-file-only dependencies without available source,
 
 Strings, powersets, and text records use reference-counted heap payloads. Copying a
