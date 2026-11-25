@@ -3122,6 +3122,92 @@ stderr: {}",
 }
 
 #[test]
+fn native_unwind_cleanup_reclaims_payloads() {
+    let dir = TempDir::new("z200c-native-unwind");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativeunwind"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ch"),
+        r#"
+M: MODULE
+  DCL i INT;
+  DCL extra POWERSET INT INIT := [1];
+
+  Outer: DO FOR i := 1 TO 5;
+    BEGIN
+      DCL s CHARS;
+      DCL p POWERSET INT;
+      DCL t TEXT(10);
+      s := "a" // "b";
+      p := extra;
+      t := "x";
+      EXIT Outer;
+    END;
+  OD;
+
+  DO FOR i := 1 TO 5;
+    BEGIN
+      DCL s2 CHARS;
+      s2 := "c" // "d";
+      IF i = 2 THEN
+        EXIT;
+      FI;
+    END;
+  OD;
+
+  DO FOR i := 1 TO 5;
+    BEGIN
+      DCL s3 CHARS;
+      DCL p3 POWERSET INT;
+      s3 := "e" // "f";
+      p3 := extra;
+      BEGIN
+        DCL s4 CHARS;
+        s4 := "g" // "h";
+        CAUSE boom;
+      END
+      ON (boom):
+        WRITELINE("caught");
+      END;
+    END;
+  OD;
+
+  WRITELINE("unwind ok");
+END M;
+"#,
+    )
+    .unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativeunwind");
+    let run = std::process::Command::new(binary)
+        .env("Z200C_RC_STATS", "1")
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        stdout.contains("unwind ok") && stdout.contains("live-payloads: 0"),
+        "stdout: {stdout}"
+    );
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(

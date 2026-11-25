@@ -123,8 +123,9 @@ structures, procedure parameters, procedure results, and scopes recursively copy
 drop owned elements. Module globals are released after all module bodies run. Setting
 `Z200C_RC_STATS=1` prints the number of live payloads at process exit.
 
-Early `EXIT`/`goto` paths and non-local exception unwinding intentionally leak values
-rather than risk double frees.
+Scope, loop, labelled-action, early `EXIT`, and exception-unwinding paths run the
+generated cleanup stack before leaving their scopes, so refcounted payloads are
+reclaimed on these paths as well.
 
 Exceptions use a generated `setjmp`/`longjmp` handler chain. Unhandled exceptions and
 runtime failures print a CHILL-style code and message to stderr and exit with status 1;
