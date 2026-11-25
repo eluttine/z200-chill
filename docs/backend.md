@@ -27,10 +27,13 @@ reference implementation for the complete supported language.
   procedures, named modes, and their set-element constants from other modules and
   source package dependencies; seized modes work in arrays and nested structure
   definitions, and module order does not matter,
-- `DCL` variables of integer, boolean, character, and character-string modes,
+- `DCL` variables of integer, floating-point, boolean, character, and character-string
+  modes,
 - initializers,
 - assignments to simple variables,
 - integer/boolean arithmetic, comparisons, and logical operators,
+- `FLOAT` literals, arithmetic/comparisons, conversion, arrays, structure fields,
+  parameters/results, and `%C`/`%F` text formatting and reading,
 - character-string equality, inequality, ordering comparisons, concatenation, and
   `//:=` concatenation assignment,
 - named set modes and set-element constants,

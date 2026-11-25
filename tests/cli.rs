@@ -3208,6 +3208,44 @@ stderr: {}",
 }
 
 #[test]
+fn compiles_native_float_fixture() {
+    let dir = TempDir::new("z200c-native-float");
+    std::fs::write(
+        dir.join("Chill.toml"),
+        r#"
+[package]
+name = "nativefloat"
+
+[build]
+entry = "src/main.ch"
+"#,
+    )
+    .unwrap();
+    let source = std::fs::read_to_string(format!(
+        "{}/tests/run_ok/floats.ch",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    std::fs::write(dir.join("src/main.ch"), source).unwrap();
+    let output = z200c().arg("compile").arg(&dir).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("target/z200c/nativefloat");
+    let run = std::process::Command::new(binary)
+        .env("Z200C_RC_STATS", "1")
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(stdout.contains("live-payloads: 0"), "stdout: {stdout}");
+}
+
+#[test]
 fn native_backend_rejects_unsupported_arrays() {
     let dir = TempDir::new("z200c-native-array");
     std::fs::write(
@@ -3225,7 +3263,7 @@ entry = "src/main.ch"
         dir.join("src/main.ch"),
         r#"
 M: MODULE
-  DCL values ARRAY(1:2) FLOAT;
+  DCL values ARRAY(1:2) ASSOCIATION;
 END M;
 "#,
     )

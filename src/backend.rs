@@ -20,6 +20,7 @@ use std::rc::Rc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Int(IntKind),
+    Float,
     Bool,
     Char,
     String,
@@ -72,6 +73,7 @@ impl Dim {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScalarKind {
     Int(IntKind),
+    Float,
     Bool,
     Char,
     String,
@@ -83,6 +85,7 @@ impl ScalarKind {
     fn c_type(self) -> String {
         match self {
             ScalarKind::Int(_) => "int64_t".to_owned(),
+            ScalarKind::Float => "double".to_owned(),
             ScalarKind::Bool => "int".to_owned(),
             ScalarKind::Char => "int".to_owned(),
             ScalarKind::String => "const char *".to_owned(),
@@ -94,6 +97,7 @@ impl ScalarKind {
     fn kind(self) -> Kind {
         match self {
             ScalarKind::Int(kind) => Kind::Int(kind),
+            ScalarKind::Float => Kind::Float,
             ScalarKind::Bool => Kind::Bool,
             ScalarKind::Char => Kind::Char,
             ScalarKind::String => Kind::String,
@@ -127,6 +131,7 @@ impl Kind {
     fn c_type(self) -> String {
         match self {
             Kind::Int(_) => "int64_t".to_owned(),
+            Kind::Float => "double".to_owned(),
             Kind::Bool => "int".to_owned(),
             Kind::Char => "int".to_owned(),
             Kind::String => "const char *".to_owned(),
@@ -135,6 +140,7 @@ impl Kind {
             }
             Kind::Ref(element) => match element {
                 ScalarKind::Int(_) => "int64_t *".to_owned(),
+                ScalarKind::Float => "double *".to_owned(),
                 ScalarKind::Bool => "int *".to_owned(),
                 ScalarKind::Char => "int *".to_owned(),
                 ScalarKind::String => "const char **".to_owned(),
@@ -157,6 +163,7 @@ impl Kind {
     fn default_value(self) -> &'static str {
         match self {
             Kind::Int(_) | Kind::Bool | Kind::Char => "0",
+            Kind::Float => "0.0",
             Kind::String => "\"\"",
             Kind::Array { .. } => "{0}",
             Kind::Ref(_) | Kind::RefArray { .. } | Kind::Null => "NULL",
@@ -420,6 +427,11 @@ static int64_t z_check_index(int64_t index, int64_t low, int64_t high) {
 static int64_t z_div(int64_t a, int64_t b) {
     if (b == 0) { z_fail("OVERFLOW", "division by zero"); }
     if (a == INT64_MIN && b == -1) { z_fail("OVERFLOW", "integer overflow"); }
+    return a / b;
+}
+
+static double z_fdiv(double a, double b) {
+    if (b == 0.0) { z_fail("OVERFLOW", "division by zero"); }
     return a / b;
 }
 
@@ -1525,6 +1537,153 @@ static void z_text_write_string_format(
     int overflow
 ) {
     z_text_write_padded(text, value, limit, width, left, pad, overflow);
+}
+
+static void z_text_write_float_format(
+    ZText *text,
+    double value,
+    size_t limit,
+    int scientific,
+    int64_t width,
+    int left,
+    char pad,
+    int overflow,
+    int fractional_width,
+    int exponent_width
+) {
+    char raw[256];
+    if (!scientific) {
+        if (fractional_width >= 0) {
+            snprintf(raw, sizeof(raw), "%.*f", fractional_width, value);
+        } else {
+            snprintf(raw, sizeof(raw), "%.17g", value);
+        }
+        z_text_write_padded(text, raw, limit, width, left, pad, overflow);
+        return;
+    }
+
+    char buffer[256];
+    if (fractional_width >= 0) {
+        snprintf(buffer, sizeof(buffer), "%.*e", fractional_width, value);
+    } else {
+        snprintf(buffer, sizeof(buffer), "%.17e", value);
+    }
+    char *exponent_marker = strchr(buffer, 'e');
+    if (exponent_marker == NULL) {
+        z_text_write_padded(text, buffer, limit, width, left, pad, overflow);
+        return;
+    }
+    *exponent_marker = '\0';
+    char *mantissa = buffer;
+    char *exponent = exponent_marker + 1;
+    if (fractional_width < 0) {
+        size_t length = strlen(mantissa);
+        while (length > 1 && mantissa[length - 1] == '0') {
+            mantissa[--length] = '\0';
+        }
+        if (length > 1 && mantissa[length - 1] == '.') {
+            mantissa[--length] = '\0';
+        }
+    }
+    int negative = 0;
+    if (*exponent == '+' || *exponent == '-') {
+        negative = *exponent == '-';
+        exponent++;
+    }
+    while (*exponent == '0' && exponent[1] != '\0') {
+        exponent++;
+    }
+    int width_value = exponent_width > 0 ? exponent_width : 3;
+    int digits = (int)strlen(exponent);
+    char result[256];
+    if (negative) {
+        snprintf(
+            result,
+            sizeof(result),
+            "%se-%0*d",
+            mantissa,
+            width_value,
+            atoi(exponent)
+        );
+    } else {
+        snprintf(
+            result,
+            sizeof(result),
+            "%se%0*d",
+            mantissa,
+            width_value,
+            atoi(exponent)
+        );
+    }
+    z_text_write_padded(text, result, limit, width, left, pad, overflow);
+}
+
+static double z_text_read_float_format(
+    ZText *text,
+    size_t limit,
+    int64_t width,
+    int left,
+    char pad
+) {
+    (void)limit;
+    if (width < 0) {
+        z_fail("TEXTFAIL", "negative variable width");
+    }
+    const char *view = z_text_view(text);
+    size_t start = (size_t)text->index;
+    if (width == 0) {
+        size_t at = start;
+        while (at < text->len && (view[at] == ' ' || view[at] == '\t')) { at++; }
+        size_t begin = at;
+        if (at < text->len && (view[at] == '+' || view[at] == '-')) { at++; }
+        while (at < text->len) {
+            char ch = view[at];
+            if ((ch >= '0' && ch <= '9') || ch == '.' || ch == 'e' || ch == 'E'
+                || ch == '+' || ch == '-') {
+                at++;
+            } else {
+                break;
+            }
+        }
+        char *token = (char *)malloc(at - begin + 1);
+        if (token == NULL) { z_fail("STORAGE", "out of memory"); }
+        memcpy(token, view + begin, at - begin);
+        token[at - begin] = '\0';
+        char *end = NULL;
+        double value = strtod(token, &end);
+        if (end == token) {
+            free(token);
+            z_fail("TEXTFAIL", "invalid floating-point value in text");
+        }
+        free(token);
+        text->index = (int64_t)at;
+        return value;
+    }
+    if (start + (size_t)width > text->len) {
+        z_fail("TEXTFAIL", "text slice is out of bounds");
+    }
+    size_t count = (size_t)width;
+    char *field = (char *)malloc(count + 1);
+    if (field == NULL) { z_fail("STORAGE", "out of memory"); }
+    memcpy(field, view + start, count);
+    field[count] = '\0';
+    char *begin = field;
+    char *finish = field + count;
+    if (left) {
+        while (finish > begin && finish[-1] == pad) { finish--; }
+    } else {
+        while (begin < finish && *begin == pad) { begin++; }
+    }
+    *finish = '\0';
+    char *end = NULL;
+    double value = strtod(begin, &end);
+    if (end == begin || *end != '\0') {
+        free(field);
+        z_fail("TEXTFAIL", "invalid floating-point value in text");
+    }
+    free(field);
+    text->index = (int64_t)(start + count);
+    return value;
 }
 
 static void z_text_read_literal(ZText *text, const char *expected, size_t limit) {
@@ -3705,7 +3864,11 @@ impl Generator<'_> {
         let (left_data, left_len) = Self::array_parts(left_code, left_kind)?;
         let (right_data, right_len) = Self::array_parts(right_code, right_kind)?;
         Ok(match element {
-            ScalarKind::Int(_) | ScalarKind::Bool | ScalarKind::Char | ScalarKind::Struct(_) => {
+            ScalarKind::Int(_)
+            | ScalarKind::Float
+            | ScalarKind::Bool
+            | ScalarKind::Char
+            | ScalarKind::Struct(_) => {
                 format!(
                     "z_slice_equal_bytes((const void *)({left_data}), {left_len}, (const void *)({right_data}), {right_len}, sizeof({}))",
                     element.c_type()
@@ -4670,8 +4833,20 @@ impl Generator<'_> {
                         ConversionCode::Binary => 2,
                         ConversionCode::Octal => 8,
                         ConversionCode::Hex => 16,
-                        ConversionCode::Default => 10,
-                        ConversionCode::Scientific => unreachable!(),
+                        ConversionCode::Default | ConversionCode::Scientific => 10,
+                    };
+                    let fractional = conversion
+                        .fractional_width
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-1".to_owned());
+                    let exponent = conversion
+                        .exponent_width
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-1".to_owned());
+                    let scientific = if matches!(conversion.code, ConversionCode::Scientific) {
+                        1
+                    } else {
+                        0
                     };
                     match kind {
                         TextIo::Write => {
@@ -4702,6 +4877,12 @@ impl Generator<'_> {
                                         "z_text_write_string_format(&{target}, {code}, {length}, {formats});"
                                     ),
                                 ),
+                                Kind::Float => self.line(
+                                    out,
+                                    &format!(
+                                        "z_text_write_float_format(&{target}, {code}, {length}, {scientific}, {formats}, {fractional}, {exponent});"
+                                    ),
+                                ),
                                 _ => return Err(
                                     "native backend: this value cannot be written with a text conversion yet"
                                         .to_owned(),
@@ -4729,6 +4910,9 @@ impl Generator<'_> {
                                 ),
                                 Kind::Bool => format!(
                                     "z_text_read_bool_format(&{target}, {length}, {width_code}, {left}, (char){pad})"
+                                ),
+                                Kind::Float => format!(
+                                    "z_text_read_float_format(&{target}, {length}, {width_code}, {left}, (char){pad})"
                                 ),
                                 Kind::String => {
                                     let value = self.temporary(
@@ -4886,6 +5070,7 @@ impl Generator<'_> {
                             | Kind::Text { .. }
                             | Kind::Association
                             | Kind::Access { .. }
+                            | Kind::Float
                             | Kind::DynamicArray { .. }
                             | Kind::Null => return Err(
                                 "native backend: arrays, references, structures, powersets, and NULL cannot be passed to WRITE/WRITELINE yet"
@@ -5009,7 +5194,7 @@ impl Generator<'_> {
                 Kind::Ref(_) | Kind::RefArray { .. } | Kind::Null => {
                     comparisons.push(format!("({left_field} == {right_field})"))
                 }
-                Kind::Int(_) | Kind::Bool | Kind::Char => {
+                Kind::Int(_) | Kind::Float | Kind::Bool | Kind::Char => {
                     comparisons.push(format!("({left_field} == {right_field})"))
                 }
             }
@@ -5106,6 +5291,7 @@ impl Generator<'_> {
             Expr::Integer { value, .. } => {
                 Ok((format!("INT64_C({value})"), Kind::Int(IntKind::Long)))
             }
+            Expr::Float { value, .. } => Ok((c_float_literal(*value), Kind::Float)),
             Expr::Bool { value, .. } => {
                 Ok(((if *value { "1" } else { "0" }).to_owned(), Kind::Bool))
             }
@@ -5380,14 +5566,14 @@ impl Generator<'_> {
             Expr::Unary { op, operand, .. } => {
                 let (code, kind) = self.emit_expr(operand)?;
                 match op {
-                    UnaryOp::Neg => {
-                        let result = format!("z_neg({code})");
-                        if let Kind::Int(int_kind) = kind {
+                    UnaryOp::Neg => match kind {
+                        Kind::Int(int_kind) => {
+                            let result = format!("z_neg({code})");
                             Ok((self.checked_int(&result, int_kind)?, Kind::Int(int_kind)))
-                        } else {
-                            Ok((result, Kind::Int(IntKind::Long)))
                         }
-                    }
+                        Kind::Float => Ok((format!("(-({code}))"), Kind::Float)),
+                        _ => Ok((format!("z_neg({code})"), Kind::Int(IntKind::Long))),
+                    },
                     UnaryOp::Not => Ok((format!("!({code})"), Kind::Bool)),
                 }
             }
@@ -5626,7 +5812,9 @@ impl Generator<'_> {
                 if matches!(
                     op,
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
-                ) {
+                ) && matches!(left_kind, Kind::Int(_))
+                    && matches!(right_kind, Kind::Int(_))
+                {
                     let function = match op {
                         BinaryOp::Add => "z_add",
                         BinaryOp::Sub => "z_sub",
@@ -5638,6 +5826,21 @@ impl Generator<'_> {
                         Self::binary_int_kind(left_kind, right_kind).unwrap_or(IntKind::Long);
                     let result = format!("{function}({left}, {right})");
                     return Ok((self.checked_int(&result, kind)?, Kind::Int(kind)));
+                }
+                if matches!(
+                    op,
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+                ) && left_kind == Kind::Float
+                    && right_kind == Kind::Float
+                {
+                    let result = match op {
+                        BinaryOp::Add => format!("(({left}) + ({right}))"),
+                        BinaryOp::Sub => format!("(({left}) - ({right}))"),
+                        BinaryOp::Mul => format!("(({left}) * ({right}))"),
+                        BinaryOp::Div => format!("z_fdiv({left}, {right})"),
+                        _ => unreachable!(),
+                    };
+                    return Ok((result, Kind::Float));
                 }
                 if matches!(op, BinaryOp::Mod | BinaryOp::Rem) {
                     let kind =
@@ -5719,6 +5922,13 @@ impl Generator<'_> {
                 Some(ApplyResolution::Builtin(crate::builtins::Builtin::ReadLine)) => {
                     let value = self.temporary("z_readline()", Kind::String)?;
                     Ok((value, Kind::String))
+                }
+                Some(ApplyResolution::FloatConversion) => {
+                    if args.len() != 1 {
+                        return Err("native backend: malformed FLOAT conversion".to_owned());
+                    }
+                    let (code, _) = self.emit_expr(&args[0])?;
+                    Ok((format!("((double)({code}))"), Kind::Float))
                 }
                 Some(ApplyResolution::Procedure(_)) => {
                     let (code, kind) = self.emit_procedure_call(name, args, *span)?;
@@ -5949,23 +6159,9 @@ impl Generator<'_> {
 }
 
 fn text_conversion_supported(
-    conversion: &crate::builtins::Conversion,
+    _conversion: &crate::builtins::Conversion,
     _kind: TextIo,
 ) -> Result<(), String> {
-    if !matches!(
-        conversion.code,
-        ConversionCode::Default
-            | ConversionCode::Binary
-            | ConversionCode::Octal
-            | ConversionCode::Hex
-    ) {
-        return Err("native backend: scientific text conversions are not supported yet".to_owned());
-    }
-    if conversion.fractional_width.is_some() || conversion.exponent_width.is_some() {
-        return Err(
-            "native backend: text fractional/exponent widths are not supported yet".to_owned(),
-        );
-    }
     Ok(())
 }
 
@@ -5987,6 +6183,7 @@ fn array_scalar_kind(ty: Type) -> Result<ScalarKind, String> {
     match ty {
         Type::Int(kind) => Ok(ScalarKind::Int(kind)),
         Type::IntLiteral | Type::Set(_) => Ok(ScalarKind::Int(IntKind::Long)),
+        Type::Float => Ok(ScalarKind::Float),
         Type::Bool => Ok(ScalarKind::Bool),
         Type::Char | Type::WChar => Ok(ScalarKind::Char),
         Type::String | Type::BoundedString { .. } | Type::WString | Type::WBoundedString { .. } => {
@@ -6004,6 +6201,7 @@ fn array_scalar_kind(ty: Type) -> Result<ScalarKind, String> {
 fn scalar_kind(kind: Kind) -> Option<ScalarKind> {
     match kind {
         Kind::Int(kind) => Some(ScalarKind::Int(kind)),
+        Kind::Float => Some(ScalarKind::Float),
         Kind::Bool => Some(ScalarKind::Bool),
         Kind::Char => Some(ScalarKind::Char),
         Kind::String => Some(ScalarKind::String),
@@ -6017,6 +6215,7 @@ fn scalar_ref_target(target: types::RefTarget) -> Result<ScalarKind, String> {
     use types::RefTarget;
     match target {
         RefTarget::Int(kind) => Ok(ScalarKind::Int(kind)),
+        RefTarget::Float => Ok(ScalarKind::Float),
         RefTarget::Bool => Ok(ScalarKind::Bool),
         RefTarget::Struct(id) => Ok(ScalarKind::Struct(id)),
         RefTarget::PowerSet(set) => Ok(ScalarKind::PowerSet(set.member)),
@@ -6036,6 +6235,7 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
     match ty {
         Type::Int(kind) => Ok(Kind::Int(kind)),
         Type::IntLiteral => Ok(Kind::Int(IntKind::Long)),
+        Type::Float => Ok(Kind::Float),
         Type::Bool => Ok(Kind::Bool),
         Type::Set(_) => Ok(Kind::Int(IntKind::Long)),
         Type::Struct(id) => Ok(Kind::Struct(id)),
@@ -6069,6 +6269,7 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
             let element = match array.element.ty() {
                 Type::Int(kind) => ScalarKind::Int(kind),
                 Type::IntLiteral => ScalarKind::Int(IntKind::Long),
+                Type::Float => ScalarKind::Float,
                 Type::Bool => ScalarKind::Bool,
                 Type::Set(_) => ScalarKind::Int(IntKind::Long),
                 Type::Struct(id) => ScalarKind::Struct(id),
@@ -6137,6 +6338,7 @@ fn kind_from_type(ty: Type) -> Result<Kind, String> {
             let element = match array.element.ty() {
                 Type::Int(kind) => ScalarKind::Int(kind),
                 Type::IntLiteral => ScalarKind::Int(IntKind::Long),
+                Type::Float => ScalarKind::Float,
                 Type::Bool => ScalarKind::Bool,
                 Type::Set(_) => ScalarKind::Int(IntKind::Long),
                 Type::Struct(id) => ScalarKind::Struct(id),
@@ -6226,6 +6428,25 @@ fn c_ident(name: &str) -> String {
         ident.insert(0, '_');
     }
     ident
+}
+
+fn c_float_literal(value: f64) -> String {
+    if value.is_nan() {
+        return "NAN".to_owned();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_negative() {
+            "(-INFINITY)".to_owned()
+        } else {
+            "INFINITY".to_owned()
+        };
+    }
+    let text = format!("{value:?}");
+    if text.contains('.') || text.contains('e') || text.contains('E') {
+        text
+    } else {
+        format!("{text}.0")
+    }
 }
 
 fn c_escape(text: &str) -> String {

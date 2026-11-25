@@ -38,10 +38,6 @@ subset and exercise the same typed information the LLVM backend will need.
 - [ ] Add dynamic multidimensional slice bounds.
   Start in the checker/interpreter type model; the C backend should follow the shared
   representation rather than invent a native-only shape.
-- [ ] Decide whether the portable C backend needs native `FLOAT`:
-  - scalar `FLOAT`, arithmetic/comparisons, arrays, parameters/results,
-  - `%F` text formatting and scientific notation.
-  If not required, keep `FLOAT` interpreter-only and make it an LLVM-first feature.
 - [ ] Add wide text/bit-string execution only if the C backend must pass broad
   interpreter fixtures. Otherwise leave `WCHAR`/`WTEXT` and `BOOLS` execution to LLVM.
 - [ ] Native module linking for grant-file-only dependencies without source metadata.
@@ -146,7 +142,7 @@ The following areas are implemented and no longer need backlog entries:
 - C backend sequential/static coverage:
   - variables, control flow, procedures and parameters,
   - arrays, multidimensional arrays, slices, structures,
-  - strings, powersets, references,
+  - strings, floats, powersets, references,
   - text formatting, text files, associations, and access records,
   - exceptions, runtime checks, and integer width enforcement,
   - cross-module grants and seized modes,
